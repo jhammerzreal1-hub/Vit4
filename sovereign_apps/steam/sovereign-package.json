@@ -1,0 +1,20 @@
+{
+  "id": "steam",
+  "name": "Valve Steam Client, Live Store API & Proton Bridge",
+  "version": "1726604483-Valve-API",
+  "vendor": "Valve Corporation",
+  "installedAt": "2026-11-22T01:42:36.368Z",
+  "nativeProtocolUri": "steam://open/main",
+  "wingetId": "Valve.Steam",
+  "cliInstallCmds": {
+    "linux": "sudo apt-get update && sudo apt-get install -y steam-installer steamcmd || flatpak install -y flathub com.valvesoftware.Steam",
+    "macos": "brew install --cask steam",
+    "windows": "winget install -e --id Valve.Steam"
+  },
+  "nativeDownloadUrls": {
+    "windows": "https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe",
+    "macos": "https://cdn.akamai.steamstatic.com/client/installer/steam.dmg",
+    "linux": "https://cdn.akamai.steamstatic.com/client/installer/steam.deb",
+    "android": "https://store.steampowered.com/mobile"
+  }
+}

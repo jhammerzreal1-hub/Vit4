@@ -1,0 +1,253 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile and custom RBAC privileges for Lysander Genesis Orchestrator",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 64 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 1024 },
+        "role": { "type": "string", "enum": ["user", "admin", "operator", "collaborator", "viewer"], "maxLength": 16 },
+        "status": { "type": "string", "enum": ["active", "pending", "suspended"], "maxLength": 16 },
+        "privileges": {
+          "type": "object",
+          "properties": {
+            "allModules": { "type": "boolean" },
+            "allowedModules": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 48 } },
+            "canUseChat": { "type": "boolean" },
+            "canUseVoiceChat": { "type": "boolean" },
+            "canRunAutonomousWorkflow": { "type": "boolean" },
+            "canModifyAgentSettings": { "type": "boolean" },
+            "canExecuteTerminalAndTools": { "type": "boolean" },
+            "canAccessSecretsAndWallets": { "type": "boolean" },
+            "canModifyOSSettings": { "type": "boolean" },
+            "canManageUsers": { "type": "boolean" }
+          }
+        },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "ChatThread": {
+      "title": "ChatThread",
+      "description": "Multi-turn conversation thread in Lysander Genesis Orchestrator",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "rolePreset": { "type": "string", "maxLength": 128 },
+        "model": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "title", "model", "createdAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Individual message in a conversation thread",
+      "type": "object",
+      "properties": {
+        "threadId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["user", "model", "system"], "maxLength": 32 },
+        "content": { "type": "string", "maxLength": 50000 },
+        "model": { "type": "string", "maxLength": 128 },
+        "groundingData": { "type": "string", "maxLength": 50000 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["threadId", "userId", "role", "content", "createdAt"]
+    },
+    "AgenticMemory": {
+      "title": "AgenticMemory",
+      "description": "Synchronized conversational memory turn for cross-device continuity",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["user", "model", "system"], "maxLength": 32 },
+        "content": { "type": "string", "maxLength": 50000 },
+        "model": { "type": "string", "maxLength": 128 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "role", "content", "createdAt"]
+    },
+    "Artifact": {
+      "title": "Artifact",
+      "description": "Generated multimedia, voice, grounding, or spatial 3D artifact",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "type": { "type": "string", "enum": ["music", "image", "video", "transcription", "knowledge", "dossier", "spatial", "voice"], "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 256 },
+        "prompt": { "type": "string", "maxLength": 4000 },
+        "model": { "type": "string", "maxLength": 128 },
+        "mediaUrl": { "type": "string", "maxLength": 500000 },
+        "metadataJson": { "type": "string", "maxLength": 50000 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "type", "title", "prompt", "model", "createdAt"]
+    },
+    "AuditLedgerItem": {
+      "title": "AuditLedgerItem",
+      "description": "Forensic audit ledger record for user operations and sovereign telemetry",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "subsystem": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "maxLength": 256 },
+        "payload": { "type": "string", "maxLength": 50000 },
+        "result": { "type": "string", "maxLength": 50000 },
+        "proofHash": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["SUCCESS", "FAILED", "HEALED"], "maxLength": 64 }
+      },
+      "required": ["userId", "timestamp", "subsystem", "action"]
+    },
+    "GameRun": {
+      "title": "GameRun",
+      "description": "Completed 3D Aegis Skylane & autonomous spatial simulation run telemetry record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "mode": { "type": "string", "enum": ["arcade", "aerial_combat", "swarm_logistics", "byzantine_mesh", "orbital_physics", "photoreal_sandbox", "mmorpg_world", "custom_world", "time_trial", "zen_inspect"], "maxLength": 32 },
+        "shipFinish": { "type": "string", "enum": ["titanium-amber", "obsidian-cyan", "ceramic-emerald", "forged-bronze", "titanium", "obsidian", "amber", "sapphire"], "maxLength": 32 },
+        "score": { "type": "number" },
+        "wave": { "type": "number" },
+        "beaconsCollected": { "type": "number" },
+        "durationSec": { "type": "number" },
+        "status": { "type": "string", "enum": ["COMPLETED", "VICTORY", "DEFEAT", "ABORTED"], "maxLength": 32 },
+        "agentsCount": { "type": "number" },
+        "engineTitle": { "type": "string", "maxLength": 128 },
+        "processMetricValue": { "type": "number" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "mode", "shipFinish", "score", "wave", "beaconsCollected", "durationSec", "status", "createdAt"]
+    },
+    "SpatialBlueprint": {
+      "title": "SpatialBlueprint",
+      "description": "Autonomous orchestrator or agent-created 3D game engine or simulated process blueprint",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 128 },
+        "engineKind": { "type": "string", "enum": ["aerial_combat", "swarm_logistics", "byzantine_mesh", "orbital_physics", "photoreal_sandbox", "mmorpg_world", "custom_world"], "maxLength": 32 },
+        "createdByAgent": { "type": "string", "maxLength": 128 },
+        "blueprintJson": { "type": "string", "maxLength": 50000 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "title", "engineKind", "createdByAgent", "blueprintJson", "createdAt"]
+    },
+    "DetectedGameMod": {
+      "title": "DetectedGameMod",
+      "description": "Auto-detected existing game signature, hook capabilities, and autonomous mod ledger",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "gameKey": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 128 },
+        "engine": { "type": "string", "enum": ["threejs", "phaser", "godot", "unity", "unreal", "minecraft", "pygame", "love2d", "html5_canvas", "custom_engine"], "maxLength": 32 },
+        "sourcePath": { "type": "string", "maxLength": 512 },
+        "status": { "type": "string", "enum": ["DETECTED", "HOOKED", "MODDED"], "maxLength": 32 },
+        "modCount": { "type": "number" },
+        "modStateJson": { "type": "string", "maxLength": 50000 },
+        "detectedAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "gameKey", "title", "engine", "sourcePath", "status", "modCount", "modStateJson", "detectedAt"]
+    },
+    "CraftedItem": {
+      "title": "CraftedItem",
+      "description": "Bespoke player- or AI-crafted MMORPG weapon, armor, relic, elixir, or world beacon carrying a unique Crafter Signature",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "itemId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 128 },
+        "category": { "type": "string", "enum": ["weapon", "armor", "relic", "elixir", "world_beacon"], "maxLength": 32 },
+        "rarity": { "type": "string", "enum": ["Masterwork", "Ascendant", "Mythic", "1-of-1 Sovereign"], "maxLength": 32 },
+        "crafterName": { "type": "string", "maxLength": 128 },
+        "crafterSkillLevel": { "type": "number" },
+        "signatureHash": { "type": "string", "maxLength": 64 },
+        "uniqueMakerTrait": { "type": "string", "maxLength": 256 },
+        "itemSpecJson": { "type": "string", "maxLength": 50000 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "itemId", "name", "category", "rarity", "crafterName", "crafterSkillLevel", "signatureHash", "uniqueMakerTrait", "itemSpecJson", "createdAt"]
+    },
+    "OrchestratorState": {
+      "title": "OrchestratorState",
+      "description": "Synchronized infinite continuity snapshot for orchestrator settings, active agent tasks, and live voice continuity",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "stateKey": { "type": "string", "enum": ["main"], "maxLength": 16 },
+        "continuityJson": { "type": "string", "maxLength": 200000 },
+        "revision": { "type": "number" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "stateKey", "continuityJson", "revision", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/test/{testId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "maxLength": 64 }
+        }
+      },
+      "description": "Read-only connection verification probe (/test/connection)"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile document"
+    },
+    "/users/{userId}/threads/{threadId}": {
+      "schema": { "$ref": "#/entities/ChatThread" },
+      "description": "Chat threads for a user"
+    },
+    "/users/{userId}/threads/{threadId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages inside a thread"
+    },
+    "/users/{userId}/agentic_memory/{memoryId}": {
+      "schema": { "$ref": "#/entities/AgenticMemory" },
+      "description": "Cross-device synchronized conversation memory turns"
+    },
+    "/users/{userId}/artifacts/{artifactId}": {
+      "schema": { "$ref": "#/entities/Artifact" },
+      "description": "Generated artifacts belonging to a user"
+    },
+    "/users/{userId}/audit_ledger/{ledgerId}": {
+      "schema": { "$ref": "#/entities/AuditLedgerItem" },
+      "description": "Forensic audit records belonging to a user"
+    },
+    "/users/{userId}/game_runs/{runId}": {
+      "schema": { "$ref": "#/entities/GameRun" },
+      "description": "Aegis Skylane & spatial simulation scores and run records belonging to a user"
+    },
+    "/users/{userId}/spatial_blueprints/{blueprintId}": {
+      "schema": { "$ref": "#/entities/SpatialBlueprint" },
+      "description": "Saved autonomous 3D game engine and simulated process blueprints belonging to a user"
+    },
+    "/users/{userId}/detected_games/{gameId}": {
+      "schema": { "$ref": "#/entities/DetectedGameMod" },
+      "description": "Automatically detected existing games and their autonomous mod hooks & state"
+    },
+    "/users/{userId}/crafted_items/{itemId}": {
+      "schema": { "$ref": "#/entities/CraftedItem" },
+      "description": "Bespoke player- and AI-crafted items with unique Crafter Signatures"
+    },
+    "/users/{userId}/orchestrator_state/{stateId}": {
+      "schema": { "$ref": "#/entities/OrchestratorState" },
+      "description": "Cross-device & cross-session infinite continuity snapshot for settings, agent task checkpoints, and voice state"
+    }
+  }
+}

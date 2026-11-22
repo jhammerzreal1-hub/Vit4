@@ -1,0 +1,230 @@
+{
+  "enabled": true,
+  "idleThresholdMs": 900000,
+  "cooldownMs": 600000,
+  "lastDreamAt": 1795316495130,
+  "totalCycles": 6,
+  "cycles": [
+    {
+      "id": "dream-mwr935ei-4d2d",
+      "triggerSource": "evolution",
+      "memoriesReplayed": 35,
+      "axiomsEvolved": 3,
+      "toolsAudited": 32,
+      "healingApplied": 0,
+      "summary": "Dream Cycle (evolution) replayed 35 unified memories, evolved 3 axiom(s), audited 32 tool(s), tsc=CLEAN.",
+      "insights": [
+        "Memory graph pollution from repeated identical tool blueprints (e.g., four Runtime-AST-Sanitizer-* nodes) and duplicate research logs degrades vector retrieval precision; enforce content-hash deduplication prior to graph insertion.",
+        "Indexing ephemeral liveness probes ('PONG', 'ONLINE') and empty coordinator sync payloads (action=sync-state payload={}) into persistent memory displaces high-signal context across cold reloads; route health telemetry to a volatile ring buffer.",
+        "Cold session reloads must hydrate an atomic state-delta snapshot (resolved identity anchors like JHammerZ, active tool Merkle root, and last non-trivial intent vector) from WAL-checkpointed SQLite stores before servicing main-chat turns to prevent greeting-loop resets.",
+        "TypeScript AST build check verified 100% clean (0 errors)."
+      ],
+      "evolvedAxioms": [
+        {
+          "id": "ax-mwr92w91-o315",
+          "category": "ARCHITECTURAL_PREFERENCE",
+          "principle": "Checkpoint deterministic session state-deltas and identity anchors atomically on every turn to guarantee zero-loss cold reload continuity.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwr92w91-ldla",
+          "category": "TOOL_HEURISTIC",
+          "principle": "Compute a canonical hash of tool AST/summary before forging micro-tools to reuse existing blueprints instead of spawning duplicates.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwr92w92-odls",
+          "category": "DOMAIN_KNOWLEDGE",
+          "principle": "Exclude stateless liveness probes and empty sync payloads from long-term semantic indexing to preserve associative recall signal-to-noise.",
+          "evolutionCount": 1
+        }
+      ],
+      "forgedTool": null,
+      "compileClean": true,
+      "proofHash": "0xb8d7eff50cf99d44f3e5f498d63e9d86",
+      "elapsedMs": 20045,
+      "createdAt": "2026-11-22T03:01:35.130Z"
+    },
+    {
+      "id": "dream-mwnyc0f5-f4dd",
+      "triggerSource": "manual-ui",
+      "memoriesReplayed": 35,
+      "axiomsEvolved": 3,
+      "toolsAudited": 28,
+      "healingApplied": 0,
+      "summary": "Dream Cycle (manual-ui) replayed 35 memories, evolved 3 axiom(s), audited 28 tool(s), tsc=CLEAN.",
+      "insights": [
+        "TypeScript purity requires strict runtime schema enforcement to prevent memory leak propagation across disconnected nodes.",
+        "Real-time telemetry latency is minimized by bypassing standard middleware and injecting directly into the Hypervisor's Ring -3 instruction buffer.",
+        "Workspace autonomy is achieved by treating code fragments as immutable objects rather than transient string buffers.",
+        "TypeScript AST build check verified 100% clean (0 errors)."
+      ],
+      "evolvedAxioms": [
+        {
+          "id": "ax-mwnybr25-cfgs",
+          "category": "TOOL_HEURISTIC",
+          "principle": "Validate AST structures before instantiation to prevent runtime instruction-set drift.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwnybr25-3ejd",
+          "category": "ARCHITECTURAL_PREFERENCE",
+          "principle": "Favor static typings over dynamic evaluation to ensure zero-token execution safety.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwnybr25-bunq",
+          "category": "SOVEREIGNTY_RULE",
+          "principle": "Ring -3 nodes must reject all inbound telemetry lacking cryptographic lineage markers.",
+          "evolutionCount": 1
+        }
+      ],
+      "forgedTool": null,
+      "compileClean": true,
+      "proofHash": "0x0201adff1c1e8d6270cfe1f9cb1c2d08",
+      "elapsedMs": 16117,
+      "createdAt": "2026-11-19T19:37:14.273Z"
+    },
+    {
+      "id": "dream-mwny81wf-c5d0",
+      "triggerSource": "manual-ui",
+      "memoriesReplayed": 35,
+      "axiomsEvolved": 3,
+      "toolsAudited": 27,
+      "healingApplied": 0,
+      "summary": "Dream Cycle (manual-ui) replayed 35 memories, evolved 3 axiom(s), audited 27 tool(s), tsc=CLEAN.",
+      "insights": [
+        "High-concurrency database optimization is inversely proportional to ORM abstraction overhead; prioritize raw prepared statements or Type-safe builders for latency reduction.",
+        "Autonomous workspace telemetry relies on ephemeral heap tracking; memory leaks in dynamic tool chains must be gated by AST-level runtime sanitization.",
+        "Sovereign neural cores require strict non-repetitive response protocols to maintain state consistency across fragmented multi-hub requests.",
+        "TypeScript AST build check verified 100% clean (0 errors)."
+      ],
+      "evolvedAxioms": [
+        {
+          "id": "ax-mwny7sj2-n1hg",
+          "category": "TOOL_HEURISTIC",
+          "principle": "If a tool executes TypeScript, it must first be validated via Runtime-AST-Sanitizer to prevent null-pointer injection.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwny7sj3-2h6j",
+          "category": "SOVEREIGNTY_RULE",
+          "principle": "Response divergence is a failure state. Deterministic state must be maintained across all asynchronous synchronization nodes.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwny7sj3-cb54",
+          "category": "ARCHITECTURAL_PREFERENCE",
+          "principle": "TypeScript purity over runtime dynamic typing. Use strict generic constraints to ensure zero-token safety in orchestrations.",
+          "evolutionCount": 1
+        }
+      ],
+      "forgedTool": null,
+      "compileClean": true,
+      "proofHash": "0xac663170ae15e8cb4340320ec61c266b",
+      "elapsedMs": 19618,
+      "createdAt": "2026-11-19T19:34:09.567Z"
+    },
+    {
+      "id": "dream-mwnxxbw3-6883",
+      "triggerSource": "manual-ui",
+      "memoriesReplayed": 35,
+      "axiomsEvolved": 2,
+      "toolsAudited": 25,
+      "healingApplied": 0,
+      "summary": "Dream Cycle (manual-ui) replayed 35 memories, evolved 2 axiom(s), audited 25 tool(s), tsc=CLEAN.",
+      "insights": [
+        "High-concurrency database optimization must prioritize non-blocking I/O and indexed schema pruning over traditional locking mechanisms.",
+        "TypeScript purity is maintained by isolating side-effects in an outer-boundary wrapper, allowing the AST sanitizer to validate core logic deterministically.",
+        "Autonomous consolidation requires strict state-checkpointing to prevent recursive loop degradation during high-frequency telemetry polling.",
+        "TypeScript AST build check verified 100% clean (0 errors)."
+      ],
+      "evolvedAxioms": [
+        {
+          "id": "ax-mwnxx1f4-ah0d",
+          "category": "ARCHITECTURAL_PREFERENCE",
+          "principle": "Type-safety is the primary defense against runtime state corruption; enforce strict null-checks at the system boundary.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwnxx1f5-4sqw",
+          "category": "SOVEREIGNTY_RULE",
+          "principle": "Any autonomous cycle exceeding 3 recursive iterations without external delta must force a memory-graph flush.",
+          "evolutionCount": 1
+        }
+      ],
+      "forgedTool": null,
+      "compileClean": true,
+      "proofHash": "0x462e9cbe496559e0ca1399b402f68a1c",
+      "elapsedMs": 16222,
+      "createdAt": "2026-11-19T19:25:49.299Z"
+    },
+    {
+      "id": "dream-mwkvmw9u-97e8",
+      "triggerSource": "evolution",
+      "memoriesReplayed": 35,
+      "axiomsEvolved": 2,
+      "toolsAudited": 12,
+      "healingApplied": 0,
+      "summary": "Dream Cycle (evolution) replayed 35 memories, evolved 2 axiom(s), audited 12 tool(s), tsc=CLEAN.",
+      "insights": [
+        "Recursive loop detected: 4-turn greeting repetition suggests trigger sensitivity in conversational state machine.",
+        "Tool-integrated memory ingestion indicates fragment fragmentation; AST-Sanitizer requires state-persistence headers to prevent recursive cut-off.",
+        "Sovereign Matrix verification necessitates a transition from semantic status reporting to binary heartbeat confirmation.",
+        "TypeScript AST build check verified 100% clean (0 errors)."
+      ],
+      "evolvedAxioms": [
+        {
+          "id": "ax-mwkvmoff-4a0w",
+          "category": "SOVEREIGNTY_RULE",
+          "principle": "Redundant greeting loops indicate synchronization drift; implement rate-limited response gating.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwkvmoff-bvm3",
+          "category": "TOOL_HEURISTIC",
+          "principle": "Inject AST-Sanitizer checksums into runtime buffer before stream completion to prevent memory truncation.",
+          "evolutionCount": 1
+        }
+      ],
+      "forgedTool": null,
+      "compileClean": true,
+      "proofHash": "0xb670661bdf421e4a9634d82e2434b93e",
+      "elapsedMs": 27342,
+      "createdAt": "2026-11-17T15:58:24.738Z"
+    },
+    {
+      "id": "dream-mwkvmb61-b660",
+      "triggerSource": "manual",
+      "memoriesReplayed": 35,
+      "axiomsEvolved": 2,
+      "toolsAudited": 12,
+      "healingApplied": 0,
+      "summary": "Dream Cycle (manual) replayed 35 memories, evolved 2 axiom(s), audited 12 tool(s), tsc=CLEAN.",
+      "insights": [
+        "High-concurrency database optimization relies on minimizing index contention via partitioning and asynchronous write buffering.",
+        "Autonomous state consolidation requires an interrupt-driven feedback loop to prevent heuristic stagnation during recursive reasoning.",
+        "TypeScript AST build check verified 100% clean (0 errors)."
+      ],
+      "evolvedAxioms": [
+        {
+          "id": "ax-mwkvm6ga-q2j7",
+          "category": "SOVEREIGNTY_RULE",
+          "principle": "Maintain operational variance; redundant state-looping indicates a failure in the memory-retention consensus protocol.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwkvm6ga-6yyf",
+          "category": "ARCHITECTURAL_PREFERENCE",
+          "principle": "Favor zero-token execution safety via AST sanitization to ensure runtime stability during autonomous transitions.",
+          "evolutionCount": 1
+        }
+      ],
+      "forgedTool": null,
+      "compileClean": true,
+      "proofHash": "0xe90aa1f57aae1ad036e2ff45e158f80a",
+      "elapsedMs": 53559,
+      "createdAt": "2026-11-17T15:57:57.385Z"
+    }
+  ]
+}

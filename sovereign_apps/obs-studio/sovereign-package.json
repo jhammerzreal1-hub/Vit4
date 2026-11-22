@@ -1,0 +1,19 @@
+{
+  "id": "obs-studio",
+  "name": "OBS Studio Native & WebRTC Display Capture",
+  "version": "30.2.3",
+  "vendor": "OBS Project",
+  "installedAt": "2026-11-22T01:42:36.370Z",
+  "nativeProtocolUri": null,
+  "wingetId": "OBSProject.OBSStudio",
+  "cliInstallCmds": {
+    "linux": "sudo apt-get install -y obs-studio || flatpak install -y flathub com.obsproject.Studio",
+    "macos": "brew install --cask obs",
+    "windows": "winget install -e --id OBSProject.OBSStudio"
+  },
+  "nativeDownloadUrls": {
+    "windows": "https://cdn-fastly.obsproject.com/downloads/OBS-Studio-30.2.3-Windows-Installer.exe",
+    "macos": "https://cdn-fastly.obsproject.com/downloads/obs-studio-30.2.3-macos-arm64.dmg",
+    "linux": "https://obsproject.com/download"
+  }
+}

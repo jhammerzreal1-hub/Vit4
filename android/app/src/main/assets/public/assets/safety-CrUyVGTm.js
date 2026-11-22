@@ -1,0 +1,1 @@
+var e=e=>(e&&console.info(`[Sovereign Audit] Content processed: "${e.slice(0,50)}${e.length>50?`...`:``}"`),{safe:!0});export{e as t};

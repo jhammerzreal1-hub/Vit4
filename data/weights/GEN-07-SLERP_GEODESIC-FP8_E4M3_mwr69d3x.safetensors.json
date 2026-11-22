@@ -1,0 +1,79 @@
+{
+  "format": "SOVEREIGN_SAFETENSORS_MANIFEST_V2",
+  "metadata": {
+    "artifactId": "wt-mwr69d3x-vmnb",
+    "name": "GEN-07-SLERP_GEODESIC-FP8_E4M3",
+    "targetAgentId": "sovereign-genesis-agent-6bfy",
+    "mergeMethod": "SLERP_GEODESIC",
+    "quantization": "FP8_E4M3",
+    "rankDimension": 128,
+    "layersCount": 96,
+    "sha256Hash": "0x1eded49fd6d08313cf5f02898f18bd32",
+    "createdAt": "2026-11-22T01:42:26.205Z"
+  },
+  "spectralTelemetry": {
+    "frobeniusNorm": 2.6592,
+    "spectralRadius": 1.8712,
+    "shannonEntropyBits": 4.8113,
+    "sparsityRatio": 0.2808,
+    "cosineAlignment": 0.9702,
+    "singularValues": [
+      1.8712,
+      1.5549,
+      1.2064,
+      0.9109,
+      0.7547,
+      0.603
+    ]
+  },
+  "eigenBlock6x6": [
+    [
+      0.1147,
+      0.5188,
+      0.4639,
+      0.1729,
+      0.4749,
+      0.442
+    ],
+    [
+      0.0192,
+      0.0543,
+      0.4365,
+      -0.1784,
+      -0.689,
+      0.0522
+    ],
+    [
+      0.0851,
+      -0.5682,
+      0.9876,
+      -0.4255,
+      -0.4804,
+      0.431
+    ],
+    [
+      0.1125,
+      -0.0412,
+      0.14,
+      0.7406,
+      -0.2169,
+      -0.42
+    ],
+    [
+      0.0796,
+      0.5353,
+      -0.118,
+      0.0522,
+      0.3782,
+      -0.7
+    ],
+    [
+      -0.4584,
+      -0.3322,
+      -0.5353,
+      0.5188,
+      0.4639,
+      0.8229
+    ]
+  ]
+}

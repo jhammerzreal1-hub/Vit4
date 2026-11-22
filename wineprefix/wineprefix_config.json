@@ -1,0 +1,22 @@
+{
+  "prefixPath": "/app/applet/wineprefix",
+  "windowsVersion": "win11",
+  "architecture": "win64",
+  "dxvkEnabled": true,
+  "vkd3dProtonEnabled": true,
+  "vcrun2022Installed": true,
+  "dotnet48Installed": true,
+  "audioDriver": "pulse",
+  "dpiScale": 120,
+  "hostRunnersDetected": {
+    "wine64": false,
+    "wine": false,
+    "proton": false,
+    "box64": false,
+    "nativeWindows": false
+  },
+  "installedDriveCPrograms": [
+    "/app/applet/downloads/7z2408-x64.exe",
+    "/app/applet/downloads/SteamSetup.exe"
+  ]
+}

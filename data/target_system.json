@@ -1,0 +1,21 @@
+{
+  "rootPath": "/app/applet",
+  "label": "Lysander Genesis Orchestrator (Self Workspace)",
+  "isSelf": true,
+  "detectedStack": [
+    "Node.js / npm",
+    "React",
+    "Vite",
+    "Express",
+    "Three.js",
+    "TypeScript"
+  ],
+  "pointedAt": "2026-11-22T01:42:26.211Z",
+  "history": [
+    {
+      "rootPath": "/app/applet",
+      "label": "Lysander Genesis Orchestrator (Self Workspace)",
+      "pointedAt": "2026-11-22T01:38:05.855Z"
+    }
+  ]
+}

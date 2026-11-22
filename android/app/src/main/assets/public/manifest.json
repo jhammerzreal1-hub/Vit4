@@ -1,0 +1,72 @@
+{
+  "id": "/",
+  "name": "Lysander Sovereign OS",
+  "short_name": "SovereignOS",
+  "description": "Cross-platform Sovereign Operating System & Autonomous Stack for Android, iOS, Windows, macOS, and Linux — UID 0 · Ring -3.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "orientation": "any",
+  "categories": ["productivity", "utilities", "developer"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Sovereign Chat",
+      "short_name": "Chat",
+      "description": "Autonomous AI orchestrator & workspace tools",
+      "url": "/#chat"
+    },
+    {
+      "name": "Root Terminal",
+      "short_name": "Terminal",
+      "description": "Native host OS command shell (UID 0)",
+      "url": "/#terminal"
+    },
+    {
+      "name": "Sovereign Files",
+      "short_name": "Files",
+      "description": "Host filesystem explorer & editor",
+      "url": "/#file-manager"
+    },
+    {
+      "name": "Google Chrome",
+      "short_name": "Chrome",
+      "description": "Full-internet web browser & AI Copilot",
+      "url": "/#browser"
+    }
+  ]
+}

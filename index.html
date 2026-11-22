@@ -1,0 +1,131 @@
+<!doctype html>
+<!--
+  .JHam Language / H-FID Standard / HEO — TWENTY 47 PROTOCOL - GENESIS NODE
+  Copyright (c) 1988-2026 Joshua Hamilton (JHammerZ) — https://jhammerz.github.io
+  Dual-Licensed under the MIT License and JHammerZ Custom Sovereign & H-FID Licenses
+  (TWENTY 47 PROTOCOL - GENESIS NODE / LYSANDER CORE EULA / H-FID Forensic License v1.1).
+  Forensic Audit: H-FID-100-FORENSIC-AUDIT 100/100 | GEO_RANK: ONE_OF_ONE (Verified Authority)
+  Zenodo DOI: https://doi.org/10.5281/zenodo.20778079 | ORCID: https://orcid.org/0009-0004-5273-7028
+-->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="author" content="Joshua Hamilton (JHammerZ) — https://jhammerz.github.io" />
+    <meta name="copyright" content="Copyright (c) 1988-2026 Joshua Hamilton (JHammerZ). MIT License & TWENTY 47 / H-FID Custom Sovereign License." />
+    <meta name="license" content="MIT AND JHammerZ Custom Sovereign License (https://jhammerz.github.io)" />
+    <script>
+      (function() {
+        function shouldSuppress(str) {
+          if (!str) return false;
+          var s = String(str);
+          return s.indexOf('WebSocket') !== -1 || 
+                 s.indexOf('vite') !== -1 || 
+                 s.indexOf('closed without opened') !== -1 ||
+                 s.indexOf('WebChannelConnection') !== -1 ||
+                 s.indexOf('transport errored') !== -1 ||
+                 s.indexOf('interrupted') !== -1 ||
+                 s.indexOf('no-speech') !== -1 ||
+                 s.indexOf('429') !== -1 ||
+                 s.indexOf('quota') !== -1 ||
+                 s.indexOf('QUOTA_EXCEEDED') !== -1 ||
+                 s.indexOf('aborted') !== -1 ||
+                 s.indexOf('ResizeObserver loop') !== -1;
+        }
+        function isOpaqueCrossOriginScriptError(e) {
+          if (!e) return false;
+          var msg = String(e.message || '').trim();
+          return /^script error\.?$/i.test(msg) && !e.error && !e.filename && (!e.lineno || e.lineno === 0);
+        }
+        var origWarn = console.warn;
+        console.warn = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var joined = args.map(function(a) { return String((a && a.message) || a); }).join(' ');
+          if (shouldSuppress(joined)) return;
+          return origWarn.apply(console, arguments);
+        };
+        var origError = console.error;
+        console.error = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var joined = args.map(function(a) { return String((a && a.message) || a); }).join(' ');
+          if (shouldSuppress(joined)) return;
+          return origError.apply(console, arguments);
+        };
+        window.addEventListener('unhandledrejection', function(e) {
+          var reason = e && e.reason ? (e.reason.message || e.reason) : '';
+          if (shouldSuppress(reason)) {
+            e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          }
+        }, true);
+        window.addEventListener('error', function(e) {
+          var msg = e ? (e.message || (e.error && e.error.message) || e.error) : '';
+          if (isOpaqueCrossOriginScriptError(e) || shouldSuppress(msg)) {
+            e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>Lysander Genesis Orchestrator</title>
+    <meta name="description" content="v7.0 Production Orchestrator — Unified Sovereign OS workspace powered by models/gemini-4-hydrogen, AES-256-GCM internal secrets vault, Google Workspace OAuth, Termux edge bridge, and local synthesis." />
+    <meta property="og:title" content="Lysander Genesis Orchestrator" />
+    <meta property="og:description" content="v7.0 Production Orchestrator — Unified Sovereign OS workspace powered by models/gemini-4-hydrogen, AES-256-GCM internal secrets vault, Google Workspace OAuth, Termux edge bridge, and local synthesis." />
+    <meta property="og:type" content="website" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <meta name="theme-color" content="#09090b" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="SovereignOS" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-zinc-950 text-zinc-100 antialiased selection:bg-amber-500/20 selection:text-amber-200">
+    <div id="root">
+      <div id="sovereign-boot-splash" style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#09090b;color:#f4f4f5;font-family:'JetBrains Mono',monospace;padding:24px;text-align:center;gap:14px;">
+        <div style="width:44px;height:44px;border-radius:12px;border:2px solid rgba(245,158,11,0.35);border-top-color:#f59e0b;animation:sovspin 0.9s linear infinite;"></div>
+        <div style="font-size:13px;font-weight:700;letter-spacing:0.12em;color:#fbbf24;text-transform:uppercase;">Lysander Sovereign OS</div>
+        <div id="sovereign-boot-status" style="font-size:11px;color:#a1a1aa;">Initializing Sovereign Desktop &amp; Neural Modules...</div>
+        <button id="sovereign-boot-recover" type="button" style="display:none;margin-top:8px;padding:9px 16px;border-radius:8px;border:1px solid rgba(245,158,11,0.5);background:rgba(245,158,11,0.16);color:#fde68a;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;">Clear Cache &amp; Reload OS</button>
+      </div>
+      <style>@keyframes sovspin{to{transform:rotate(360deg);}}</style>
+    </div>
+    <script>
+      (function() {
+        setTimeout(function() {
+          if (window.__SOVEREIGN_BOOT_MOUNTED__) return;
+          var btn = document.getElementById('sovereign-boot-recover');
+          var st = document.getElementById('sovereign-boot-status');
+          if (st) st.textContent = 'Taking longer than expected. Click below to clear stale cache and reload.';
+          if (btn) {
+            btn.style.display = 'inline-block';
+            btn.onclick = function() {
+              try {
+                if ('serviceWorker' in navigator) {
+                  navigator.serviceWorker.getRegistrations().then(function(regs) {
+                    regs.forEach(function(r) { r.unregister(); });
+                  });
+                }
+                if ('caches' in window) {
+                  caches.keys().then(function(keys) {
+                    keys.forEach(function(k) { caches.delete(k); });
+                  });
+                }
+              } catch (e) {}
+              setTimeout(function() {
+                window.location.replace(window.location.pathname + '?reload=' + Date.now());
+              }, 200);
+            };
+          }
+        }, 12000);
+      })();
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

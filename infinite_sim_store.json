@@ -1,0 +1,171 @@
+{
+  "simProfiles": [
+    {
+      "id": "sim-1795311747730-a440ca",
+      "label": "US Infinite eSIM",
+      "countryCode": "US",
+      "carrierName": "Lyrailius Carrier US 5G",
+      "mcc": "310",
+      "mnc": "260",
+      "iccid": "8931310260618317542",
+      "imsi": "310260052278929",
+      "eid": "890490323106088131308518375690",
+      "smdpAddress": "smdp.us.lyrailius-carrier.net",
+      "matchingId": "LYRA-982ADCC37947",
+      "activationCode": "LPA:1$smdp.us.lyrailius-carrier.net$LYRA-982ADCC37947",
+      "apn": "lyrailius.5g.us",
+      "networkStandard": "5G NR SA / LTE-A Pro",
+      "kiFingerprint": "0x7634418E23F92A9EA0B7C384",
+      "opcFingerprint": "0x3722E2306836018999262EE2",
+      "status": "ACTIVE",
+      "dataQuota": "UNLIMITED",
+      "createdAt": "2026-11-22T01:42:27.730Z"
+    },
+    {
+      "id": "sim-1795311616831-70e2fe",
+      "label": "US Infinite eSIM",
+      "countryCode": "US",
+      "carrierName": "Lyrailius Carrier US 5G",
+      "mcc": "310",
+      "mnc": "260",
+      "iccid": "8931310260346689477",
+      "imsi": "310260401806567",
+      "eid": "890490323109298498860343687326",
+      "smdpAddress": "smdp.us.lyrailius-carrier.net",
+      "matchingId": "LYRA-CA45C8375AEF",
+      "activationCode": "LPA:1$smdp.us.lyrailius-carrier.net$LYRA-CA45C8375AEF",
+      "apn": "lyrailius.5g.us",
+      "networkStandard": "5G NR SA / LTE-A Pro",
+      "kiFingerprint": "0xD103D792A1B1E8C13334A99E",
+      "opcFingerprint": "0x8AD2503CE8910F8878150F98",
+      "status": "STANDBY",
+      "dataQuota": "UNLIMITED",
+      "createdAt": "2026-11-22T01:40:16.831Z"
+    },
+    {
+      "id": "sim-1794734555535-01e449",
+      "label": "Primary Infinite eSIM (US)",
+      "countryCode": "US",
+      "carrierName": "Lyrailius Carrier US 5G",
+      "mcc": "310",
+      "mnc": "260",
+      "iccid": "8931310260514961351",
+      "imsi": "310260407276416",
+      "eid": "890490323108862362963599700483",
+      "smdpAddress": "smdp.us.lyrailius-carrier.net",
+      "matchingId": "LYRA-9859ABD247CA",
+      "activationCode": "LPA:1$smdp.us.lyrailius-carrier.net$LYRA-9859ABD247CA",
+      "apn": "lyrailius.5g.us",
+      "networkStandard": "5G NR SA / LTE-A Pro",
+      "kiFingerprint": "0x66C666093A07B9CD51816AB5",
+      "opcFingerprint": "0x2A59C227E49C0AB4020A4089",
+      "status": "STANDBY",
+      "dataQuota": "UNLIMITED",
+      "createdAt": "2026-11-15T09:22:35.535Z"
+    }
+  ],
+  "burnerNumbers": [
+    {
+      "id": "num-1795311747733-3c1b73",
+      "simId": "sim-1795311747730-a440ca",
+      "e164": "+13101339213",
+      "displayNumber": "+1 (310) 133-9213",
+      "countryCode": "US",
+      "countryName": "United States",
+      "dialCode": "+1",
+      "areaCode": "310",
+      "tag": "Verification",
+      "capabilities": [
+        "SMS",
+        "VOICE",
+        "OTP_PARSE",
+        "WEBHOOK"
+      ],
+      "status": "ONLINE",
+      "autoExtractOtp": true,
+      "messageCount": 0,
+      "createdAt": "2026-11-22T01:42:27.733Z"
+    },
+    {
+      "id": "num-1795311616845-05a1d2",
+      "simId": "sim-1795311616831-70e2fe",
+      "e164": "+16460033529",
+      "displayNumber": "+1 (646) 003-3529",
+      "countryCode": "US",
+      "countryName": "United States",
+      "dialCode": "+1",
+      "areaCode": "646",
+      "tag": "Verification",
+      "capabilities": [
+        "SMS",
+        "VOICE",
+        "OTP_PARSE",
+        "WEBHOOK"
+      ],
+      "status": "ONLINE",
+      "autoExtractOtp": true,
+      "messageCount": 0,
+      "createdAt": "2026-11-22T01:40:16.845Z"
+    },
+    {
+      "id": "num-1794734555536-a58466",
+      "simId": "sim-1794734555535-01e449",
+      "e164": "+14151733666",
+      "displayNumber": "+1 (415) 173-3666",
+      "countryCode": "US",
+      "countryName": "United States",
+      "dialCode": "+1",
+      "areaCode": "415",
+      "tag": "Verification",
+      "capabilities": [
+        "SMS",
+        "VOICE",
+        "OTP_PARSE",
+        "WEBHOOK"
+      ],
+      "status": "ONLINE",
+      "autoExtractOtp": true,
+      "messageCount": 3,
+      "createdAt": "2026-11-15T09:22:35.536Z",
+      "lastActivityAt": "2026-11-15T09:30:05.002Z"
+    },
+    {
+      "id": "num-1794734555536-1c1fe2",
+      "simId": "sim-1794734555535-01e449",
+      "e164": "+447700675133",
+      "displayNumber": "+44 7700 675 133",
+      "countryCode": "GB",
+      "countryName": "United Kingdom",
+      "dialCode": "+44",
+      "areaCode": "7700",
+      "tag": "Europe Relay",
+      "capabilities": [
+        "SMS",
+        "VOICE",
+        "OTP_PARSE",
+        "WEBHOOK"
+      ],
+      "status": "ONLINE",
+      "autoExtractOtp": true,
+      "messageCount": 0,
+      "createdAt": "2026-11-15T09:22:35.536Z"
+    }
+  ],
+  "smsMessages": [
+    {
+      "id": "sms-1794734555536",
+      "numberId": "num-1794734555536-a58466",
+      "e164": "+14151733666",
+      "direction": "INBOUND",
+      "from": "CarrierBridge",
+      "to": "+14151733666",
+      "body": "eSIM profile 961351 provisioned on Lyrailius Carrier US 5G. Your gateway activation code is 849201.",
+      "otpCode": "849201",
+      "extractedUrls": [],
+      "simIccid": "8931310260514961351",
+      "read": false,
+      "createdAt": "2026-11-15T09:22:35.536Z"
+    }
+  ],
+  "voiceCalls": []
+}

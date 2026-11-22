@@ -1,0 +1,19 @@
+{
+  "id": "vlc-media",
+  "name": "VLC Media Player (Win64 / macOS / Linux)",
+  "version": "3.0.21-Vetinari",
+  "vendor": "VideoLAN",
+  "installedAt": "2026-11-22T01:42:36.371Z",
+  "nativeProtocolUri": null,
+  "wingetId": "VideoLAN.VLC",
+  "cliInstallCmds": {
+    "linux": "sudo apt-get install -y vlc",
+    "macos": "brew install --cask vlc",
+    "windows": "winget install -e --id VideoLAN.VLC"
+  },
+  "nativeDownloadUrls": {
+    "windows": "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.exe",
+    "macos": "https://get.videolan.org/vlc/3.0.21/macosx/vlc-3.0.21-universal.dmg",
+    "linux": "https://www.videolan.org/vlc/#download"
+  }
+}

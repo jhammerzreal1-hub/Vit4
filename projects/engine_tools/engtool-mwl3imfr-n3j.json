@@ -1,0 +1,50 @@
+{
+  "toolId": "engtool-mwl3imfr-n3j",
+  "name": "Emerald Spire Forge",
+  "category": "biome_sculptor",
+  "description": "Photorealistic conceptual 3D environment tool",
+  "createdByAgent": "lyrailius-omega-zenith",
+  "parameters": {
+    "toolName": "Emerald Spire Forge",
+    "description": "Photorealistic conceptual 3D environment tool",
+    "biome": "alpine_archipelago",
+    "structureKind": "crystal_cluster",
+    "structureCount": 2,
+    "createdByAgent": "lyrailius-omega-zenith"
+  },
+  "generatedStructures": [
+    {
+      "id": "struct-mwl3imfr-0",
+      "conceptKind": "crystal_cluster",
+      "label": "Emerald Spire Forge #1",
+      "x": 17.1,
+      "z": 8.3,
+      "scale": 0.85,
+      "colorHex": "#10b981"
+    },
+    {
+      "id": "struct-mwl3imfr-1",
+      "conceptKind": "crystal_cluster",
+      "label": "Emerald Spire Forge #2",
+      "x": -23,
+      "z": -11.1,
+      "scale": 1.1,
+      "colorHex": "#10b981"
+    }
+  ],
+  "pipelinePatch": {
+    "biome": "alpine_archipelago",
+    "weather": "rain",
+    "waterEnabled": true,
+    "waterLevel": -0.35,
+    "waveAmplitude": 0.38,
+    "bloomEnabled": true,
+    "bloomStrength": 0.48,
+    "bloomThreshold": 0.85,
+    "sunElevationDeg": 19,
+    "sunAzimuthDeg": 52,
+    "fogDensity": 0.0068,
+    "exposure": 1.12
+  },
+  "createdAt": "2026-11-17T19:39:02.295Z"
+}

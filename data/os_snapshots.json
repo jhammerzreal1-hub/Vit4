@@ -1,0 +1,83 @@
+[
+  {
+    "id": "snap-mwr69kgu-a6ff00",
+    "label": "Sovereign Declarative OS Generation",
+    "createdAt": "2026-11-22T01:42:35.742Z",
+    "merkleRootSha256": "3ab6928f7e60920fc17dff429ded1c39347b0dc5ebf0420c2baf06fce3e797eb",
+    "installedAppsCount": 7,
+    "installedAppIds": [
+      "vlc-media",
+      "obs-studio",
+      "sovereign-arcade",
+      "discord",
+      "steam",
+      "dl-7z2408-x64-exe-mwmssqtr",
+      "dl-steamsetup-exe-mwmssq2b"
+    ],
+    "activeDaemonsCount": 5,
+    "walletsCount": 4,
+    "customizationProfile": {},
+    "snapshotDigestSha256": "a6ff00a6997aea33f30461f2f3157e6844802971f2a20ec0a7ce1a5ad48b2dad"
+  },
+  {
+    "id": "snap-mwr66xds-80f04c",
+    "label": "Sovereign Declarative OS Generation",
+    "createdAt": "2026-11-22T01:40:32.512Z",
+    "merkleRootSha256": "f7ae175d7bc1a7c2ef5295cda78dd69948bc0eed3d4883c08c7d854c2caf2aaf",
+    "installedAppsCount": 6,
+    "installedAppIds": [
+      "dl-7z2408-x64-exe-mwmssqtr",
+      "dl-steamsetup-exe-mwmssq2b",
+      "steam",
+      "discord",
+      "sovereign-arcade",
+      "obs-studio"
+    ],
+    "activeDaemonsCount": 5,
+    "walletsCount": 3,
+    "customizationProfile": {},
+    "snapshotDigestSha256": "80f04cd2a08d71d52ee4f078b2c69ce67f253ea9047217e7897272376a22bfc7"
+  },
+  {
+    "id": "snap-mwmree69-3a133f",
+    "label": "Forensic Supremacy Verification Generation",
+    "createdAt": "2026-11-18T23:35:21.921Z",
+    "merkleRootSha256": "f0bdd7cc382e536e9b1ae821dc78813df9e99d93e21bc7519762b68e8a2ae104",
+    "installedAppsCount": 5,
+    "installedAppIds": [
+      "vlc-media",
+      "obs-studio",
+      "sovereign-arcade",
+      "discord",
+      "steam"
+    ],
+    "activeDaemonsCount": 5,
+    "walletsCount": 2,
+    "customizationProfile": {
+      "themeId": "aurelius-gold",
+      "activeWorkspace": 1
+    },
+    "snapshotDigestSha256": "3a133ff78622fbfef670997004027c5bedbd3f23c2551df4717b7de05d775657"
+  },
+  {
+    "id": "snap-mwmredzt-68882e",
+    "label": "Genesis Baseline Snapshot (H-FID 100/100 · UID 0 Ring -3)",
+    "createdAt": "2026-11-18T23:35:21.689Z",
+    "merkleRootSha256": "23d434e97c431c37494e820d8700ee477986f3ef1c86156cde1f2423adc915c1",
+    "installedAppsCount": 5,
+    "installedAppIds": [
+      "vlc-media",
+      "obs-studio",
+      "sovereign-arcade",
+      "discord",
+      "steam"
+    ],
+    "activeDaemonsCount": 5,
+    "walletsCount": 2,
+    "customizationProfile": {
+      "themeId": "aurelius-gold",
+      "activeWorkspace": 1
+    },
+    "snapshotDigestSha256": "68882e7df8f8e050f49cbf23cd5d297d90a3e5bd569fa252148f532a8ba98f56"
+  }
+]

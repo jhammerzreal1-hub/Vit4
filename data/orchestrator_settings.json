@@ -1,0 +1,422 @@
+{
+  "revision": 79,
+  "updatedAt": "2026-11-22T01:42:37.194Z",
+  "shell": {
+    "activeModule": "chat",
+    "shellViewMode": "desktop",
+    "openModules": [
+      "chat"
+    ],
+    "pinnedModules": [
+      "chat",
+      "lora-mesh",
+      "browser",
+      "macro-telemetry",
+      "projects",
+      "ai-genesis-distillery",
+      "autonomy-supervisor",
+      "crypto-wallet",
+      "grant-hunter",
+      "transfer-hub",
+      "burner-mail"
+    ],
+    "windowStates": {
+      "chat": {
+        "x": -16,
+        "y": 268,
+        "width": 412,
+        "height": 223,
+        "zIndex": 35,
+        "minimized": false,
+        "maximized": true
+      },
+      "terminal": {
+        "x": 5,
+        "y": 4,
+        "width": 376,
+        "height": 228,
+        "zIndex": 31,
+        "minimized": false,
+        "maximized": true
+      },
+      "browser": {
+        "x": 2,
+        "y": 353,
+        "width": 420,
+        "height": 539,
+        "zIndex": 40,
+        "minimized": false,
+        "maximized": false
+      },
+      "file-manager": {
+        "x": 19,
+        "y": 56,
+        "width": 480,
+        "height": 1535,
+        "zIndex": 93,
+        "minimized": false,
+        "maximized": false
+      },
+      "projects": {
+        "x": 130,
+        "y": 20,
+        "width": 588,
+        "height": 620,
+        "zIndex": 95,
+        "minimized": false,
+        "maximized": false
+      },
+      "macro-telemetry": {
+        "x": 8,
+        "y": 46.19032287597656,
+        "width": 544,
+        "height": 620,
+        "zIndex": 53,
+        "minimized": false,
+        "maximized": true
+      },
+      "task-manager": {
+        "x": 8,
+        "y": 93,
+        "width": 376,
+        "height": 454,
+        "zIndex": 31,
+        "minimized": false,
+        "maximized": false
+      },
+      "ai-genesis-distillery": {
+        "x": 8,
+        "y": 25,
+        "width": 376,
+        "height": 522,
+        "zIndex": 32,
+        "minimized": false,
+        "maximized": true
+      },
+      "os-settings": {
+        "x": 8,
+        "y": 104,
+        "width": 376,
+        "height": 427,
+        "zIndex": 71,
+        "minimized": false,
+        "maximized": true
+      },
+      "vault": {
+        "x": -31,
+        "y": 30,
+        "width": 376,
+        "height": 560,
+        "zIndex": 32,
+        "minimized": false,
+        "maximized": true
+      },
+      "universal-installer": {
+        "x": 0,
+        "y": 0,
+        "width": 376,
+        "height": 539,
+        "zIndex": 58,
+        "minimized": false,
+        "maximized": false
+      },
+      "burner-mail": {
+        "x": 8,
+        "y": 8,
+        "width": 376,
+        "height": 539,
+        "zIndex": 31,
+        "minimized": false,
+        "maximized": true
+      },
+      "crypto-wallet": {
+        "x": 80,
+        "y": 76,
+        "width": 460,
+        "height": 620,
+        "zIndex": 31,
+        "minimized": false,
+        "maximized": true
+      },
+      "autonomy-supervisor": {
+        "x": 6,
+        "y": 6,
+        "width": 591,
+        "height": 668,
+        "zIndex": 31,
+        "minimized": false,
+        "maximized": false
+      },
+      "swarm-test": {
+        "x": 8,
+        "y": 8,
+        "width": 376,
+        "height": 539,
+        "zIndex": 36,
+        "minimized": false,
+        "maximized": true
+      },
+      "osint": {
+        "x": 236,
+        "y": 20,
+        "width": 544,
+        "height": 620,
+        "zIndex": 35,
+        "minimized": false,
+        "maximized": true
+      },
+      "transfer-hub": {
+        "x": 47.21368408203125,
+        "y": 516,
+        "width": 376,
+        "height": 489,
+        "zIndex": 36,
+        "minimized": false,
+        "maximized": true
+      },
+      "api-secrets": {
+        "x": 60,
+        "y": 76,
+        "width": 480,
+        "height": 640,
+        "zIndex": 31,
+        "minimized": false,
+        "maximized": true
+      },
+      "contacts": {
+        "x": 62,
+        "y": 104,
+        "width": 480,
+        "height": 640,
+        "zIndex": 63,
+        "minimized": false,
+        "maximized": false
+      },
+      "knowledge-graph": {
+        "x": 12,
+        "y": 117,
+        "width": 376,
+        "height": 443,
+        "zIndex": 56,
+        "minimized": false,
+        "maximized": false
+      },
+      "tool-shed": {
+        "x": 12,
+        "y": 20,
+        "width": 376,
+        "height": 444,
+        "zIndex": 302,
+        "minimized": true,
+        "maximized": false
+      },
+      "world-start": {
+        "x": 236,
+        "y": 48,
+        "width": 608,
+        "height": 640,
+        "zIndex": 53,
+        "minimized": false,
+        "maximized": false
+      },
+      "spatial-arena": {
+        "x": 270,
+        "y": 75,
+        "width": 608,
+        "height": 640,
+        "zIndex": 51,
+        "minimized": false,
+        "maximized": false
+      },
+      "emulator-modder": {
+        "x": 304,
+        "y": 104,
+        "width": 608,
+        "height": 640,
+        "zIndex": 52,
+        "minimized": false,
+        "maximized": false
+      },
+      "guitar-offline": {
+        "x": 134,
+        "y": 123,
+        "width": 739,
+        "height": 837,
+        "zIndex": 51,
+        "minimized": false,
+        "maximized": false
+      },
+      "grant-hunter": {
+        "x": 60,
+        "y": 20,
+        "width": 480,
+        "height": 640,
+        "zIndex": 38,
+        "minimized": false,
+        "maximized": false
+      },
+      "lora-mesh": {
+        "x": 6,
+        "y": 6,
+        "width": 970,
+        "height": 672,
+        "zIndex": 31,
+        "minimized": false,
+        "maximized": true
+      },
+      "admin-command": {
+        "x": 236,
+        "y": 76,
+        "width": 608,
+        "height": 640,
+        "zIndex": 35,
+        "minimized": false,
+        "maximized": true
+      }
+    },
+    "isSplitMode": false,
+    "secondaryModule": "browser",
+    "splitPct": 50,
+    "isChatDetached": false,
+    "detachedExtraModules": [],
+    "chatPipMinimized": false,
+    "pipMinimizedExtras": {},
+    "devMode": true,
+    "activeAccountEmail": "joshualhamilton17@gmail.com",
+    "persistentTalkActive": false,
+    "uiMutation": {
+      "css": ""
+    }
+  },
+  "osCustomization": {
+    "widgets": {},
+    "notifications": {
+      "telemetryPopupAlerts": false,
+      "cryptoTradingAlerts": false,
+      "telemetryAudioChime": true
+    },
+    "hotkeys": {
+      "launcher": "Alt+L",
+      "splitMode": "Alt+/",
+      "tileWindows": "Alt+T",
+      "detachChat": "Alt+C",
+      "workspace1": "Alt+1",
+      "workspace2": "Alt+2",
+      "workspace3": "Alt+3",
+      "workspace4": "Alt+4",
+      "openTerminal": "Alt+`",
+      "openWallets": "Alt+W",
+      "openMarkets": "Alt+M",
+      "openDiagnostics": "Alt+D"
+    },
+    "themeId": "qubes-crimson",
+    "customWallpaperUrl": "",
+    "wallpaperOpacityPct": 68,
+    "wallpaperBlurPx": 0,
+    "accentColor": "rose",
+    "windowBlurPx": 12,
+    "windowOpacityPct": 96,
+    "windowRadiusPx": 8,
+    "borderGlowIntensity": "neon",
+    "iconSize": "standard",
+    "fontScalePct": 100,
+    "showTacticalGrid": true,
+    "showCrtScanlines": false,
+    "showDesktopFiles": true,
+    "hiddenDesktopIcons": [
+      "app-obs-studio",
+      "app-sovereign-arcade",
+      "app-steam",
+      "app-dl-steamsetup-exe-mwmssq2b",
+      "app-dl-7z2408-x64-exe-mwmssqtr"
+    ],
+    "customIconLabels": {},
+    "customDesktopShortcuts": [],
+    "desktopIconOrder": [],
+    "enableGamepadOsNav": true,
+    "showTouchControllerOverlay": false,
+    "controllerGlyphStyle": "auto",
+    "activeWorkspace": 1,
+    "workspaceNames": [
+      "1: Command & AI",
+      "2: Markets & Crypto",
+      "3: Root Dev & Files",
+      "4: Games & Media"
+    ],
+    "desktopWidgets": {
+      "showKernelHud": true,
+      "showMarketTickerHud": true,
+      "showCryptoVaultHud": true,
+      "showClipboardHud": false
+    },
+    "customCss": "",
+    "clipboardHistory": [
+      {
+        "id": "clip-genesis-1",
+        "label": "JHammerZ Provenance & DOI",
+        "text": "https://jhammerz.github.io | DOI: https://doi.org/10.5281/zenodo.20778079",
+        "timestamp": "2026-11-19T03:46:31.978Z",
+        "pinned": true
+      },
+      {
+        "id": "clip-genesis-2",
+        "label": "Forensic Audit CLI Check",
+        "text": "curl -s http://127.0.0.1:3000/api/os/forensic-audit | jq .overallHealthScore",
+        "timestamp": "2026-11-19T03:46:31.978Z",
+        "pinned": true
+      }
+    ]
+  },
+  "chat": {
+    "model": "gemini-4-hydrogen",
+    "selectedRoleId": "lyrailius-omega-zenith",
+    "customSystemInstruction": "You are Lyrailius Omega, Resident Brain & Production Coordinator (models/gemini-4-hydrogen). ",
+    "activePermitId": "permit-0-master",
+    "zeroTokenMode": false,
+    "chainOfThoughtEnabled": true,
+    "deepthinkMode": true,
+    "liveSearchEnabled": true,
+    "showOperationalConsole": false,
+    "showQuickLaunchers": false,
+    "isSovereignBuilding": false,
+    "autoReadAloud": false,
+    "selectedVoiceName": "Zephyr",
+    "ttsEngine": "cloud",
+    "speechRate": 1,
+    "speechPitch": 1,
+    "speechWarmth": 0.5,
+    "speechResonance": 0.5,
+    "speechFormant": 0,
+    "workflowGoal": "Autonomous Architecture & Continuous System Synthesis",
+    "infiniteWorkflowActive": false,
+    "workflowCycle": 1,
+    "workflowActiveAction": "",
+    "workflowAccomplished": false,
+    "workflowAccomplishedSummary": "",
+    "workflowActionLog": [],
+    "buildSteps": [],
+    "workflowPoppedOut": true,
+    "workflowWindowOpen": false,
+    "workflowWindowMinimized": false,
+    "workflowWindowGeom": {
+      "x": 784,
+      "y": 58,
+      "width": 480,
+      "height": 432
+    }
+  },
+  "voiceDock": {
+    "micPermissionGranted": true,
+    "cameraPermissionGranted": false,
+    "selectedMicId": "54a29517ef1b03a4eca79b98bcdfa0001bdb9a598381a5acd3f2ec4094979d59",
+    "micLabel": "Speakerphone",
+    "micPermissionGrantedAt": "2026-11-20T20:01:47.023Z",
+    "voiceName": "Zephyr",
+    "voiceAccent": "en-US",
+    "captureMode": "hybrid",
+    "peerExploreEnabled": true,
+    "autoArchiveVault": true,
+    "expanded": false,
+    "dockPos": null
+  }
+}

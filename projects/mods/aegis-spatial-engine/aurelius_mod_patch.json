@@ -1,0 +1,26 @@
+{
+  "gameId": "aegis-spatial-engine",
+  "title": "Aegis Hyperion · Resident 3D Spatial Engine",
+  "engine": "threejs",
+  "summary": "Autonomous Engine Override (TimeScale=1x, Gravity=9.8, Biome=canyon_basin, Weather=clear)",
+  "modState": {
+    "godMode": false,
+    "timeScale": 1,
+    "gravity": 9.8,
+    "speedScale": 1,
+    "biome": "canyon_basin",
+    "weather": "clear",
+    "bloomStrength": 0.42,
+    "activeMods": [
+      {
+        "modId": "mod-mwr67112-fs9",
+        "name": "Autonomous Engine Override",
+        "appliedBy": "lyrailius-omega-zenith",
+        "summary": "Autonomous Engine Override (TimeScale=1x, Gravity=9.8, Biome=canyon_basin, Weather=clear)",
+        "appliedAt": "2026-11-22T01:40:37.239Z",
+        "scriptPath": "projects/mods/aegis-spatial-engine/aurelius_mod_patch.json"
+      }
+    ]
+  },
+  "updatedAt": "2026-11-22T01:42:37.112Z"
+}

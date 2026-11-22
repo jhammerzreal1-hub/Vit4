@@ -1,0 +1,62 @@
+[
+  {
+    "id": "daemon-laplace14",
+    "unitName": "lysander-laplace14-watcher.service",
+    "title": "Laplace-14 (h=2s) 20-Market & Crypto 5m Early-Warning Daemon",
+    "description": "Continuously computes multi-kernel regression and 99% conformal prediction bands across 20 global markets and crypto pairs to emit 5-minute early-warning BUY/SELL/PROFIT/LOSS alerts.",
+    "enabled": true,
+    "status": "ACTIVE_RUNNING",
+    "intervalSeconds": 15,
+    "cyclesCompleted": 142,
+    "lastExecutedAt": "2026-11-18T23:35:06.239Z",
+    "lastResultSummary": "20 markets & crypto pairs synchronized · 99.8% conformal coverage verified."
+  },
+  {
+    "id": "daemon-agentic-treasury",
+    "unitName": "lysander-agentic-treasury.service",
+    "title": "UID 0 Agentic Autonomous Crypto Treasury Executor",
+    "description": "Monitors Laplace-14 5-minute conformal crypto forecasts and executes ECDSA-secp256k1 / Ed25519 signed positions inside the UID 0 Agentic Treasury vault.",
+    "enabled": true,
+    "status": "ACTIVE_RUNNING",
+    "intervalSeconds": 30,
+    "cyclesCompleted": 64,
+    "lastExecutedAt": "2026-11-18T23:35:06.239Z",
+    "lastResultSummary": "Dual-vault keystore verified · Autonomous 5m conformal policy active."
+  },
+  {
+    "id": "daemon-mmio-bus",
+    "unitName": "lysander-mmio-bus-sync.service",
+    "title": "Ring -3 128-Byte Binary MMIO Telemetry Bus Synchronizer",
+    "description": "Writes real-time host CPU load averages, free/total RAM, process RSS, and SHA-256 frame integrity digests into /data/sovereign_bus.dat.",
+    "enabled": true,
+    "status": "ACTIVE_RUNNING",
+    "intervalSeconds": 10,
+    "cyclesCompleted": 318,
+    "lastExecutedAt": "2026-11-18T23:35:06.239Z",
+    "lastResultSummary": "128-byte SOVBUS01 binary frame flushed with verified SHA-256 digest."
+  },
+  {
+    "id": "daemon-forensic-watchdog",
+    "unitName": "lysander-forensic-watchdog.service",
+    "title": "Continuous Merkle File Integrity & App Bundle Watchdog",
+    "description": "Verifies SHA-256 checksums across all project source files and in-OS software bundles (Steam, Discord, Arcade, OBS, VLC) with zero-loss guarantee.",
+    "enabled": true,
+    "status": "ACTIVE_RUNNING",
+    "intervalSeconds": 60,
+    "cyclesCompleted": 90,
+    "lastExecutedAt": "2026-11-18T23:35:21.876Z",
+    "lastResultSummary": "Verified 159 files (122,486 lines) · Merkle Root: cb099a35b76c3e76..."
+  },
+  {
+    "id": "daemon-proxy-wheel",
+    "unitName": "lysander-proxy-wheel-healer.service",
+    "title": "AES-256-GCM Vault & Proxy Loop Wheel Cooldown Healer",
+    "description": "Maintains zero-downtime LLM and API routing by resetting expired spoke cooldowns and verifying AES-256-GCM secret derivation.",
+    "enabled": true,
+    "status": "ACTIVE_RUNNING",
+    "intervalSeconds": 45,
+    "cyclesCompleted": 112,
+    "lastExecutedAt": "2026-11-18T23:35:06.239Z",
+    "lastResultSummary": "All configured Proxy Loop Wheel spokes ready (0 rate-locked spokes)."
+  }
+]

@@ -1,0 +1,1 @@
+var e=`/assets/studio_creative_audio_1791569654655-DGmy5hzZ.jpg`;export{e as t};

@@ -1,0 +1,54 @@
+[
+  {
+    "id": "sp-1795311747762",
+    "title": "Untitled Scratchpad",
+    "category": "working-memory",
+    "content": "",
+    "tags": [],
+    "hfidHash": "e537234783803fd4b425a06487008eb15248955d4569cfdd25d35bcabbb68398",
+    "attested": true,
+    "createdAt": "2026-11-22T01:42:27.762Z",
+    "updatedAt": "2026-11-22T01:42:27.762Z"
+  },
+  {
+    "id": "sp-1795311620885",
+    "title": "Untitled Scratchpad",
+    "category": "working-memory",
+    "content": "",
+    "tags": [],
+    "hfidHash": "b9b2456762bfbd8db1ce9e61153afb618b0a7e627baf8f6615de5ec067c6aa91",
+    "attested": true,
+    "createdAt": "2026-11-22T01:40:20.885Z",
+    "updatedAt": "2026-11-22T01:40:20.885Z"
+  },
+  {
+    "id": "sp-001",
+    "title": "Lysander 3.1 Enterprise Cross-Bridge Invariants",
+    "category": "directives",
+    "content": "# Lysander 3.1 Enterprise Invariants\n- Workspace Autonomy & Atomic Patching active.\n- AES-256-GCM Internal Secrets Vault guarding all provider keys.\n- Compiler gate verification active via tsc --noEmit.",
+    "tags": [
+      "lysander",
+      "cbp",
+      "hfid",
+      "sovereign"
+    ],
+    "hfidHash": "7f38fa8ce6a6d3abd6e6d1a836958d",
+    "attested": true,
+    "createdAt": "2026-11-17T00:30:25.826Z",
+    "updatedAt": "2026-11-17T02:20:25.826Z"
+  },
+  {
+    "id": "sp-002",
+    "title": "Sovereign Working Memory Buffer",
+    "category": "working-memory",
+    "content": "Active persistent scratchpad buffer for task decomposition, code notes, and architectural planning.",
+    "tags": [
+      "scratchpad",
+      "working-memory"
+    ],
+    "hfidHash": "8836e9c9888f60bd07693",
+    "attested": true,
+    "createdAt": "2026-11-17T01:00:25.826Z",
+    "updatedAt": "2026-11-17T02:30:25.826Z"
+  }
+]

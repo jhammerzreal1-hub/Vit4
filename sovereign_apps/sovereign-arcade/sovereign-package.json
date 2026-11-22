@@ -1,0 +1,19 @@
+{
+  "id": "sovereign-arcade",
+  "name": "Sovereign Cyber Arcade (Playable Games)",
+  "version": "2.4.0",
+  "vendor": "Lysander Interactive",
+  "installedAt": "2026-11-22T01:42:36.370Z",
+  "nativeProtocolUri": null,
+  "wingetId": null,
+  "cliInstallCmds": {
+    "linux": "sovereign-pkg enable sovereign-arcade",
+    "macos": "sovereign-pkg enable sovereign-arcade",
+    "windows": "sovereign-pkg enable sovereign-arcade"
+  },
+  "nativeDownloadUrls": {
+    "windows": "/api/os/apps/serve/sovereign-arcade/sovereign-package.json",
+    "macos": "/api/os/apps/serve/sovereign-arcade/sovereign-package.json",
+    "linux": "/api/os/apps/serve/sovereign-arcade/sovereign-package.json"
+  }
+}

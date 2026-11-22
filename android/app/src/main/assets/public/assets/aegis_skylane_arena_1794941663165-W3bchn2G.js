@@ -1,0 +1,1 @@
+var e=`/assets/aegis_skylane_arena_1794941663165-DSBnHzDZ.jpg`;export{e as t};

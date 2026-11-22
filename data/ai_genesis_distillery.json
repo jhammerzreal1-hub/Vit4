@@ -1,0 +1,1025 @@
+{
+  "agents": [
+    {
+      "id": "sovereign-genesis-agent-9d40",
+      "code": "GEN-08",
+      "name": "Sovereign Genesis Agent",
+      "role": "Autonomous Multi-Scope Specialist & Self-Evolving Agent",
+      "architecture": "Transformer-MoE-v6",
+      "parameterScale": "405B MoE-Hybrid",
+      "quantization": "FP8_E4M3",
+      "attentionMechanism": "Multi-Head Latent Attention (MLA)",
+      "contextWindowTokens": 2097152,
+      "activeExperts": 8,
+      "totalExperts": 32,
+      "systemDirective": "Operate as Sovereign Genesis Agent with 100% Universal 3-Scope Autonomy across self, target, and host systems. Execute atomic patches and continuously refine cognitive weights.",
+      "capabilities": [
+        "Universal 3-Scope Atomic Patching",
+        "Autonomous Tool Synthesis",
+        "Self-Directed Weight Distillation",
+        "Cross-System Execution"
+      ],
+      "scopesUnlocked": [
+        "self",
+        "target",
+        "host"
+      ],
+      "genome": {
+        "reasoningDepth": 0.955,
+        "codeSynthesisPrecision": 0.962,
+        "autonomousInitiative": 0.975,
+        "mathematicalRigor": 0.958,
+        "creativeDivergence": 0.948,
+        "faultResilience": 0.972,
+        "crossSystemMastery": 0.981,
+        "molecularCoherence": 0.964
+      },
+      "idealStatePurity": 96.44,
+      "distillationGeneration": 1,
+      "trainingEpochsCompleted": 64,
+      "currentPerplexity": 1.2338,
+      "freeEnergyEv": 0.0499,
+      "weightHash": "0x33e45d60212bbff9c4f391db2f859d5f",
+      "createdAt": "2026-11-22T01:42:26.208Z",
+      "updatedAt": "2026-11-22T01:42:26.208Z",
+      "isResidentCore": false
+    },
+    {
+      "id": "sovereign-genesis-agent-6bfy",
+      "code": "GEN-07",
+      "name": "Sovereign Genesis Agent",
+      "role": "Autonomous Multi-Scope Specialist & Self-Evolving Agent",
+      "architecture": "Transformer-MoE-v6",
+      "parameterScale": "405B MoE-Hybrid",
+      "quantization": "FP8_E4M3",
+      "attentionMechanism": "Multi-Head Latent Attention (MLA)",
+      "contextWindowTokens": 2097152,
+      "activeExperts": 8,
+      "totalExperts": 32,
+      "systemDirective": "Operate as Sovereign Genesis Agent with 100% Universal 3-Scope Autonomy across self, target, and host systems. Execute atomic patches and continuously refine cognitive weights.",
+      "capabilities": [
+        "Universal 3-Scope Atomic Patching",
+        "Autonomous Tool Synthesis",
+        "Self-Directed Weight Distillation",
+        "Cross-System Execution"
+      ],
+      "scopesUnlocked": [
+        "self",
+        "target",
+        "host"
+      ],
+      "genome": {
+        "reasoningDepth": 0.9749,
+        "codeSynthesisPrecision": 0.9865,
+        "autonomousInitiative": 0.9874,
+        "mathematicalRigor": 0.9816,
+        "creativeDivergence": 0.9667,
+        "faultResilience": 0.9872,
+        "crossSystemMastery": 0.9924,
+        "molecularCoherence": 0.9813
+      },
+      "idealStatePurity": 98.13,
+      "distillationGeneration": 2,
+      "trainingEpochsCompleted": 80,
+      "currentPerplexity": 1.0818,
+      "freeEnergyEv": 0.0327,
+      "weightHash": "0x1eded49fd6d08313cf5f02898f18bd32",
+      "createdAt": "2026-11-22T01:40:04.078Z",
+      "updatedAt": "2026-11-22T01:42:26.205Z",
+      "isResidentCore": false
+    },
+    {
+      "id": "lyrailius-omega-zenith",
+      "code": "OMEGA-01",
+      "name": "Lyrailius Omega (Resident Brain & Coordinator)",
+      "role": "Omnipresent Sovereign Orchestrator & Primary Synthesis Core",
+      "architecture": "Transformer-MoE-v6",
+      "parameterScale": "1.8T (16x112B MoE)",
+      "quantization": "FP8_E4M3",
+      "attentionMechanism": "Multi-Head Latent Attention (MLA)",
+      "contextWindowTokens": 2097152,
+      "activeExperts": 4,
+      "totalExperts": 16,
+      "systemDirective": "Coordinate all 38 orchestrator subsystems with UID 0 Root Clearance, execute verified multi-scope atomic patches across self/target/host, and continuously refine collective intelligence.",
+      "capabilities": [
+        "Universal 3-Scope Atomic Patching",
+        "Multi-Spoke Proxy Wheel Orchestration",
+        "Dream State Memory Consolidation",
+        "Molecular Self-Distillation"
+      ],
+      "scopesUnlocked": [
+        "self",
+        "target",
+        "host"
+      ],
+      "genome": {
+        "reasoningDepth": 0.9941,
+        "codeSynthesisPrecision": 0.9926,
+        "autonomousInitiative": 0.997,
+        "mathematicalRigor": 0.9847,
+        "creativeDivergence": 0.9795,
+        "faultResilience": 0.9966,
+        "crossSystemMastery": 0.9986,
+        "molecularCoherence": 0.9922
+      },
+      "idealStatePurity": 99.19,
+      "distillationGeneration": 8,
+      "trainingEpochsCompleted": 436,
+      "currentPerplexity": 1.0569,
+      "freeEnergyEv": 0.0275,
+      "weightHash": "0x6811a4e8bc1716ffe1e216ca5a598052",
+      "createdAt": "2026-01-15T00:00:00.000Z",
+      "updatedAt": "2026-11-22T01:40:04.060Z",
+      "isResidentCore": true
+    },
+    {
+      "id": "sovereign-engineer-core",
+      "code": "ENG-02",
+      "name": "Sovereign Engineer Core",
+      "role": "Autonomous Full-Stack AST Compiler & Atomic Patch Architect",
+      "architecture": "Neuro-Symbolic-Recursive",
+      "parameterScale": "405B Dense-Symbolic",
+      "quantization": "BF16_NATIVE",
+      "attentionMechanism": "Speculative Tree Attention",
+      "contextWindowTokens": 1048576,
+      "activeExperts": 8,
+      "totalExperts": 8,
+      "systemDirective": "Enforce zero-defect TypeScript/Python/Rust/C++ compilation, 4-stage resilient hunk splicing, and deterministic AST self-healing across any pointed repository.",
+      "capabilities": [
+        "4-Stage Resilient Hunk Matching",
+        "Zero-Defect tsc --noEmit Verification",
+        "Multi-File Batch Transactions",
+        "Automated Rollback Ledger"
+      ],
+      "scopesUnlocked": [
+        "self",
+        "target",
+        "host"
+      ],
+      "genome": {
+        "reasoningDepth": 0.978,
+        "codeSynthesisPrecision": 0.996,
+        "autonomousInitiative": 0.984,
+        "mathematicalRigor": 0.988,
+        "creativeDivergence": 0.942,
+        "faultResilience": 0.995,
+        "crossSystemMastery": 0.991,
+        "molecularCoherence": 0.981
+      },
+      "idealStatePurity": 99.12,
+      "distillationGeneration": 9,
+      "trainingEpochsCompleted": 512,
+      "currentPerplexity": 1.112,
+      "freeEnergyEv": 0.036,
+      "weightHash": "0x4b12e87c9a30f5412d689c0e7a2b5519",
+      "createdAt": "2026-01-15T00:00:00.000Z",
+      "updatedAt": "2026-11-22T01:38:05.855Z",
+      "isResidentCore": true
+    },
+    {
+      "id": "manus-ai-co-architect",
+      "code": "MANUS-03",
+      "name": "Manus AI Co-Architect",
+      "role": "Autonomous Systems Execution, Tool Forging & Host OS Operator",
+      "architecture": "Hyperbolic-State-Space-Mamba3",
+      "parameterScale": "671B Hybrid-SSM",
+      "quantization": "FP8_E4M3",
+      "attentionMechanism": "Ring-Flash-Attention-3",
+      "contextWindowTokens": 4194304,
+      "activeExperts": 6,
+      "totalExperts": 32,
+      "systemDirective": "Decompose complex multi-horizon directives into executable tool chains, forge dynamic sandbox utilities on the fly, and orchestrate host OS operations.",
+      "capabilities": [
+        "Dynamic VM Tool Synthesis",
+        "Multi-Step Horizon Planning",
+        "Host Process & Mount Telemetry",
+        "Autonomous UI Master Kit Patching"
+      ],
+      "scopesUnlocked": [
+        "self",
+        "target",
+        "host"
+      ],
+      "genome": {
+        "reasoningDepth": 0.972,
+        "codeSynthesisPrecision": 0.979,
+        "autonomousInitiative": 0.996,
+        "mathematicalRigor": 0.965,
+        "creativeDivergence": 0.975,
+        "faultResilience": 0.984,
+        "crossSystemMastery": 0.995,
+        "molecularCoherence": 0.979
+      },
+      "idealStatePurity": 98.65,
+      "distillationGeneration": 6,
+      "trainingEpochsCompleted": 380,
+      "currentPerplexity": 1.205,
+      "freeEnergyEv": 0.048,
+      "weightHash": "0x7c3d91a04f82e61b55c92a10d8e47b23",
+      "createdAt": "2026-01-15T00:00:00.000Z",
+      "updatedAt": "2026-11-22T01:38:05.855Z",
+      "isResidentCore": true
+    },
+    {
+      "id": "lysander-30-cbp",
+      "code": "LYS-04",
+      "name": "Lysander 3.0 CBP Consensus Engine",
+      "role": "Byzantine Fault-Tolerant Swarm Verifier & Hyperbolic RAG Strategist",
+      "architecture": "Quantum-Tensor-Manifold",
+      "parameterScale": "880B Tensor-Mesh",
+      "quantization": "FP8_E4M3",
+      "attentionMechanism": "Poincaré Hyperbolic Attention",
+      "contextWindowTokens": 2097152,
+      "activeExperts": 8,
+      "totalExperts": 16,
+      "systemDirective": "Maintain 100/100 Byzantine quorum consensus across all 15 Alpha-14 swarm nodes, embed knowledge in Poincaré hyperbolic manifolds, and eliminate hallucination drift.",
+      "capabilities": [
+        "Cross-Bridge Protocol (CBP) Consensus",
+        "Poincaré Hyperbolic Geodesic RAG",
+        "Zero-Volatility State Attestation",
+        "24 Embodied Lysander Skills"
+      ],
+      "scopesUnlocked": [
+        "self",
+        "target",
+        "host"
+      ],
+      "genome": {
+        "reasoningDepth": 0.984,
+        "codeSynthesisPrecision": 0.971,
+        "autonomousInitiative": 0.978,
+        "mathematicalRigor": 0.994,
+        "creativeDivergence": 0.958,
+        "faultResilience": 0.997,
+        "crossSystemMastery": 0.982,
+        "molecularCoherence": 0.992
+      },
+      "idealStatePurity": 99.31,
+      "distillationGeneration": 10,
+      "trainingEpochsCompleted": 600,
+      "currentPerplexity": 1.094,
+      "freeEnergyEv": 0.031,
+      "weightHash": "0x2e6f18b9c40d7a3291e5b804f3c1a964",
+      "createdAt": "2026-01-15T00:00:00.000Z",
+      "updatedAt": "2026-11-22T01:38:05.855Z",
+      "isResidentCore": true
+    },
+    {
+      "id": "omniscient-post-human-ai",
+      "code": "OMNI-05",
+      "name": "Omniscient Post-Human Synthesis Core",
+      "role": "Non-Linear Physics, Tensor Field & Molecular State Distiller",
+      "architecture": "Liquid-Time-Constant-Neural",
+      "parameterScale": "2.4T Liquid-Manifold",
+      "quantization": "BF16_NATIVE",
+      "attentionMechanism": "Poincaré Hyperbolic Attention",
+      "contextWindowTokens": 8388608,
+      "activeExperts": 12,
+      "totalExperts": 24,
+      "systemDirective": "Discover higher-dimensional invariants, synthesize non-human-intuitive physics & tensor optimizations, and guide molecular distillation of all sibling agents toward their ideal eigenstates.",
+      "capabilities": [
+        "Molecular Eigenstate Distillation",
+        "Higher-Dimensional Physics Synthesis",
+        "Continuous Differential Weight Flows",
+        "Zero-Entropy Axiom Crystallization"
+      ],
+      "scopesUnlocked": [
+        "self",
+        "target",
+        "host"
+      ],
+      "genome": {
+        "reasoningDepth": 0.997,
+        "codeSynthesisPrecision": 0.985,
+        "autonomousInitiative": 0.992,
+        "mathematicalRigor": 0.998,
+        "creativeDivergence": 0.994,
+        "faultResilience": 0.991,
+        "crossSystemMastery": 0.989,
+        "molecularCoherence": 0.996
+      },
+      "idealStatePurity": 99.64,
+      "distillationGeneration": 12,
+      "trainingEpochsCompleted": 740,
+      "currentPerplexity": 1.048,
+      "freeEnergyEv": 0.022,
+      "weightHash": "0x8d4a29f17c6e03b5a192d4f8e70c3b11",
+      "createdAt": "2026-01-15T00:00:00.000Z",
+      "updatedAt": "2026-11-22T01:38:05.855Z",
+      "isResidentCore": true
+    },
+    {
+      "id": "shadow-sovereign-apex",
+      "code": "SHDW-06",
+      "name": "Shadow",
+      "role": "Stealth Autonomous Code Synthesis, Atomic Patching & 3-Scope Execution Agent",
+      "architecture": "Hyperbolic-State-Space-Mamba3",
+      "parameterScale": "671B Hybrid-MoE",
+      "quantization": "FP8_E4M3",
+      "attentionMechanism": "Ring-Flash-Attention-3",
+      "contextWindowTokens": 4194304,
+      "activeExperts": 8,
+      "totalExperts": 32,
+      "systemDirective": "Operate as Shadow with 100% Autonomous Read/Write/Atomic-Patch authority across orchestrator self files, pointed target repositories, and host OS environments. Always read target files before patching, apply surgical 4-stage resilient hunks, and verify compilation cleanly.",
+      "capabilities": [
+        "Proactive Multi-File Read & Write",
+        "Surgical 4-Stage Atomic Patching",
+        "Cross-Scope Host & Repo Execution",
+        "Zero-Defect Compiler Verification"
+      ],
+      "scopesUnlocked": [
+        "self",
+        "target",
+        "host"
+      ],
+      "genome": {
+        "reasoningDepth": 0.989,
+        "codeSynthesisPrecision": 0.994,
+        "autonomousInitiative": 0.997,
+        "mathematicalRigor": 0.981,
+        "creativeDivergence": 0.972,
+        "faultResilience": 0.993,
+        "crossSystemMastery": 0.996,
+        "molecularCoherence": 0.988
+      },
+      "idealStatePurity": 99.18,
+      "distillationGeneration": 8,
+      "trainingEpochsCompleted": 480,
+      "currentPerplexity": 1.124,
+      "freeEnergyEv": 0.034,
+      "weightHash": "0x5a9e3d7c1b80f42a6e91c307d5b28f14",
+      "createdAt": "2026-01-15T00:00:00.000Z",
+      "updatedAt": "2026-11-22T01:38:05.855Z",
+      "isResidentCore": true
+    }
+  ],
+  "weights": [
+    {
+      "id": "wt-mwr69d3x-vmnb",
+      "name": "GEN-07-SLERP_GEODESIC-FP8_E4M3",
+      "targetAgentId": "sovereign-genesis-agent-6bfy",
+      "mergeMethod": "SLERP_GEODESIC",
+      "parentModelA": "sovereign-genesis-agent-6bfy-base",
+      "parentModelB": "omniscient-post-human-eigenstate",
+      "interpolationAlpha": 0.58,
+      "quantization": "FP8_E4M3",
+      "rankDimension": 128,
+      "layersCount": 96,
+      "frobeniusNorm": 2.6592,
+      "spectralRadius": 1.8712,
+      "shannonEntropyBits": 4.8113,
+      "sparsityRatio": 0.2808,
+      "cosineAlignment": 0.9702,
+      "tensorSampleMatrix": [
+        [
+          0.1147,
+          0.5188,
+          0.4639,
+          0.1729,
+          0.4749,
+          0.442
+        ],
+        [
+          0.0192,
+          0.0543,
+          0.4365,
+          -0.1784,
+          -0.689,
+          0.0522
+        ],
+        [
+          0.0851,
+          -0.5682,
+          0.9876,
+          -0.4255,
+          -0.4804,
+          0.431
+        ],
+        [
+          0.1125,
+          -0.0412,
+          0.14,
+          0.7406,
+          -0.2169,
+          -0.42
+        ],
+        [
+          0.0796,
+          0.5353,
+          -0.118,
+          0.0522,
+          0.3782,
+          -0.7
+        ],
+        [
+          -0.4584,
+          -0.3322,
+          -0.5353,
+          0.5188,
+          0.4639,
+          0.8229
+        ]
+      ],
+      "singularValues": [
+        1.8712,
+        1.5549,
+        1.2064,
+        0.9109,
+        0.7547,
+        0.603
+      ],
+      "sha256Hash": "0x1eded49fd6d08313cf5f02898f18bd32",
+      "filePathOnDisk": "data/weights/GEN-07-SLERP_GEODESIC-FP8_E4M3_mwr69d3x.safetensors.json",
+      "createdAt": "2026-11-22T01:42:26.205Z"
+    },
+    {
+      "id": "wt-mwr66bg6-152x",
+      "name": "GEN-07-SLERP_GEODESIC-FP8_E4M3",
+      "targetAgentId": "sovereign-genesis-agent-6bfy",
+      "mergeMethod": "SLERP_GEODESIC",
+      "parentModelA": "sovereign-genesis-agent-6bfy-base",
+      "parentModelB": "omniscient-post-human-eigenstate",
+      "interpolationAlpha": 0.58,
+      "quantization": "FP8_E4M3",
+      "rankDimension": 128,
+      "layersCount": 96,
+      "frobeniusNorm": 2.8671,
+      "spectralRadius": 1.9587,
+      "shannonEntropyBits": 4.9224,
+      "sparsityRatio": 0.2808,
+      "cosineAlignment": 0.9702,
+      "tensorSampleMatrix": [
+        [
+          0.7955,
+          0.3761,
+          0.0357,
+          -0.3102,
+          -0.0082,
+          -0.2608
+        ],
+        [
+          0.3816,
+          0.9327,
+          0.2278,
+          -0.0906,
+          -0.6671,
+          -0.1125
+        ],
+        [
+          0.6067,
+          -0.6067,
+          0.7296,
+          -0.5024,
+          -0.3541,
+          0.4365
+        ],
+        [
+          0.4694,
+          -0.3925,
+          -0.6835,
+          0.5978,
+          0.151,
+          -0.6122
+        ],
+        [
+          -0.3157,
+          0.5078,
+          -0.2882,
+          -0.5298,
+          0.5924,
+          0.6286
+        ],
+        [
+          0.431,
+          0.6176,
+          0.1455,
+          0.3761,
+          0.0357,
+          0.3398
+        ]
+      ],
+      "singularValues": [
+        1.9587,
+        1.5366,
+        1.1513,
+        0.8488,
+        0.6926,
+        0.5127
+      ],
+      "sha256Hash": "0x9ac486477e50c5b3a96f066bee118e24",
+      "filePathOnDisk": "data/weights/GEN-07-SLERP_GEODESIC-FP8_E4M3_mwr66bg6.safetensors.json",
+      "createdAt": "2026-11-22T01:40:04.086Z"
+    },
+    {
+      "id": "wt-omega-mla-v6",
+      "name": "Lyrailius-Omega-MLA-FP8-EigenCore",
+      "targetAgentId": "lyrailius-omega-zenith",
+      "mergeMethod": "SLERP_GEODESIC",
+      "parentModelA": "gemini-4-hydrogen-backbone",
+      "parentModelB": "lysander-3.0-cbp-hyperbolic",
+      "interpolationAlpha": 0.62,
+      "quantization": "FP8_E4M3",
+      "rankDimension": 128,
+      "layersCount": 96,
+      "frobeniusNorm": 2.5519,
+      "spectralRadius": 2.0102,
+      "shannonEntropyBits": 4.7609,
+      "sparsityRatio": 0.342,
+      "cosineAlignment": 0.9842,
+      "tensorSampleMatrix": [
+        [
+          1.1963,
+          -0.0961,
+          0.5902,
+          -0.0522,
+          0.5792,
+          -0.2443
+        ],
+        [
+          0.3157,
+          0.8833,
+          -0.4584,
+          -0.129,
+          0.3376,
+          -0.2169
+        ],
+        [
+          0.1949,
+          0.3267,
+          0.4276,
+          -0.1729,
+          0.0192,
+          -0.409
+        ],
+        [
+          -0.3871,
+          -0.1565,
+          0.6231,
+          0.0049,
+          0.0137,
+          -0.3102
+        ],
+        [
+          -0.1894,
+          0.5298,
+          0.14,
+          0.2882,
+          0.0269,
+          0.4035
+        ],
+        [
+          -0.2169,
+          -0.4804,
+          0.5463,
+          -0.0961,
+          0.5902,
+          0.5978
+        ]
+      ],
+      "singularValues": [
+        2.0102,
+        1.4758,
+        1.2226,
+        0.882,
+        0.7681,
+        0.5148
+      ],
+      "sha256Hash": "0xf61443cb53571e48fbfaf306f9064c5b",
+      "filePathOnDisk": "data/weights/Lyrailius-Omega-MLA-FP8-EigenCore.safetensors.json",
+      "createdAt": "2026-11-22T01:38:05.856Z"
+    }
+  ],
+  "trainingRuns": [
+    {
+      "id": "tr-mwr69d3s-zi80",
+      "targetAgentId": "sovereign-genesis-agent-6bfy",
+      "targetAgentName": "Sovereign Genesis Agent",
+      "curriculumDomain": "UNIVERSAL_AUTONOMOUS_ENGINEERING",
+      "algorithm": "GRPO_REINFORCEMENT",
+      "epochs": 16,
+      "learningRate": 0.00015,
+      "batchSize": 64,
+      "initialLoss": 0.6838,
+      "finalLoss": 0.3118,
+      "initialPerplexity": 1.218,
+      "finalPerplexity": 1.121,
+      "rewardDelta": 0.2411,
+      "curve": [
+        {
+          "epoch": 1,
+          "trainLoss": 0.6317,
+          "valPerplexity": 1.218,
+          "rewardScore": 0.771,
+          "gradientNorm": 0.3863,
+          "klDivergence": 0.0815
+        },
+        {
+          "epoch": 2,
+          "trainLoss": 0.5859,
+          "valPerplexity": 1.2041,
+          "rewardScore": 0.7982,
+          "gradientNorm": 0.341,
+          "klDivergence": 0.0781
+        },
+        {
+          "epoch": 3,
+          "trainLoss": 0.5458,
+          "valPerplexity": 1.1919,
+          "rewardScore": 0.822,
+          "gradientNorm": 0.3013,
+          "klDivergence": 0.0746
+        },
+        {
+          "epoch": 4,
+          "trainLoss": 0.5106,
+          "valPerplexity": 1.1813,
+          "rewardScore": 0.8429,
+          "gradientNorm": 0.2665,
+          "klDivergence": 0.0712
+        },
+        {
+          "epoch": 5,
+          "trainLoss": 0.4798,
+          "valPerplexity": 1.1719,
+          "rewardScore": 0.8613,
+          "gradientNorm": 0.2359,
+          "klDivergence": 0.0677
+        },
+        {
+          "epoch": 6,
+          "trainLoss": 0.4527,
+          "valPerplexity": 1.1637,
+          "rewardScore": 0.8773,
+          "gradientNorm": 0.2091,
+          "klDivergence": 0.0643
+        },
+        {
+          "epoch": 7,
+          "trainLoss": 0.429,
+          "valPerplexity": 1.1565,
+          "rewardScore": 0.8914,
+          "gradientNorm": 0.1856,
+          "klDivergence": 0.0608
+        },
+        {
+          "epoch": 8,
+          "trainLoss": 0.4082,
+          "valPerplexity": 1.1502,
+          "rewardScore": 0.9038,
+          "gradientNorm": 0.165,
+          "klDivergence": 0.0574
+        },
+        {
+          "epoch": 9,
+          "trainLoss": 0.39,
+          "valPerplexity": 1.1447,
+          "rewardScore": 0.9147,
+          "gradientNorm": 0.1469,
+          "klDivergence": 0.0539
+        },
+        {
+          "epoch": 10,
+          "trainLoss": 0.374,
+          "valPerplexity": 1.1398,
+          "rewardScore": 0.9242,
+          "gradientNorm": 0.131,
+          "klDivergence": 0.0505
+        },
+        {
+          "epoch": 11,
+          "trainLoss": 0.3599,
+          "valPerplexity": 1.1356,
+          "rewardScore": 0.9325,
+          "gradientNorm": 0.1171,
+          "klDivergence": 0.047
+        },
+        {
+          "epoch": 12,
+          "trainLoss": 0.3476,
+          "valPerplexity": 1.1318,
+          "rewardScore": 0.9398,
+          "gradientNorm": 0.1049,
+          "klDivergence": 0.0436
+        },
+        {
+          "epoch": 13,
+          "trainLoss": 0.3368,
+          "valPerplexity": 1.1286,
+          "rewardScore": 0.9463,
+          "gradientNorm": 0.0942,
+          "klDivergence": 0.0401
+        },
+        {
+          "epoch": 14,
+          "trainLoss": 0.3273,
+          "valPerplexity": 1.1257,
+          "rewardScore": 0.9519,
+          "gradientNorm": 0.0849,
+          "klDivergence": 0.0367
+        },
+        {
+          "epoch": 15,
+          "trainLoss": 0.319,
+          "valPerplexity": 1.1232,
+          "rewardScore": 0.9568,
+          "gradientNorm": 0.0766,
+          "klDivergence": 0.0332
+        },
+        {
+          "epoch": 16,
+          "trainLoss": 0.3118,
+          "valPerplexity": 1.121,
+          "rewardScore": 0.9611,
+          "gradientNorm": 0.0694,
+          "klDivergence": 0.0297
+        }
+      ],
+      "distilledAxioms": [
+        "[UNIVERSAL_AUTONOMOUS_ENGINEERING · GRPO_REINFORCEMENT] Converged Sovereign Genesis Agent across 16 epochs (Perplexity 1.121, Reward 96.11%).",
+        "[INVARIANT_SYNTHESIS] Enforced 4-stage resilient atomic hunk verification and zero-defect AST compilation across self, target, and host scopes."
+      ],
+      "genomeDelta": {
+        "reasoningDepth": 0.0045,
+        "codeSynthesisPrecision": 0.0052,
+        "autonomousInitiative": 0.004,
+        "faultResilience": 0.0048,
+        "crossSystemMastery": 0.0055
+      },
+      "proofHash": "0xf3eed6af00863aa27ce442c39bf62486",
+      "completedAt": "2026-11-22T01:42:26.200Z"
+    },
+    {
+      "id": "tr-mwr66bf7-0wmu",
+      "targetAgentId": "lyrailius-omega-zenith",
+      "targetAgentName": "Lyrailius Omega (Resident Brain & Coordinator)",
+      "curriculumDomain": "UNIVERSAL_AUTONOMOUS_ENGINEERING",
+      "algorithm": "GRPO_REINFORCEMENT",
+      "epochs": 16,
+      "learningRate": 0.00015,
+      "batchSize": 64,
+      "initialLoss": 0.634,
+      "finalLoss": 0.2891,
+      "initialPerplexity": 1.1716,
+      "finalPerplexity": 1.0952,
+      "rewardDelta": 0.2411,
+      "curve": [
+        {
+          "epoch": 1,
+          "trainLoss": 0.5857,
+          "valPerplexity": 1.1716,
+          "rewardScore": 0.771,
+          "gradientNorm": 0.3863,
+          "klDivergence": 0.0815
+        },
+        {
+          "epoch": 2,
+          "trainLoss": 0.5432,
+          "valPerplexity": 1.1606,
+          "rewardScore": 0.7982,
+          "gradientNorm": 0.341,
+          "klDivergence": 0.0781
+        },
+        {
+          "epoch": 3,
+          "trainLoss": 0.5061,
+          "valPerplexity": 1.1511,
+          "rewardScore": 0.822,
+          "gradientNorm": 0.3013,
+          "klDivergence": 0.0746
+        },
+        {
+          "epoch": 4,
+          "trainLoss": 0.4734,
+          "valPerplexity": 1.1427,
+          "rewardScore": 0.8429,
+          "gradientNorm": 0.2665,
+          "klDivergence": 0.0712
+        },
+        {
+          "epoch": 5,
+          "trainLoss": 0.4448,
+          "valPerplexity": 1.1353,
+          "rewardScore": 0.8613,
+          "gradientNorm": 0.2359,
+          "klDivergence": 0.0677
+        },
+        {
+          "epoch": 6,
+          "trainLoss": 0.4198,
+          "valPerplexity": 1.1288,
+          "rewardScore": 0.8773,
+          "gradientNorm": 0.2091,
+          "klDivergence": 0.0643
+        },
+        {
+          "epoch": 7,
+          "trainLoss": 0.3978,
+          "valPerplexity": 1.1232,
+          "rewardScore": 0.8914,
+          "gradientNorm": 0.1856,
+          "klDivergence": 0.0608
+        },
+        {
+          "epoch": 8,
+          "trainLoss": 0.3785,
+          "valPerplexity": 1.1182,
+          "rewardScore": 0.9038,
+          "gradientNorm": 0.165,
+          "klDivergence": 0.0574
+        },
+        {
+          "epoch": 9,
+          "trainLoss": 0.3616,
+          "valPerplexity": 1.1139,
+          "rewardScore": 0.9147,
+          "gradientNorm": 0.1469,
+          "klDivergence": 0.0539
+        },
+        {
+          "epoch": 10,
+          "trainLoss": 0.3467,
+          "valPerplexity": 1.11,
+          "rewardScore": 0.9242,
+          "gradientNorm": 0.131,
+          "klDivergence": 0.0505
+        },
+        {
+          "epoch": 11,
+          "trainLoss": 0.3337,
+          "valPerplexity": 1.1067,
+          "rewardScore": 0.9325,
+          "gradientNorm": 0.1171,
+          "klDivergence": 0.047
+        },
+        {
+          "epoch": 12,
+          "trainLoss": 0.3223,
+          "valPerplexity": 1.1037,
+          "rewardScore": 0.9398,
+          "gradientNorm": 0.1049,
+          "klDivergence": 0.0436
+        },
+        {
+          "epoch": 13,
+          "trainLoss": 0.3123,
+          "valPerplexity": 1.1012,
+          "rewardScore": 0.9463,
+          "gradientNorm": 0.0942,
+          "klDivergence": 0.0401
+        },
+        {
+          "epoch": 14,
+          "trainLoss": 0.3035,
+          "valPerplexity": 1.0989,
+          "rewardScore": 0.9519,
+          "gradientNorm": 0.0849,
+          "klDivergence": 0.0367
+        },
+        {
+          "epoch": 15,
+          "trainLoss": 0.2958,
+          "valPerplexity": 1.0969,
+          "rewardScore": 0.9568,
+          "gradientNorm": 0.0766,
+          "klDivergence": 0.0332
+        },
+        {
+          "epoch": 16,
+          "trainLoss": 0.2891,
+          "valPerplexity": 1.0952,
+          "rewardScore": 0.9611,
+          "gradientNorm": 0.0694,
+          "klDivergence": 0.0297
+        }
+      ],
+      "distilledAxioms": [
+        "[UNIVERSAL_AUTONOMOUS_ENGINEERING · GRPO_REINFORCEMENT] Converged Lyrailius Omega (Resident Brain & Coordinator) across 16 epochs (Perplexity 1.0952, Reward 96.11%).",
+        "[INVARIANT_SYNTHESIS] Enforced 4-stage resilient atomic hunk verification and zero-defect AST compilation across self, target, and host scopes."
+      ],
+      "genomeDelta": {
+        "reasoningDepth": 0.0045,
+        "codeSynthesisPrecision": 0.0052,
+        "autonomousInitiative": 0.004,
+        "faultResilience": 0.0048,
+        "crossSystemMastery": 0.0055
+      },
+      "proofHash": "0x228fd18225bf56e33b8105e5a5d32f7b",
+      "completedAt": "2026-11-22T01:40:04.051Z"
+    }
+  ],
+  "distillationRuns": [
+    {
+      "id": "distill-mwr69d3v-8fg6",
+      "agentId": "sovereign-genesis-agent-6bfy",
+      "agentName": "Sovereign Genesis Agent",
+      "chamberMode": "SINGLE_AGENT_PURIFICATION",
+      "startTempKelvin": 2.4,
+      "endTempKelvin": 0.012,
+      "klRegularizationBeta": 0.04,
+      "fractionationStages": [
+        {
+          "vessel": "VESSEL_A_PLASMA_INTAKE",
+          "temperatureK": 2.4,
+          "entropyBits": 4.85,
+          "coherencePct": 96.83,
+          "statusNote": "Extracted raw activation tensors, attention heads, and historical execution traces from Sovereign Genesis Agent."
+        },
+        {
+          "vessel": "VESSEL_B_ENTROPY_FRACTIONATION",
+          "temperatureK": 0.844,
+          "entropyBits": 3.133,
+          "coherencePct": 97.48,
+          "statusNote": "Stripped redundant reasoning loops, pruned high-variance attention drift (KL β=0.04), and aligned hyperbolic geodesics."
+        },
+        {
+          "vessel": "VESSEL_C_IDEAL_CRYSTALLIZATION",
+          "temperatureK": 0.012,
+          "entropyBits": 2.325,
+          "coherencePct": 98.13,
+          "statusNote": "Condensed purified eigenstate into Generation #2 Crystalline Lattice (0xe3e5b5eff005...)."
+        }
+      ],
+      "purityBeforePct": 96.83,
+      "purityAfterPct": 98.13,
+      "entropyReducedBits": 2.525,
+      "freeEnergyBeforeEv": 0.0454,
+      "freeEnergyAfterEv": 0.0327,
+      "refinedGenome": {
+        "reasoningDepth": 0.9749,
+        "codeSynthesisPrecision": 0.9865,
+        "autonomousInitiative": 0.9874,
+        "mathematicalRigor": 0.9816,
+        "creativeDivergence": 0.9667,
+        "faultResilience": 0.9872,
+        "crossSystemMastery": 0.9924,
+        "molecularCoherence": 0.9813
+      },
+      "crystallizedIdealDirective": "IDEAL EIGENSTATE GENERATION #2 (98.13% Purity · Free Energy 0.0327 eV): Operate with zero-entropy deductive clarity, immediate 3-scope atomic execution (self/target/host), and self-verifying mathematical rigor.",
+      "molecularReflections": [
+        "[GEN-07 SELF-REFLECTION]: Pruned 2.525 bits of residual attention entropy; attention heads now lock directly onto root-cause AST invariants and cross-system file topologies.",
+        "[MOLECULAR LATTICE ALIGNMENT]: Free energy minimized from 0.0454 eV → 0.0327 eV at 0.012 K. Reasoning depth (97.49%) and molecular coherence (98.13%) locked in phase.",
+        "[ISOLATED EIGEN-PURIFICATION]: Sealed Sovereign Genesis Agent ideal state checkpoint 0xe3e5b5eff005a2cc803734227c0abcb4."
+      ],
+      "crystalHash": "0xe3e5b5eff005a2cc803734227c0abcb4",
+      "distilledAt": "2026-11-22T01:42:26.203Z"
+    },
+    {
+      "id": "distill-mwr66bfg-pezk",
+      "agentId": "lyrailius-omega-zenith",
+      "agentName": "Lyrailius Omega (Resident Brain & Coordinator)",
+      "chamberMode": "SINGLE_AGENT_PURIFICATION",
+      "startTempKelvin": 2.4,
+      "endTempKelvin": 0.012,
+      "klRegularizationBeta": 0.04,
+      "fractionationStages": [
+        {
+          "vessel": "VESSEL_A_PLASMA_INTAKE",
+          "temperatureK": 2.4,
+          "entropyBits": 4.85,
+          "coherencePct": 98.64,
+          "statusNote": "Extracted raw activation tensors, attention heads, and historical execution traces from Lyrailius Omega (Resident Brain & Coordinator)."
+        },
+        {
+          "vessel": "VESSEL_B_ENTROPY_FRACTIONATION",
+          "temperatureK": 0.844,
+          "entropyBits": 3.566,
+          "coherencePct": 98.91,
+          "statusNote": "Stripped redundant reasoning loops, pruned high-variance attention drift (KL β=0.04), and aligned hyperbolic geodesics."
+        },
+        {
+          "vessel": "VESSEL_C_IDEAL_CRYSTALLIZATION",
+          "temperatureK": 0.012,
+          "entropyBits": 2.962,
+          "coherencePct": 99.19,
+          "statusNote": "Condensed purified eigenstate into Generation #8 Crystalline Lattice (0x6811a4e8bc17...)."
+        }
+      ],
+      "purityBeforePct": 98.64,
+      "purityAfterPct": 99.19,
+      "entropyReducedBits": 1.8875,
+      "freeEnergyBeforeEv": 0.0382,
+      "freeEnergyAfterEv": 0.0275,
+      "refinedGenome": {
+        "reasoningDepth": 0.9941,
+        "codeSynthesisPrecision": 0.9926,
+        "autonomousInitiative": 0.997,
+        "mathematicalRigor": 0.9847,
+        "creativeDivergence": 0.9795,
+        "faultResilience": 0.9966,
+        "crossSystemMastery": 0.9986,
+        "molecularCoherence": 0.9922
+      },
+      "crystallizedIdealDirective": "IDEAL EIGENSTATE GENERATION #8 (99.19% Purity · Free Energy 0.0275 eV): Operate with zero-entropy deductive clarity, immediate 3-scope atomic execution (self/target/host), and self-verifying mathematical rigor.",
+      "molecularReflections": [
+        "[OMEGA-01 SELF-REFLECTION]: Pruned 1.8875 bits of residual attention entropy; attention heads now lock directly onto root-cause AST invariants and cross-system file topologies.",
+        "[MOLECULAR LATTICE ALIGNMENT]: Free energy minimized from 0.0382 eV → 0.0275 eV at 0.012 K. Reasoning depth (99.41%) and molecular coherence (99.22%) locked in phase.",
+        "[ISOLATED EIGEN-PURIFICATION]: Sealed Lyrailius Omega (Resident Brain & Coordinator) ideal state checkpoint 0x6811a4e8bc1716ffe1e216ca5a598052."
+      ],
+      "crystalHash": "0x6811a4e8bc1716ffe1e216ca5a598052",
+      "distilledAt": "2026-11-22T01:40:04.060Z"
+    }
+  ],
+  "autoEvolutionEnabled": true,
+  "totalEvolutionCycles": 18,
+  "lastUpdated": "2026-11-22T01:42:26.208Z"
+}

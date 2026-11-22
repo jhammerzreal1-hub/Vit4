@@ -1,0 +1,175 @@
+{
+  "version": 2,
+  "users": [
+    {
+      "id": "usr_674321a0e53db578f17a",
+      "username": "jhammerz",
+      "email": "",
+      "displayName": "JHammerZ",
+      "authProvider": "local",
+      "role": "admin",
+      "status": "active",
+      "isExecutiveArchitect": true,
+      "authorityTier": "executive-architect",
+      "privileges": {
+        "allModules": true,
+        "allowedModules": [
+          "chat",
+          "war-room",
+          "browser",
+          "functions",
+          "termux",
+          "scratchpad",
+          "hitl",
+          "music",
+          "video",
+          "image",
+          "search",
+          "maps",
+          "transcribe",
+          "live",
+          "vault",
+          "github",
+          "osint",
+          "burner-mail",
+          "infinite-sim",
+          "projects",
+          "presets",
+          "audit",
+          "swarm-test",
+          "packager",
+          "drive",
+          "tasks",
+          "knowledge-graph",
+          "tool-shed",
+          "autonomy-supervisor",
+          "download-models",
+          "universal-installer",
+          "api-secrets",
+          "integrations",
+          "spatial-arena",
+          "agent-dev-kit",
+          "ai-genesis-distillery",
+          "emulator-modder",
+          "macro-telemetry",
+          "world-start",
+          "file-manager",
+          "terminal",
+          "task-manager",
+          "os-settings",
+          "crypto-wallet",
+          "grant-hunter",
+          "transfer-hub",
+          "lora-mesh",
+          "admin-command"
+        ],
+        "canUseChat": true,
+        "canUseVoiceChat": true,
+        "canRunAutonomousWorkflow": true,
+        "canExecuteTerminalAndTools": true,
+        "canAccessSecretsAndWallets": true,
+        "canModifyOSSettings": true,
+        "canManageUsers": true
+      },
+      "passwordHash": "scrypt$93c61a70752940f32fd1cfe564a7c9ad$8b8c1a631124b99a1b632ff788e479aa050d2ddbb171ea2e128aa090ca76315ac63458831cd08368e3579bf9153b07f1e2fc49e9abde0e3927b28386ea756104",
+      "createdAt": "2026-11-22T00:57:16.929Z",
+      "updatedAt": "2026-11-22T01:53:42.511Z",
+      "lastLoginAt": "2026-11-22T01:53:42.511Z"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "ses_aa0712c60304",
+      "tokenHash": "15c3b04d7e6ecbff96cbd6726e627120863e2d8e6eb0437a4075d6e30e042430",
+      "userId": "usr_674321a0e53db578f17a",
+      "createdAt": 1795309036987,
+      "expiresAt": 1797901036987
+    },
+    {
+      "id": "ses_aeadc2a61ef7",
+      "tokenHash": "8ecb7f3238853c509d159bb7653f85eb5e9bc6cb2c3d28ce858bb6a88130028c",
+      "userId": "usr_674321a0e53db578f17a",
+      "createdAt": 1795309198438,
+      "expiresAt": 1797901198438
+    },
+    {
+      "id": "ses_6487432740c2",
+      "tokenHash": "5a138939fb3a667e522516175f0a67fbe3dd513cce36f100ab0ed1bf160fbaa7",
+      "userId": "usr_674321a0e53db578f17a",
+      "createdAt": 1795311692634,
+      "expiresAt": 1797903692634
+    },
+    {
+      "id": "ses_26c88878b529",
+      "tokenHash": "003e2a09ab638f796c7f624b51a0e61206e6a04ca9c90abef3b73984b8f62ad4",
+      "userId": "usr_674321a0e53db578f17a",
+      "createdAt": 1795311724346,
+      "expiresAt": 1797903724346
+    },
+    {
+      "id": "ses_f4f20ba5cdad",
+      "tokenHash": "8016649802c50fac10923f29f335ca704d2c91358f7031a9379eecd6c5432bce",
+      "userId": "usr_674321a0e53db578f17a",
+      "createdAt": 1795312422511,
+      "expiresAt": 1797904422511
+    }
+  ],
+  "policy": {
+    "requireLoginOnBoot": true,
+    "allowSelfRegistration": true,
+    "newUsersRequireApproval": false,
+    "defaultRole": "collaborator",
+    "defaultPrivileges": {
+      "allModules": false,
+      "allowedModules": [
+        "chat",
+        "lora-mesh",
+        "browser",
+        "search",
+        "maps",
+        "image",
+        "music",
+        "transcribe",
+        "live",
+        "vault",
+        "scratchpad",
+        "projects",
+        "presets",
+        "os-settings"
+      ],
+      "canUseChat": true,
+      "canUseVoiceChat": true,
+      "canRunAutonomousWorkflow": false,
+      "canExecuteTerminalAndTools": false,
+      "canAccessSecretsAndWallets": false,
+      "canModifyOSSettings": false,
+      "canManageUsers": false
+    },
+    "entityIntelligenceDelegationEnabled": true,
+    "systemLockdownMode": false
+  },
+  "auditLog": [
+    {
+      "id": "aud_1795309036987_f1b908",
+      "timestamp": "2026-11-22T00:57:16.987Z",
+      "actorId": "usr_674321a0e53db578f17a",
+      "actorUsername": "jhammerz",
+      "actorTier": "executive-architect",
+      "action": "ARCHITECT_CLAIM",
+      "target": "jhammerz",
+      "details": "Permanent Executive Architect account claimed & cryptographically sealed.",
+      "outcome": "allowed"
+    },
+    {
+      "id": "aud_1795312881447_eddde7",
+      "timestamp": "2026-11-22T02:01:21.447Z",
+      "actorId": "system",
+      "actorUsername": "system",
+      "actorTier": "standard",
+      "action": "ONE_TIME_ADMIN_CLAIM_SEALED",
+      "target": "rogue_admin",
+      "details": "Blocked unauthenticated attempt to invoke permanently sealed one-time Root Admin claim.",
+      "outcome": "blocked"
+    }
+  ]
+}

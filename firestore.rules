@@ -1,0 +1,464 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Default-deny global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        (
+          request.auth.token.email == 'jhammerzreal1@gmail.com' ||
+          (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+          )
+        );
+    }
+
+    function isValidId(id) {
+      return id is string &&
+        id.size() > 0 &&
+        id.size() <= 128 &&
+        id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidStr(val, maxLen) {
+      return val is string && val.size() > 0 && val.size() <= maxLen;
+    }
+
+    function isOptStr(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    function isValidUserPrivileges(priv) {
+      return priv is map &&
+        priv.keys().hasOnly([
+          'allModules',
+          'allowedModules',
+          'canUseChat',
+          'canUseVoiceChat',
+          'canRunAutonomousWorkflow',
+          'canModifyAgentSettings',
+          'canExecuteTerminalAndTools',
+          'canAccessSecretsAndWallets',
+          'canModifyOSSettings',
+          'canManageUsers'
+        ]) &&
+        (!('allModules' in priv) || priv.allModules is bool) &&
+        (!('allowedModules' in priv) || (priv.allowedModules is list && priv.allowedModules.size() <= 64)) &&
+        (!('canUseChat' in priv) || priv.canUseChat is bool) &&
+        (!('canUseVoiceChat' in priv) || priv.canUseVoiceChat is bool) &&
+        (!('canRunAutonomousWorkflow' in priv) || priv.canRunAutonomousWorkflow is bool) &&
+        (!('canModifyAgentSettings' in priv) || priv.canModifyAgentSettings is bool) &&
+        (!('canExecuteTerminalAndTools' in priv) || priv.canExecuteTerminalAndTools is bool) &&
+        (!('canAccessSecretsAndWallets' in priv) || priv.canAccessSecretsAndWallets is bool) &&
+        (!('canModifyOSSettings' in priv) || priv.canModifyOSSettings is bool) &&
+        (!('canManageUsers' in priv) || priv.canManageUsers is bool);
+    }
+
+    function isValidUserProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'username', 'email', 'displayName', 'photoURL', 'role', 'status', 'privileges', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == uid &&
+        (!('username' in data) || isOptStr(data.username, 64)) &&
+        isOptStr(data.email, 256) &&
+        (!('displayName' in data) || isOptStr(data.displayName, 128)) &&
+        (!('photoURL' in data) || isOptStr(data.photoURL, 1024)) &&
+        data.role in ['user', 'admin', 'operator', 'collaborator', 'viewer'] &&
+        (!('status' in data) || data.status in ['active', 'pending', 'suspended']) &&
+        (!('privileges' in data) || isValidUserPrivileges(data.privileges)) &&
+        isValidStr(data.createdAt, 64) &&
+        (!('updatedAt' in data) || isOptStr(data.updatedAt, 64));
+    }
+
+    function isValidChatThread(data, uid) {
+      return data.keys().hasAll(['userId', 'title', 'model', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'title', 'rolePreset', 'model', 'createdAt', 'updatedAt']) &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        isValidStr(data.title, 256) &&
+        (!('rolePreset' in data) || isOptStr(data.rolePreset, 128)) &&
+        isValidStr(data.model, 128) &&
+        isValidStr(data.createdAt, 64) &&
+        (!('updatedAt' in data) || isOptStr(data.updatedAt, 64));
+    }
+
+    function isValidChatMessage(data, uid, threadId) {
+      return data.keys().hasAll(['threadId', 'userId', 'role', 'content', 'createdAt']) &&
+        data.keys().hasOnly(['threadId', 'userId', 'role', 'content', 'model', 'groundingData', 'createdAt']) &&
+        isValidId(data.threadId) &&
+        data.threadId == threadId &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        data.role in ['user', 'model', 'system'] &&
+        isValidStr(data.content, 50000) &&
+        (!('model' in data) || isOptStr(data.model, 128)) &&
+        (!('groundingData' in data) || isOptStr(data.groundingData, 50000)) &&
+        isValidStr(data.createdAt, 64);
+    }
+
+    function isValidAgenticMemory(data, uid, memoryId) {
+      return data.keys().hasAll(['id', 'userId', 'role', 'content', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'role', 'content', 'model', 'timestamp', 'createdAt']) &&
+        isValidId(data.id) &&
+        data.id == memoryId &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        data.role in ['user', 'model', 'system'] &&
+        isOptStr(data.content, 50000) &&
+        (!('model' in data) || isOptStr(data.model, 128)) &&
+        (!('timestamp' in data) || isOptStr(data.timestamp, 64)) &&
+        isValidStr(data.createdAt, 64);
+    }
+
+    function isValidArtifact(data, uid) {
+      return data.keys().hasAll(['userId', 'type', 'title', 'prompt', 'model', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'type', 'title', 'prompt', 'model', 'mediaUrl', 'metadataJson', 'createdAt']) &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        data.type in ['music', 'image', 'video', 'transcription', 'knowledge', 'dossier', 'spatial', 'voice'] &&
+        isValidStr(data.title, 256) &&
+        isValidStr(data.prompt, 4000) &&
+        isValidStr(data.model, 128) &&
+        (!('mediaUrl' in data) || isOptStr(data.mediaUrl, 500000)) &&
+        (!('metadataJson' in data) || isOptStr(data.metadataJson, 50000)) &&
+        isValidStr(data.createdAt, 64);
+    }
+
+    function isValidAuditLedgerItem(data, uid) {
+      return data.keys().hasAll(['userId', 'timestamp', 'subsystem', 'action']) &&
+        data.keys().hasOnly(['userId', 'timestamp', 'subsystem', 'action', 'payload', 'result', 'proofHash', 'status']) &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        isValidStr(data.timestamp, 64) &&
+        isValidStr(data.subsystem, 128) &&
+        isValidStr(data.action, 256) &&
+        (!('payload' in data) || isOptStr(data.payload, 50000)) &&
+        (!('result' in data) || isOptStr(data.result, 50000)) &&
+        (!('proofHash' in data) || isOptStr(data.proofHash, 128)) &&
+        (!('status' in data) || data.status in ['SUCCESS', 'FAILED', 'HEALED']);
+    }
+
+    function isValidGameRun(data, uid) {
+      return data.keys().hasAll(['userId', 'mode', 'shipFinish', 'score', 'wave', 'beaconsCollected', 'durationSec', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'mode', 'shipFinish', 'score', 'wave', 'beaconsCollected', 'durationSec', 'status', 'agentsCount', 'engineTitle', 'processMetricValue', 'createdAt']) &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        data.mode in ['arcade', 'aerial_combat', 'swarm_logistics', 'byzantine_mesh', 'orbital_physics', 'photoreal_sandbox', 'mmorpg_world', 'custom_world', 'time_trial', 'zen_inspect'] &&
+        data.shipFinish in ['titanium-amber', 'obsidian-cyan', 'ceramic-emerald', 'forged-bronze', 'titanium', 'obsidian', 'amber', 'sapphire'] &&
+        data.score is number && data.score >= 0 && data.score <= 10000000 &&
+        data.wave is number && data.wave >= 1 && data.wave <= 999 &&
+        data.beaconsCollected is number && data.beaconsCollected >= 0 && data.beaconsCollected <= 99999 &&
+        data.durationSec is number && data.durationSec >= 0 && data.durationSec <= 86400 &&
+        data.status in ['COMPLETED', 'VICTORY', 'DEFEAT', 'ABORTED'] &&
+        (!('agentsCount' in data) || (data.agentsCount is number && data.agentsCount >= 0 && data.agentsCount <= 64)) &&
+        (!('engineTitle' in data) || isOptStr(data.engineTitle, 128)) &&
+        (!('processMetricValue' in data) || (data.processMetricValue is number && data.processMetricValue >= -1000000 && data.processMetricValue <= 10000000)) &&
+        isValidStr(data.createdAt, 64);
+    }
+
+    function isValidSpatialBlueprint(data, uid) {
+      return data.keys().hasAll(['userId', 'title', 'engineKind', 'createdByAgent', 'blueprintJson', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'title', 'engineKind', 'createdByAgent', 'blueprintJson', 'createdAt', 'updatedAt']) &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        isValidStr(data.title, 128) &&
+        data.engineKind in ['aerial_combat', 'swarm_logistics', 'byzantine_mesh', 'orbital_physics', 'photoreal_sandbox', 'mmorpg_world', 'custom_world'] &&
+        isValidStr(data.createdByAgent, 128) &&
+        isValidStr(data.blueprintJson, 50000) &&
+        isValidStr(data.createdAt, 64) &&
+        (!('updatedAt' in data) || isOptStr(data.updatedAt, 64));
+    }
+
+    function isValidDetectedGameMod(data, uid) {
+      return data.keys().hasAll(['userId', 'gameKey', 'title', 'engine', 'sourcePath', 'status', 'modCount', 'modStateJson', 'detectedAt']) &&
+        data.keys().hasOnly(['userId', 'gameKey', 'title', 'engine', 'sourcePath', 'status', 'modCount', 'modStateJson', 'detectedAt', 'updatedAt']) &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        isValidStr(data.gameKey, 128) &&
+        isValidStr(data.title, 128) &&
+        data.engine in ['threejs', 'phaser', 'godot', 'unity', 'unreal', 'minecraft', 'pygame', 'love2d', 'html5_canvas', 'custom_engine'] &&
+        isValidStr(data.sourcePath, 512) &&
+        data.status in ['DETECTED', 'HOOKED', 'MODDED'] &&
+        data.modCount is number && data.modCount >= 0 && data.modCount <= 10000 &&
+        isValidStr(data.modStateJson, 50000) &&
+        isValidStr(data.detectedAt, 64) &&
+        (!('updatedAt' in data) || isOptStr(data.updatedAt, 64));
+    }
+
+    function isValidCraftedItem(data, uid) {
+      return data.keys().hasAll(['userId', 'itemId', 'name', 'category', 'rarity', 'crafterName', 'crafterSkillLevel', 'signatureHash', 'uniqueMakerTrait', 'itemSpecJson', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'itemId', 'name', 'category', 'rarity', 'crafterName', 'crafterSkillLevel', 'signatureHash', 'uniqueMakerTrait', 'itemSpecJson', 'createdAt']) &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        isValidStr(data.itemId, 128) &&
+        isValidStr(data.name, 128) &&
+        data.category in ['weapon', 'armor', 'relic', 'elixir', 'world_beacon'] &&
+        data.rarity in ['Masterwork', 'Ascendant', 'Mythic', '1-of-1 Sovereign'] &&
+        isValidStr(data.crafterName, 128) &&
+        data.crafterSkillLevel is number && data.crafterSkillLevel >= 1 && data.crafterSkillLevel <= 999 &&
+        isValidStr(data.signatureHash, 64) &&
+        isValidStr(data.uniqueMakerTrait, 256) &&
+        isValidStr(data.itemSpecJson, 50000) &&
+        isValidStr(data.createdAt, 64);
+    }
+
+    function isValidOrchestratorState(data, uid, stateId) {
+      return data.keys().hasAll(['userId', 'stateKey', 'continuityJson', 'revision', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'stateKey', 'continuityJson', 'revision', 'createdAt', 'updatedAt']) &&
+        isValidId(data.userId) &&
+        data.userId == uid &&
+        data.stateKey == 'main' &&
+        stateId == 'main' &&
+        isValidStr(data.continuityJson, 200000) &&
+        data.revision is number && data.revision >= 0 && data.revision <= 100000000 &&
+        isValidStr(data.createdAt, 64) &&
+        isValidStr(data.updatedAt, 64);
+    }
+
+    // Authenticated connection health probe
+    match /test/connection {
+      allow get: if request.auth != null;
+      allow list, write: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && existing().uid == request.auth.uid;
+      allow create: if isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        (
+          isAdmin() ||
+          (
+            incoming().role == 'user' &&
+            !('privileges' in incoming()) &&
+            !('status' in incoming())
+          )
+        );
+      allow update: if isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (
+            isOwner(userId) &&
+            incoming().role == existing().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['username', 'email', 'displayName', 'photoURL', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(userId) && isAdmin();
+
+      match /threads/{threadId} {
+        allow get: if isValidId(userId) && isValidId(threadId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(threadId) &&
+          isOwner(userId) &&
+          isValidChatThread(incoming(), userId) &&
+          exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isValidId(userId) && isValidId(threadId) &&
+          isValidChatThread(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isAdmin() ||
+            (
+              isOwner(userId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['title', 'rolePreset', 'model', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(threadId) && (isOwner(userId) || isAdmin());
+
+        match /messages/{messageId} {
+          allow get: if isValidId(userId) && isValidId(threadId) && isValidId(messageId) && (isOwner(userId) || isAdmin());
+          allow list: if isSignedIn() && existing().userId == request.auth.uid;
+          allow create: if isValidId(userId) && isValidId(threadId) && isValidId(messageId) &&
+            isOwner(userId) &&
+            isValidChatMessage(incoming(), userId, threadId) &&
+            exists(/databases/$(database)/documents/users/$(userId)/threads/$(threadId));
+          allow update: if isValidId(userId) && isValidId(threadId) && isValidId(messageId) &&
+            isValidChatMessage(incoming(), userId, threadId) &&
+            incoming().userId == existing().userId &&
+            incoming().threadId == existing().threadId &&
+            incoming().createdAt == existing().createdAt &&
+            (
+              isAdmin() ||
+              (
+                isOwner(userId) &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['content', 'groundingData'])
+              )
+            );
+          allow delete: if isValidId(userId) && isValidId(threadId) && isValidId(messageId) && (isOwner(userId) || isAdmin());
+        }
+      }
+
+      match /agentic_memory/{memoryId} {
+        allow get: if isValidId(userId) && isValidId(memoryId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(memoryId) &&
+          isOwner(userId) &&
+          isValidAgenticMemory(incoming(), userId, memoryId);
+        allow update: if isValidId(userId) && isValidId(memoryId) &&
+          isValidAgenticMemory(incoming(), userId, memoryId) &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isAdmin() ||
+            (
+              isOwner(userId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['role', 'content', 'model', 'timestamp'])
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(memoryId) && (isOwner(userId) || isAdmin());
+      }
+
+      match /artifacts/{artifactId} {
+        allow get: if isValidId(userId) && isValidId(artifactId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(artifactId) &&
+          isOwner(userId) &&
+          isValidArtifact(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(artifactId) &&
+          isValidArtifact(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isAdmin() ||
+            (
+              isOwner(userId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['title', 'prompt', 'model', 'mediaUrl', 'metadataJson'])
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(artifactId) && (isOwner(userId) || isAdmin());
+      }
+
+      match /audit_ledger/{ledgerId} {
+        allow get: if isValidId(userId) && isValidId(ledgerId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(ledgerId) &&
+          isOwner(userId) &&
+          isValidAuditLedgerItem(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(ledgerId) &&
+          isValidAuditLedgerItem(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().timestamp == existing().timestamp &&
+          isAdmin();
+        allow delete: if isValidId(userId) && isValidId(ledgerId) && isAdmin();
+      }
+
+      match /game_runs/{runId} {
+        allow get: if isValidId(userId) && isValidId(runId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(runId) &&
+          isOwner(userId) &&
+          isValidGameRun(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(runId) &&
+          isValidGameRun(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          isAdmin();
+        allow delete: if isValidId(userId) && isValidId(runId) && (isOwner(userId) || isAdmin());
+      }
+
+      match /spatial_blueprints/{blueprintId} {
+        allow get: if isValidId(userId) && isValidId(blueprintId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(blueprintId) &&
+          isOwner(userId) &&
+          isValidSpatialBlueprint(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(blueprintId) &&
+          isValidSpatialBlueprint(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().createdByAgent == existing().createdByAgent &&
+          (
+            isAdmin() ||
+            (
+              isOwner(userId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['title', 'engineKind', 'blueprintJson', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(blueprintId) && (isOwner(userId) || isAdmin());
+      }
+
+      match /detected_games/{gameId} {
+        allow get: if isValidId(userId) && isValidId(gameId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(gameId) &&
+          isOwner(userId) &&
+          isValidDetectedGameMod(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(gameId) &&
+          isValidDetectedGameMod(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().gameKey == existing().gameKey &&
+          incoming().detectedAt == existing().detectedAt &&
+          (
+            isAdmin() ||
+            (
+              isOwner(userId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['title', 'engine', 'sourcePath', 'status', 'modCount', 'modStateJson', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(gameId) && (isOwner(userId) || isAdmin());
+      }
+
+      match /crafted_items/{itemId} {
+        allow get: if isValidId(userId) && isValidId(itemId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(itemId) &&
+          isOwner(userId) &&
+          isValidCraftedItem(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(itemId) &&
+          isValidCraftedItem(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().signatureHash == existing().signatureHash &&
+          incoming().createdAt == existing().createdAt &&
+          isAdmin();
+        allow delete: if isValidId(userId) && isValidId(itemId) && (isOwner(userId) || isAdmin());
+      }
+
+      match /orchestrator_state/{stateId} {
+        allow get: if isValidId(userId) && isValidId(stateId) && (isOwner(userId) || isAdmin());
+        allow list: if isSignedIn() && existing().userId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(stateId) &&
+          isOwner(userId) &&
+          isValidOrchestratorState(incoming(), userId, stateId);
+        allow update: if isValidId(userId) && isValidId(stateId) &&
+          isValidOrchestratorState(incoming(), userId, stateId) &&
+          incoming().userId == existing().userId &&
+          incoming().stateKey == existing().stateKey &&
+          incoming().createdAt == existing().createdAt &&
+          (
+            isAdmin() ||
+            (
+              isOwner(userId) &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['continuityJson', 'revision', 'updatedAt'])
+            )
+          );
+        allow delete: if isValidId(userId) && isValidId(stateId) && (isOwner(userId) || isAdmin());
+      }
+    }
+  }
+}

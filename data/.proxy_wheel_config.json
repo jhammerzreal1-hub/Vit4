@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "mode": "capable-first",
+  "maxRotations": 3,
+  "cooldownBaseMs": 15000,
+  "customNodes": []
+}
