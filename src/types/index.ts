@@ -59,7 +59,11 @@ export type ModuleType =
   | 'batch-processor'
   | 'lora-mesh'
   | 'neural-voice-distillery'
-  | 'admin-command';
+  | 'admin-command'
+  | 'singularity-self-improve'
+  | 'p2p-swarm-mesh'
+  | 'autonomous-goal-engine'
+  | 'local-llama-engine';
 
 export type ChatModel =
   | 'gemini-4-hydrogen'

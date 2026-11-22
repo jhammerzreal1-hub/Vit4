@@ -1913,9 +1913,9 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         const speaking = isModelSpeakingRef.current;
         if (manualReadAloudActiveRef.current) return;
         const startThreshold = speaking
-          ? Math.max(0.036, noiseFloorRef.current * 3.2 + 0.018)
-          : Math.max(0.011, noiseFloorRef.current * 2.1 + 0.006);
-        const holdThreshold = Math.max(0.007, noiseFloorRef.current * 1.45 + 0.003);
+          ? Math.max(0.012, noiseFloorRef.current * 1.5 + 0.004)
+          : Math.max(0.010, noiseFloorRef.current * 1.8 + 0.004);
+        const holdThreshold = Math.max(0.005, noiseFloorRef.current * 1.2 + 0.002);
 
         if (!isRec) {
           if (rms >= startThreshold) {

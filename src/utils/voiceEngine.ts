@@ -75,7 +75,7 @@ export const PRESET_VOICE_PERSONAS: VoicePersona[] = [
     filterPreset: 'studio',
     isOpenSourceModule: true
   },
-  // --- FREE OPEN-SOURCE NATIVE ENGLISH NEURAL VOICES (DEFAULT · UNLIMITED · ZERO QUOTA) ---
+  // --- PROFESSIONAL NATIVE ENGLISH NEURAL VOICES (DEFAULT · UNLIMITED · ZERO QUOTA) ---
   {
     id: 'kokoro-82m-aurelia',
     name: 'Kokoro-82M Aurelia (Open Weights)',
@@ -113,18 +113,6 @@ export const PRESET_VOICE_PERSONAS: VoicePersona[] = [
     isOpenSourceModule: true
   },
   {
-    id: 'piper-neural-alpha',
-    name: 'Piper High-Fidelity Alpha',
-    description: 'Crisp, fast native American English neural voice with zero rate limits.',
-    badge: 'Piper US Neural',
-    gender: 'female',
-    preferredLang: 'en-US',
-    defaultPitch: 1.0,
-    defaultRate: 1.02,
-    filterPreset: 'crisp',
-    isOpenSourceModule: true
-  },
-  {
     id: 'kokoro-82m-bella',
     name: 'Kokoro-82M Bella (British Articulate)',
     description: 'Crisp Oxford British English articulation powered by open neural synthesis.',
@@ -134,18 +122,6 @@ export const PRESET_VOICE_PERSONAS: VoicePersona[] = [
     defaultPitch: 1.0,
     defaultRate: 1.0,
     filterPreset: 'crisp',
-    isOpenSourceModule: true
-  },
-  {
-    id: 'bark-sovereign-celeste',
-    name: 'Bark Sovereign Celeste',
-    description: 'Expressive native American English narrative voice with smooth intonation.',
-    badge: 'Open-Source US Neural',
-    gender: 'female',
-    preferredLang: 'en-US',
-    defaultPitch: 1.0,
-    defaultRate: 1.0,
-    filterPreset: 'studio',
     isOpenSourceModule: true
   },
   {

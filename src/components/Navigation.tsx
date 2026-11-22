@@ -58,7 +58,9 @@ import {
   Settings,
   Wallet,
   Award,
-  ArrowUpDown
+  ArrowUpDown,
+  Target,
+  Server
 } from 'lucide-react';
 import type { ModuleType } from '../types';
 import { SoSMeshIcon } from './SoSMeshIcon';
@@ -152,6 +154,50 @@ export const ALL_MODULES: ModuleRegistryItem[] = [
     accentColor: 'text-emerald-400',
     activeBg: 'bg-emerald-500/12 border-emerald-500/35 text-emerald-200',
     description: 'Cinematic world loading screen, direct engine launcher, and universal artifact file download'
+  },
+  {
+    id: 'singularity-self-improve',
+    label: 'Singularity Self-Improvement Engine',
+    shortLabel: 'Self-Improvement',
+    group: 'core',
+    category: 'command',
+    icon: Cpu,
+    accentColor: 'text-cyan-400',
+    activeBg: 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200',
+    description: 'Autonomous kernel mutation, automated benchmark verification, and recursive code optimization'
+  },
+  {
+    id: 'p2p-swarm-mesh',
+    label: 'Distributed P2P Swarm Mesh',
+    shortLabel: 'P2P Mesh',
+    group: 'core',
+    category: 'command',
+    icon: Network,
+    accentColor: 'text-indigo-400',
+    activeBg: 'bg-indigo-500/15 border-indigo-500/40 text-indigo-200',
+    description: 'Decentralized node federation, shared memory graphs, and synchronized distributed weights'
+  },
+  {
+    id: 'autonomous-goal-engine',
+    label: 'Autonomous Goal & Hypothesis Engine',
+    shortLabel: 'Goal Engine',
+    group: 'core',
+    category: 'command',
+    icon: Target,
+    accentColor: 'text-teal-400',
+    activeBg: 'bg-teal-500/15 border-teal-500/40 text-teal-200',
+    description: 'Self-directed goal generation, scientific hypothesis testing, and empirical loss minimization'
+  },
+  {
+    id: 'local-llama-engine',
+    label: 'Virtual Llama Engine & Port Controller',
+    shortLabel: 'Virtual Llama',
+    group: 'core',
+    category: 'command',
+    icon: Server,
+    accentColor: 'text-amber-400',
+    activeBg: 'bg-amber-500/15 border-amber-500/40 text-amber-200',
+    description: 'Offline Ollama/Llama fallback inference engine & systemic port control for autonomous testing'
   },
   {
     id: 'emulator-modder',

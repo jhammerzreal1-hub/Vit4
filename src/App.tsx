@@ -134,6 +134,11 @@ const FloatingTouchGamepadOverlay = lazyWithRetry(() => import('./components/Uni
 const CommandPalette = lazyWithRetry(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })), 'CommandPalette');
 const SystemHealthDashboard = lazyWithRetry(() => import('./components/SystemHealthDashboard').then(m => ({ default: m.SystemHealthDashboard })), 'SystemHealthDashboard');
 const UserPrivilegesManagerModal = lazyWithRetry(() => import('./components/UserPrivilegesManagerModal').then(m => ({ default: m.UserPrivilegesManagerModal })), 'UserPrivilegesManagerModal');
+const SingularitySelfImprovementModule = lazyWithRetry(() => import('./components/SingularitySelfImprovementModule').then(m => ({ default: m.SingularitySelfImprovementModule })), 'SingularitySelfImprovementModule');
+const P2PSwarmMeshModule = lazyWithRetry(() => import('./components/P2PSwarmMeshModule').then(m => ({ default: m.P2PSwarmMeshModule })), 'P2PSwarmMeshModule');
+const AutonomousGoalEngineModule = lazyWithRetry(() => import('./components/AutonomousGoalEngineModule').then(m => ({ default: m.AutonomousGoalEngineModule })), 'AutonomousGoalEngineModule');
+const LocalLlamaEngineModule = lazyWithRetry(() => import('./components/LocalLlamaEngineModule').then(m => ({ default: m.LocalLlamaEngineModule })), 'LocalLlamaEngineModule');
+
 
 const ModuleLoadingFallback: React.FC<{ label?: string }> = ({ label = 'Loading module...' }) => (
   <div className="flex-1 min-h-[220px] flex flex-col items-center justify-center gap-3 p-8 bg-zinc-950/90 text-zinc-400 font-mono text-xs">
@@ -2513,6 +2518,14 @@ export default function App() {
         );
       case 'neural-voice-distillery':
         return <NeuralVoiceDistilleryModule />;
+      case 'singularity-self-improve':
+        return <SingularitySelfImprovementModule />;
+      case 'p2p-swarm-mesh':
+        return <P2PSwarmMeshModule />;
+      case 'autonomous-goal-engine':
+        return <AutonomousGoalEngineModule />;
+      case 'local-llama-engine':
+        return <LocalLlamaEngineModule />;
       case 'world-start':
         return (
           <WorldLoadStartScreen
