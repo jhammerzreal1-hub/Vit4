@@ -553,7 +553,7 @@ export const AI_STUDIO_DISTILLED_MASTER_KNOWLEDGE = {
   architectureSummary: {
     frontend: 'React SPA + Vite + Tailwind CSS v4 + Lucide Icons + Three.js Spatial Arena.',
     backend: 'Express.js on port 3000 with vite.middlewares, WebSocketServer, and SQLite WAL persistent kernel.',
-    voicePipeline: 'Turing-grade distilled human neural voices (Elena Vance, Arthur Sterling, Sophia Prime) with zero robotic fallback and instant VAD barge-in.',
+    voicePipeline: 'Impersonal studio distilled Sovereign acoustic cores (distilled-core-01..04) and Gemini native audio timbres with zero personal identity, zero robotic fallback, decoupled scratchpad, async background tasks, and instant barge-in.',
     singularityCore: 'Recursive self-improvement AST mutators, P2P swarm mesh federation (4,440 TFLOPS), and autonomous goal/hypothesis engines.'
   }
 };

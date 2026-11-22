@@ -34,171 +34,165 @@ export interface VoicePersona {
   defaultRate: number;
   filterPreset: 'studio' | 'hologram' | 'subbass' | 'crisp';
   isGemini?: boolean;
+  isDistilled?: boolean;
   isOpenSourceModule?: boolean;
+  geminiVoiceName: 'Zephyr' | 'Kore' | 'Charon' | 'Fenrir' | 'Puck' | 'Aoede';
 }
 
 export const PRESET_VOICE_PERSONAS: VoicePersona[] = [
-  // --- TURING-EXAM GRADE DISTILLED HUMAN VOICES (99.99% PURITY · ZERO ROBOTIC ARTIFACTS) ---
+  // --- PREMIUM DISTILLED SOVEREIGN ACOUSTIC CORES (GEMINI 3.8 FLASH TTS STUDIO DISTILLATION · ZERO PERSONAL IDENTITY) ---
   {
-    id: 'turing-elena-vantage',
-    name: 'Elena Vance (Turing-Exam Grade US Female)',
-    description: 'Zero robotic artifacts. Organic micro-breathing pauses and pitch micro-glides designed to pass any Turing exam.',
-    badge: 'Turing Exam Grade 99.99%',
+    id: 'distilled-core-01',
+    name: 'Distilled Core 01 · Neutral Studio',
+    description: 'Distilled organic studio timbre with smooth formant continuity and zero metallic artifacts. Impersonal voice output of the OS intelligence.',
+    badge: 'Distilled Studio',
     gender: 'female',
     preferredLang: 'en-US',
     defaultPitch: 1.0,
     defaultRate: 1.0,
     filterPreset: 'studio',
-    isOpenSourceModule: true
+    isDistilled: true,
+    isGemini: true,
+    geminiVoiceName: 'Zephyr'
   },
   {
-    id: 'turing-arthur-sterling',
-    name: 'Arthur Sterling (Turing-Exam Grade UK Baritone)',
-    description: 'Oxford-educated vocal depth with natural sub-bass resonance and zero metallic frequency clipping.',
-    badge: 'Turing Exam Grade 99.99%',
+    id: 'distilled-core-02',
+    name: 'Distilled Core 02 · Deep Resonance',
+    description: 'Distilled low-register resonance with warm sub-bass clarity and zero metallic clipping. Impersonal voice output of the OS intelligence.',
+    badge: 'Distilled Studio',
     gender: 'male',
-    preferredLang: 'en-GB',
+    preferredLang: 'en-US',
     defaultPitch: 0.98,
     defaultRate: 1.0,
     filterPreset: 'subbass',
-    isOpenSourceModule: true
+    isDistilled: true,
+    isGemini: true,
+    geminiVoiceName: 'Charon'
   },
   {
-    id: 'turing-sophia-prime',
-    name: 'Sophia Prime (Biological Pure Neural)',
-    description: 'Distilled from multi-channel organic speech waveforms. Indistinguishable from living human radio broadcasters.',
-    badge: 'Biological Pure 99.99%',
+    id: 'distilled-core-03',
+    name: 'Distilled Core 03 · Pure Broadcast',
+    description: 'Distilled broadcast-clarity waveform with balanced midrange cadence and natural breath pacing. Impersonal voice output of the OS intelligence.',
+    badge: 'Distilled Studio',
     gender: 'female',
     preferredLang: 'en-US',
     defaultPitch: 1.0,
     defaultRate: 1.0,
     filterPreset: 'studio',
-    isOpenSourceModule: true
-  },
-  // --- PROFESSIONAL NATIVE ENGLISH NEURAL VOICES (DEFAULT · UNLIMITED · ZERO QUOTA) ---
-  {
-    id: 'kokoro-82m-aurelia',
-    name: 'Kokoro-82M Aurelia (Open Weights)',
-    description: 'Ultra-realistic native American English female neural voice. 100% Free & Unlimited.',
-    badge: 'Open-Source US Neural',
-    gender: 'female',
-    preferredLang: 'en-US',
-    defaultPitch: 1.0,
-    defaultRate: 1.0,
-    filterPreset: 'studio',
-    isOpenSourceModule: true
+    isDistilled: true,
+    isGemini: true,
+    geminiVoiceName: 'Kore'
   },
   {
-    id: 'orpheus-openvoice-seraphina',
-    name: 'Orpheus OpenVoice Seraphina',
-    description: 'Warm, expressive native American English female voice with natural human cadence.',
-    badge: 'Open-Source US Neural',
-    gender: 'female',
-    preferredLang: 'en-US',
-    defaultPitch: 1.0,
-    defaultRate: 1.0,
-    filterPreset: 'studio',
-    isOpenSourceModule: true
-  },
-  {
-    id: 'orpheus-openvoice-atlas',
-    name: 'Orpheus OpenVoice Atlas',
-    description: 'Resonant, natural native American English male voice for technical briefings.',
-    badge: 'Open-Source US Neural',
+    id: 'distilled-core-04',
+    name: 'Distilled Core 04 · Crisp Baritone',
+    description: 'Distilled crisp low-mid acoustic channel tuned for dense technical briefings. Impersonal voice output of the OS intelligence.',
+    badge: 'Distilled Studio',
     gender: 'male',
     preferredLang: 'en-US',
-    defaultPitch: 1.0,
-    defaultRate: 1.0,
-    filterPreset: 'subbass',
-    isOpenSourceModule: true
-  },
-  {
-    id: 'kokoro-82m-bella',
-    name: 'Kokoro-82M Bella (British Articulate)',
-    description: 'Crisp Oxford British English articulation powered by open neural synthesis.',
-    badge: 'Open-Source UK Neural',
-    gender: 'female',
-    preferredLang: 'en-GB',
-    defaultPitch: 1.0,
+    defaultPitch: 0.98,
     defaultRate: 1.0,
     filterPreset: 'crisp',
-    isOpenSourceModule: true
-  },
-  {
-    id: 'edge-openneural-nova',
-    name: 'Edge OpenNeural Nova',
-    description: 'High-clarity native American English studio voice.',
-    badge: 'Open-Source US Neural',
-    gender: 'female',
-    preferredLang: 'en-US',
-    defaultPitch: 1.0,
-    defaultRate: 1.0,
-    filterPreset: 'crisp',
-    isOpenSourceModule: true
+    isDistilled: true,
+    isGemini: true,
+    geminiVoiceName: 'Fenrir'
   },
 
-  // --- OPTIONAL GEMINI CLOUD VOICES ---
+  // --- GEMINI NATIVE ACOUSTIC TIMBRES (DEVOID OF PERSONAL IDENTITY — PURE OS VOICE OUTPUT) ---
   {
-    id: 'gemini-kore',
-    name: 'Gemini Kore (Warm Narrative)',
-    description: 'Smooth, natural American English podcast-grade voice (uses Open Neural when quota reached).',
-    badge: 'Gemini Cloud',
+    id: 'Zephyr',
+    name: 'Gemini Acoustic · Zephyr (Clear Neutral)',
+    description: 'Impersonal clear neutral Gemini native audio timbre for the autonomous OS intelligence.',
+    badge: 'Gemini Live + TTS',
     gender: 'female',
     preferredLang: 'en-US',
     defaultPitch: 1.0,
     defaultRate: 1.0,
     filterPreset: 'studio',
-    isGemini: true
+    isGemini: true,
+    geminiVoiceName: 'Zephyr'
   },
   {
-    id: 'gemini-puck',
-    name: 'Gemini Puck (Dynamic Studio)',
-    description: 'Upbeat, energetic American English cloud voice.',
-    badge: 'Gemini Cloud',
+    id: 'Kore',
+    name: 'Gemini Acoustic · Kore (Balanced Warm)',
+    description: 'Impersonal warm balanced Gemini native audio timbre for the autonomous OS intelligence.',
+    badge: 'Gemini Live + TTS',
     gender: 'female',
     preferredLang: 'en-US',
     defaultPitch: 1.0,
     defaultRate: 1.0,
     filterPreset: 'studio',
-    isGemini: true
+    isGemini: true,
+    geminiVoiceName: 'Kore'
   },
   {
-    id: 'gemini-charon',
-    name: 'Gemini Charon (Deep Authoritative)',
-    description: 'Deep, authoritative American English male voice.',
-    badge: 'Gemini Cloud',
+    id: 'Charon',
+    name: 'Gemini Acoustic · Charon (Deep Analytical)',
+    description: 'Impersonal deep resonant Gemini native audio timbre for the autonomous OS intelligence.',
+    badge: 'Gemini Live + TTS',
     gender: 'male',
     preferredLang: 'en-US',
-    defaultPitch: 0.95,
+    defaultPitch: 0.96,
     defaultRate: 1.0,
     filterPreset: 'subbass',
-    isGemini: true
+    isGemini: true,
+    geminiVoiceName: 'Charon'
   },
   {
-    id: 'gemini-fenrir',
-    name: 'Gemini Fenrir (Authoritative Executive)',
-    description: 'Balanced, commanding English executive presence.',
-    badge: 'Gemini Cloud',
+    id: 'Fenrir',
+    name: 'Gemini Acoustic · Fenrir (Direct Low-Mid)',
+    description: 'Impersonal crisp direct Gemini native audio timbre for the autonomous OS intelligence.',
+    badge: 'Gemini Live + TTS',
     gender: 'male',
     preferredLang: 'en-US',
     defaultPitch: 0.98,
     defaultRate: 1.0,
     filterPreset: 'crisp',
-    isGemini: true
+    isGemini: true,
+    geminiVoiceName: 'Fenrir'
   },
   {
-    id: 'gemini-aoede',
-    name: 'Gemini Aoede (Harmonic Ethereal)',
-    description: 'Melodic, serene American English cadence.',
-    badge: 'Gemini Cloud',
+    id: 'Puck',
+    name: 'Gemini Acoustic · Puck (Bright Cadence)',
+    description: 'Impersonal bright brisk Gemini native audio timbre for the autonomous OS intelligence.',
+    badge: 'Gemini Live + TTS',
+    gender: 'female',
+    preferredLang: 'en-US',
+    defaultPitch: 1.0,
+    defaultRate: 1.0,
+    filterPreset: 'crisp',
+    isGemini: true,
+    geminiVoiceName: 'Puck'
+  },
+  {
+    id: 'Aoede',
+    name: 'Gemini Acoustic · Aoede (Smooth Harmonic)',
+    description: 'Impersonal smooth harmonic Gemini native audio timbre for the autonomous OS intelligence.',
+    badge: 'Gemini Live + TTS',
     gender: 'female',
     preferredLang: 'en-US',
     defaultPitch: 1.0,
     defaultRate: 1.0,
     filterPreset: 'studio',
-    isGemini: true
+    isGemini: true,
+    geminiVoiceName: 'Aoede'
   }
 ];
+
+export function normalizeVoicePresetId(raw?: string | null): string {
+  const s = String(raw || '').trim();
+  if (!s) return 'distilled-core-01';
+  const exact = PRESET_VOICE_PERSONAS.find((p) => p.id.toLowerCase() === s.toLowerCase());
+  if (exact) return exact.id;
+  const lower = s.toLowerCase();
+  if (lower.includes('arthur') || lower.includes('charon') || lower.includes('atlas')) return 'distilled-core-02';
+  if (lower.includes('sophia') || lower.includes('kore')) return 'distilled-core-03';
+  if (lower.includes('fenrir') || lower.includes('marcus')) return 'distilled-core-04';
+  if (lower.includes('puck')) return 'Puck';
+  if (lower.includes('aoede') || lower.includes('seraphina')) return 'Aoede';
+  if (lower.includes('zephyr')) return 'Zephyr';
+  return 'distilled-core-01';
+}
 
 // Blacklist of novelty, musical, robotic, foreign, and non-native accented English voice patterns
 export const EXCLUDED_NOVELTY_VOICE_PATTERNS = [

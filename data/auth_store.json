@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "users": [
     {
       "id": "usr_674321a0e53db578f17a",
@@ -11,6 +11,11 @@
       "status": "active",
       "isExecutiveArchitect": true,
       "authorityTier": "executive-architect",
+      "tierId": "executive-architect",
+      "tierName": "Executive Architect",
+      "tierBadgeColor": "amber",
+      "subscriptionStatus": "lifetime",
+      "tierExpiresAt": null,
       "privileges": {
         "allModules": true,
         "allowedModules": [
@@ -60,6 +65,7 @@
           "crypto-wallet",
           "grant-hunter",
           "transfer-hub",
+          "batch-processor",
           "lora-mesh",
           "admin-command"
         ],
@@ -69,12 +75,18 @@
         "canExecuteTerminalAndTools": true,
         "canAccessSecretsAndWallets": true,
         "canModifyOSSettings": true,
-        "canManageUsers": true
+        "canManageUsers": true,
+        "canUseBurnerMail": true,
+        "canUseInfiniteSim": true,
+        "canAccessGrantHunter": true,
+        "canBringOwnKeys": true,
+        "canAccessSystemCore": true,
+        "maxDailyAiRequests": 0
       },
       "passwordHash": "scrypt$93c61a70752940f32fd1cfe564a7c9ad$8b8c1a631124b99a1b632ff788e479aa050d2ddbb171ea2e128aa090ca76315ac63458831cd08368e3579bf9153b07f1e2fc49e9abde0e3927b28386ea756104",
       "createdAt": "2026-11-22T00:57:16.929Z",
-      "updatedAt": "2026-11-22T01:53:42.511Z",
-      "lastLoginAt": "2026-11-22T01:53:42.511Z"
+      "updatedAt": "2026-11-22T18:28:45.382Z",
+      "lastLoginAt": "2026-11-22T18:28:45.382Z"
     }
   ],
   "sessions": [
@@ -112,6 +124,27 @@
       "userId": "usr_674321a0e53db578f17a",
       "createdAt": 1795312422511,
       "expiresAt": 1797904422511
+    },
+    {
+      "id": "ses_aad8bbbb3f46",
+      "tokenHash": "df6bb6e2140a00947de4169b50b1b1cd989a287b865ba3c10cd4dc6fdd3dc039",
+      "userId": "usr_674321a0e53db578f17a",
+      "createdAt": 1795369623553,
+      "expiresAt": 1797961623553
+    },
+    {
+      "id": "ses_9d516a9bfaae",
+      "tokenHash": "2f781fe0f80e89a98ceb2e8d57b7a76c74f38f52e86a852a305835e75f99ddae",
+      "userId": "usr_674321a0e53db578f17a",
+      "createdAt": 1795372125382,
+      "expiresAt": 1797964125382
+    },
+    {
+      "id": "ses_cfd64e400933",
+      "tokenHash": "510bcaa1fa26c0e2d0ced89cad8c34796b060fe6e3031c75709e33b519d0a4ce",
+      "userId": "usr_3a9e17965ec2ac9252e8",
+      "createdAt": 1795374031681,
+      "expiresAt": 1797966031681
     }
   ],
   "policy": {
@@ -119,6 +152,7 @@
     "allowSelfRegistration": true,
     "newUsersRequireApproval": false,
     "defaultRole": "collaborator",
+    "defaultTierId": "tier-free",
     "defaultPrivileges": {
       "allModules": false,
       "allowedModules": [
@@ -143,11 +177,277 @@
       "canExecuteTerminalAndTools": false,
       "canAccessSecretsAndWallets": false,
       "canModifyOSSettings": false,
-      "canManageUsers": false
+      "canManageUsers": false,
+      "canUseBurnerMail": false,
+      "canUseInfiniteSim": false,
+      "canAccessGrantHunter": false,
+      "canBringOwnKeys": true,
+      "canAccessSystemCore": false,
+      "maxDailyAiRequests": 100
     },
     "entityIntelligenceDelegationEnabled": true,
     "systemLockdownMode": false
   },
+  "tiers": [
+    {
+      "id": "tier-free",
+      "slug": "explorer-free",
+      "name": "Explorer Free",
+      "tagline": "Isolated personal OS sandbox to evaluate the platform before backing",
+      "description": "Clean personal workspace with orchestrator chat, live voice, search, browser, creative studio, personal files, and your own encrypted API key vault. Upgrade anytime to invest in the project.",
+      "badgeColor": "zinc",
+      "rank": 1,
+      "baseRole": "collaborator",
+      "isBuiltIn": true,
+      "isPublic": true,
+      "isMonetized": false,
+      "isFounderTier": false,
+      "pricing": {
+        "billingMode": "free",
+        "monthlyUsdCents": 0,
+        "oneTimeUsdCents": 0,
+        "cryptoUsdAmount": 0,
+        "acceptedCryptoChains": [
+          "base",
+          "ethereum",
+          "polygon",
+          "arbitrum"
+        ],
+        "acceptedCryptoTokens": [
+          "USDC",
+          "ETH"
+        ]
+      },
+      "privileges": {
+        "allModules": false,
+        "allowedModules": [
+          "chat",
+          "lora-mesh",
+          "browser",
+          "search",
+          "maps",
+          "image",
+          "music",
+          "transcribe",
+          "live",
+          "vault",
+          "scratchpad",
+          "projects",
+          "presets",
+          "file-manager",
+          "os-settings",
+          "api-secrets"
+        ],
+        "canUseChat": true,
+        "canUseVoiceChat": true,
+        "canRunAutonomousWorkflow": false,
+        "canExecuteTerminalAndTools": false,
+        "canAccessSecretsAndWallets": false,
+        "canModifyOSSettings": true,
+        "canManageUsers": false,
+        "canUseBurnerMail": false,
+        "canUseInfiniteSim": false,
+        "canAccessGrantHunter": false,
+        "canBringOwnKeys": true,
+        "canAccessSystemCore": false,
+        "maxDailyAiRequests": 100
+      },
+      "features": [
+        "100% Isolated Personal Workspace & SQL Memory",
+        "Bring Your Own API Keys (Personal Encrypted Vault)",
+        "Orchestrator Chat, Voice, Search & Browser",
+        "Personal File Sandbox & Creative Media Tools"
+      ],
+      "createdAt": "2026-11-22T17:44:51.089Z",
+      "updatedAt": "2026-11-22T17:44:51.089Z"
+    },
+    {
+      "id": "tier-pro",
+      "slug": "operator-pro",
+      "name": "Operator Pro",
+      "tagline": "Invest in core R&D & compute sustainability while unlocking autonomous workflows",
+      "description": "Directly backs ongoing development, open-architecture research, and server infrastructure. Unlocks autonomous workflows, isolated terminal & tools, personal crypto wallet vault, Burner Mail, War Room, and Grant Hunter.",
+      "badgeColor": "emerald",
+      "rank": 2,
+      "baseRole": "operator",
+      "isBuiltIn": true,
+      "isPublic": true,
+      "isMonetized": true,
+      "isFounderTier": false,
+      "pricing": {
+        "billingMode": "both",
+        "monthlyUsdCents": 1900,
+        "oneTimeUsdCents": 19900,
+        "cryptoUsdAmount": 19,
+        "acceptedCryptoChains": [
+          "base",
+          "ethereum",
+          "polygon",
+          "arbitrum"
+        ],
+        "acceptedCryptoTokens": [
+          "USDC",
+          "ETH"
+        ]
+      },
+      "privileges": {
+        "allModules": false,
+        "allowedModules": [
+          "chat",
+          "lora-mesh",
+          "browser",
+          "search",
+          "maps",
+          "image",
+          "video",
+          "music",
+          "transcribe",
+          "live",
+          "vault",
+          "scratchpad",
+          "projects",
+          "presets",
+          "knowledge-graph",
+          "file-manager",
+          "terminal",
+          "task-manager",
+          "os-settings",
+          "spatial-arena",
+          "war-room",
+          "autonomy-supervisor",
+          "batch-processor",
+          "api-secrets",
+          "crypto-wallet",
+          "burner-mail",
+          "grant-hunter"
+        ],
+        "canUseChat": true,
+        "canUseVoiceChat": true,
+        "canRunAutonomousWorkflow": true,
+        "canExecuteTerminalAndTools": true,
+        "canAccessSecretsAndWallets": true,
+        "canModifyOSSettings": true,
+        "canManageUsers": false,
+        "canUseBurnerMail": true,
+        "canUseInfiniteSim": false,
+        "canAccessGrantHunter": true,
+        "canBringOwnKeys": true,
+        "canAccessSystemCore": false,
+        "maxDailyAiRequests": 500
+      },
+      "features": [
+        "Directly Funds Active Engineering & Project Continuity",
+        "Autonomous Multi-Step Orchestrator Workflows",
+        "Personal Crypto Wallet Vault & CDP Connectors",
+        "Real Burner Mail Vault, Grant Hunter & Terminal",
+        "500 Daily AI Orchestration Requests"
+      ],
+      "createdAt": "2026-11-22T17:44:51.089Z",
+      "updatedAt": "2026-11-22T17:44:51.089Z"
+    },
+    {
+      "id": "tier-sovereign",
+      "slug": "sovereign-elite",
+      "name": "Sovereign Founder",
+      "tagline": "Founder-tier project investment: permanent Founder Wall seat, all modules & unlimited AI",
+      "description": "Anchor the long-term survival, independence, and roadmap of the project. Includes a permanently timestamped Founder & Supporter Message Board seat (anonymous or attributed, with direct unfiltered feedback priority) plus every user OS module and unlimited AI.",
+      "badgeColor": "amber",
+      "rank": 3,
+      "baseRole": "operator",
+      "isBuiltIn": true,
+      "isPublic": true,
+      "isMonetized": true,
+      "isFounderTier": true,
+      "pricing": {
+        "billingMode": "both",
+        "monthlyUsdCents": 4900,
+        "oneTimeUsdCents": 49900,
+        "cryptoUsdAmount": 49,
+        "acceptedCryptoChains": [
+          "base",
+          "ethereum",
+          "polygon",
+          "arbitrum"
+        ],
+        "acceptedCryptoTokens": [
+          "USDC",
+          "ETH"
+        ]
+      },
+      "privileges": {
+        "allModules": false,
+        "allowedModules": [
+          "chat",
+          "war-room",
+          "browser",
+          "functions",
+          "termux",
+          "scratchpad",
+          "hitl",
+          "music",
+          "video",
+          "image",
+          "search",
+          "maps",
+          "transcribe",
+          "live",
+          "vault",
+          "github",
+          "osint",
+          "burner-mail",
+          "infinite-sim",
+          "projects",
+          "presets",
+          "packager",
+          "drive",
+          "tasks",
+          "knowledge-graph",
+          "tool-shed",
+          "autonomy-supervisor",
+          "download-models",
+          "universal-installer",
+          "api-secrets",
+          "integrations",
+          "spatial-arena",
+          "agent-dev-kit",
+          "ai-genesis-distillery",
+          "emulator-modder",
+          "macro-telemetry",
+          "world-start",
+          "file-manager",
+          "terminal",
+          "task-manager",
+          "os-settings",
+          "crypto-wallet",
+          "grant-hunter",
+          "batch-processor",
+          "lora-mesh"
+        ],
+        "canUseChat": true,
+        "canUseVoiceChat": true,
+        "canRunAutonomousWorkflow": true,
+        "canExecuteTerminalAndTools": true,
+        "canAccessSecretsAndWallets": true,
+        "canModifyOSSettings": true,
+        "canManageUsers": false,
+        "canUseBurnerMail": true,
+        "canUseInfiniteSim": true,
+        "canAccessGrantHunter": true,
+        "canBringOwnKeys": true,
+        "canAccessSystemCore": false,
+        "maxDailyAiRequests": 0
+      },
+      "features": [
+        "Permanent Timestamped Seat on Founder & Supporter Wall",
+        "Share Anonymous or Public Feedback & Proof You Backed Early",
+        "All User-Level OS Modules + Infinite SIM & AI Distillery",
+        "Unlimited Daily Orchestrator Executions",
+        "Directly Accelerates New Releases & Compute Independence"
+      ],
+      "createdAt": "2026-11-22T17:44:51.089Z",
+      "updatedAt": "2026-11-22T17:44:51.089Z"
+    }
+  ],
   "auditLog": [
     {
       "id": "aud_1795309036987_f1b908",
@@ -170,6 +470,94 @@
       "target": "rogue_admin",
       "details": "Blocked unauthenticated attempt to invoke permanently sealed one-time Root Admin claim.",
       "outcome": "blocked"
+    },
+    {
+      "id": "aud_1795369526631_8c3098",
+      "timestamp": "2026-11-22T17:45:26.631Z",
+      "actorId": "usr_88601b3d831dfc01e555",
+      "actorUsername": "test_iso_user_e2e",
+      "actorTier": "standard",
+      "action": "USER_SELF_REGISTERED",
+      "target": "test_iso_user_e2e",
+      "details": "Registered isolated collaborator account on tier \"Explorer Free\" (active).",
+      "outcome": "allowed"
+    },
+    {
+      "id": "aud_1795369750022_87fa21",
+      "timestamp": "2026-11-22T17:49:10.022Z",
+      "actorId": "usr_6e9670e8975e25d0a914",
+      "actorUsername": "e2e_verify_1795369749839",
+      "actorTier": "standard",
+      "action": "USER_SELF_REGISTERED",
+      "target": "e2e_verify_1795369749839",
+      "details": "Registered isolated collaborator account on tier \"Explorer Free\" (active).",
+      "outcome": "allowed"
+    },
+    {
+      "id": "aud_1795370192291_349919",
+      "timestamp": "2026-11-22T17:56:32.291Z",
+      "actorId": "usr_6b9df7f24e61ab5e2b48",
+      "actorUsername": "e2e_iso_1795370192184",
+      "actorTier": "standard",
+      "action": "USER_SELF_REGISTERED",
+      "target": "e2e_iso_1795370192184",
+      "details": "Registered isolated collaborator account on tier \"Explorer Free\" (active).",
+      "outcome": "allowed"
+    },
+    {
+      "id": "aud_1795370805047_2a38fd",
+      "timestamp": "2026-11-22T18:06:45.047Z",
+      "actorId": "usr_e7b81ec07f669a745ddf",
+      "actorUsername": "e2e_temp_22c7",
+      "actorTier": "standard",
+      "action": "USER_SELF_REGISTERED",
+      "target": "e2e_temp_22c7",
+      "details": "Registered isolated collaborator account on tier \"Explorer Free\" (active).",
+      "outcome": "allowed"
+    },
+    {
+      "id": "aud_1795372202973_2039bb",
+      "timestamp": "2026-11-22T18:30:02.974Z",
+      "actorId": "usr_0847438bcfcbf38fb4da",
+      "actorUsername": "e2e_ablit_eb3f",
+      "actorTier": "standard",
+      "action": "USER_SELF_REGISTERED",
+      "target": "e2e_ablit_eb3f",
+      "details": "Registered isolated collaborator account on tier \"Explorer Free\" (active).",
+      "outcome": "allowed"
+    },
+    {
+      "id": "aud_1795372448672_acafa8",
+      "timestamp": "2026-11-22T18:34:08.672Z",
+      "actorId": "usr_fb5428e3e062917c60d9",
+      "actorUsername": "iso_verify_tmp",
+      "actorTier": "standard",
+      "action": "USER_SELF_REGISTERED",
+      "target": "iso_verify_tmp",
+      "details": "Registered isolated collaborator account on tier \"Explorer Free\" (active).",
+      "outcome": "allowed"
+    },
+    {
+      "id": "aud_1795372604492_4368bb",
+      "timestamp": "2026-11-22T18:36:44.492Z",
+      "actorId": "usr_05b1727d2a7e40d75f5d",
+      "actorUsername": "final_verify_tmp",
+      "actorTier": "standard",
+      "action": "USER_SELF_REGISTERED",
+      "target": "final_verify_tmp",
+      "details": "Registered isolated collaborator account on tier \"Explorer Free\" (active).",
+      "outcome": "allowed"
+    },
+    {
+      "id": "aud_1795374031681_8eb784",
+      "timestamp": "2026-11-22T19:00:31.681Z",
+      "actorId": "usr_3a9e17965ec2ac9252e8",
+      "actorUsername": "verify_tmp_mws7ccu7",
+      "actorTier": "standard",
+      "action": "USER_SELF_REGISTERED",
+      "target": "verify_tmp_mws7ccu7",
+      "details": "Registered isolated collaborator account on tier \"Explorer Free\" (active).",
+      "outcome": "allowed"
     }
   ]
 }

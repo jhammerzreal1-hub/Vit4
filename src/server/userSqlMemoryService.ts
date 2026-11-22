@@ -408,6 +408,25 @@ class UserSqlMemoryService {
       throw new Error('Access denied: Path traversal outside your personal workspace is not permitted.');
     }
 
+    // Verify existing target or nearest existing ancestor does not escape via symlink
+    try {
+      const realBase = fs.realpathSync(baseResolved);
+      let checkPath = candidate;
+      while (!fs.existsSync(checkPath)) {
+        const parent = path.dirname(checkPath);
+        if (parent === checkPath) break;
+        checkPath = parent;
+      }
+      if (fs.existsSync(checkPath)) {
+        const realCheck = fs.realpathSync(checkPath);
+        if (realCheck !== realBase && !realCheck.startsWith(realBase + path.sep)) {
+          throw new Error('Access denied: Symlink escape outside personal workspace is not permitted.');
+        }
+      }
+    } catch (err: any) {
+      if (err?.message?.includes('Access denied:')) throw err;
+    }
+
     return candidate;
   }
 

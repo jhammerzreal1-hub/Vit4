@@ -5,179 +5,225 @@
  * Licensed under the MIT License & JHammerZ Custom Sovereign Licenses
  */
 
-import React, { useState, useEffect } from 'react';
-import { Cpu, Zap, RefreshCw, CheckCircle2, AlertTriangle, ShieldCheck, Code, Sparkles, Terminal, Play } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { RefreshCw, CheckCircle2, AlertTriangle, FileCode2, Database } from 'lucide-react';
 import { apiFetch } from '../utils/authClient';
 
-interface MutationRecord {
+interface EvolutionCycleRecord {
   id: string;
+  generation: number;
   timestamp: string;
+  depth: number;
   targetFile: string;
-  mutationType: 'OPTIMIZE_INFERENCE' | 'REFACTOR_NEURAL_ROUTING' | 'HEAL_DECAY' | 'SYNTHESIZE_PRIMITIVE';
-  status: 'PENDING_BENCHMARK' | 'APPLIED' | 'ROLLED_BACK';
-  diffPreview: string;
-  confidence: number;
+  targetSha256: string;
+  filesScanned: number;
+  totalLines: number;
+  emptyCatchCount: number;
+  todoCount: number;
+  findingsSummary: string;
+  recommendations: string[];
+  merkleRoot: string;
+  status: 'VERIFIED' | 'ACTION_NEEDED';
+}
+
+interface DbStats {
+  sqliteActive: boolean;
+  evolutiveAxioms: number;
+  agenticMemory: number;
+  trajectories: number;
+  evolutionCycles: number;
 }
 
 export const SingularitySelfImprovementModule: React.FC = () => {
-  const [isEvolutionRunning, setIsEvolutionRunning] = useState(false);
-  const [generationsCount, setGenerationsCount] = useState(148);
-  const [recursionDepth, setRecursionDepth] = useState(7);
-  const [mutations, setMutations] = useState<MutationRecord[]>([
-    {
-      id: 'mut-101',
-      timestamp: new Date(Date.now() - 120000).toLocaleTimeString(),
-      targetFile: 'src/utils/voiceEngine.ts',
-      mutationType: 'OPTIMIZE_INFERENCE',
-      status: 'APPLIED',
-      diffPreview: '+ Optimized formant smoothing window size to 195ms\n+ Streamlined VAD RMS gate sensitivity',
-      confidence: 0.9994
-    },
-    {
-      id: 'mut-102',
-      timestamp: new Date(Date.now() - 360000).toLocaleTimeString(),
-      targetFile: 'server.ts',
-      mutationType: 'REFACTOR_NEURAL_ROUTING',
-      status: 'APPLIED',
-      diffPreview: '+ Bound recursive cascade fallback retry loop with exponential cooldown',
-      confidence: 0.9982
-    }
-  ]);
-  const [activeLog, setActiveLog] = useState<string[]>([
-    '[SingularityEngine] Kernel loop active. Self-improvement governor online.',
-    '[MutationGovernor] Invariant check verified. Zero drift detected.'
-  ]);
+  const [cycles, setCycles] = useState<EvolutionCycleRecord[]>([]);
+  const [generation, setGeneration] = useState(0);
+  const [depth, setDepth] = useState(3);
+  const [merkleRoot, setMerkleRoot] = useState('');
+  const [totalFilesHashed, setTotalFilesHashed] = useState(0);
+  const [dbStats, setDbStats] = useState<DbStats | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const runEvolutionCycle = async () => {
-    setIsEvolutionRunning(true);
-    setActiveLog(prev => [`[Evolution] Initiating recursive mutation cycle #${generationsCount + 1}...`, ...prev]);
+  const loadState = async () => {
+    try {
+      const res = await apiFetch('/api/singularity/self-improve/state');
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setGeneration(data.generation || 0);
+        setCycles(data.cycles || []);
+        setMerkleRoot(data.merkleRoot || '');
+        setTotalFilesHashed(data.totalFilesHashed || 0);
+        setDbStats(data.dbStats || null);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to load diagnostic state.');
+    }
+  };
+
+  useEffect(() => {
+    loadState();
+  }, []);
+
+  const runDiagnosticCycle = async () => {
+    setIsRunning(true);
+    setErrorMsg(null);
     try {
       const res = await apiFetch('/api/singularity/self-improve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ depth: recursionDepth })
+        body: JSON.stringify({ depth })
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.success) {
-        setGenerationsCount(c => c + 1);
-        setMutations(prev => [
-          {
-            id: `mut-${Date.now()}`,
-            timestamp: new Date().toLocaleTimeString(),
-            targetFile: data.targetFile || 'src/utils/sovereignQuantumKernel.ts',
-            mutationType: 'OPTIMIZE_INFERENCE',
-            status: 'APPLIED',
-            diffPreview: data.diff || '+ Synthesized optimized weight tensor path\n+ Enhanced reasoning convergence',
-            confidence: 0.9999
-          },
-          ...prev
-        ]);
-        setActiveLog(prev => [`[Success] Mutation cycle successfully benchmarked and crystallized.`, ...prev]);
-      } else {
-        setGenerationsCount(c => c + 1);
-        setActiveLog(prev => [`[Notice] Autonomous mutation verified via sandbox benchmark.`, ...prev]);
-      }
-    } catch {
-      setGenerationsCount(c => c + 1);
-      setActiveLog(prev => [`[Notice] Self-improvement iteration completed successfully.`, ...prev]);
+      if (!res.ok || !data.success) throw new Error(data.error || 'Diagnostic cycle failed.');
+      setGeneration(data.generation);
+      setCycles(data.cycles || []);
+      setDbStats(data.dbStats || null);
+      if (data.cycle?.merkleRoot) setMerkleRoot(data.cycle.merkleRoot);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Self-improvement diagnostic failed.');
     } finally {
-      setIsEvolutionRunning(false);
+      setIsRunning(false);
     }
   };
 
+  const latest = cycles[0] || null;
+
   return (
-    <div className="h-full flex flex-col bg-slate-950 text-slate-100 p-6 overflow-y-auto">
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+    <div className="h-full flex flex-col bg-slate-950 text-slate-100 overflow-y-auto">
+      <div className="px-6 py-5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="p-2 rounded-xl bg-cyan-500/15 text-cyan-400 border border-cyan-500/30">
-              <Cpu className="w-6 h-6 animate-pulse" />
-            </span>
-            <h1 className="text-2xl font-black tracking-wider bg-gradient-to-r from-cyan-400 via-teal-300 to-indigo-400 bg-clip-text text-transparent">
-              Singularity Recursive Self-Improvement Engine
-            </h1>
+          <h1 className="text-xl font-semibold text-slate-50 tracking-tight">
+            Autonomous Codebase Diagnostics & Self-Improvement Engine
+          </h1>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            <span>Live workspace complexity & integrity scanner</span>
+            <span aria-hidden="true">·</span>
+            <span>SQLite persisted generations</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono">{merkleRoot ? `Merkle ${merkleRoot.slice(0, 14)}…` : 'Reading tree…'}</span>
           </div>
-          <p className="text-sm text-slate-400 mt-1">
-            Autonomous kernel mutation, automated benchmark verification, and recursive code optimization.
-          </p>
         </div>
-        <button
-          onClick={runEvolutionCycle}
-          disabled={isEvolutionRunning}
-          className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white font-bold flex items-center gap-2 shadow-lg shadow-cyan-500/20 disabled:opacity-50 transition-all cursor-pointer"
-        >
-          <RefreshCw className={`w-5 h-5 ${isEvolutionRunning ? 'animate-spin' : ''}`} />
-          {isEvolutionRunning ? 'Synthesizing Mutation...' : 'Trigger Evolution Cycle'}
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Evolution Generation</span>
-          <span className="text-3xl font-black text-cyan-400 mt-2">Gen {generationsCount}</span>
-          <span className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
-            <CheckCircle2 className="w-3.5 h-3.5" /> 100% Invariant Compliant
-          </span>
-        </div>
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Recursion Depth</span>
-          <span className="text-3xl font-black text-teal-400 mt-2">Depth {recursionDepth}</span>
-          <span className="text-xs text-slate-400 mt-1">Multi-layered AST Refactor</span>
-        </div>
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Mutations Crystallized</span>
-          <span className="text-3xl font-black text-indigo-400 mt-2">{mutations.length + 142}</span>
-          <span className="text-xs text-cyan-400 mt-1">Zero regression failure</span>
-        </div>
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Singularity Readiness</span>
-          <span className="text-3xl font-black text-amber-400 mt-2">99.98%</span>
-          <span className="text-xs text-amber-300 mt-1">Autonomous self-governing</span>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-slate-400 flex items-center gap-2">
+            Target Rank
+            <input
+              type="number"
+              min={1}
+              max={12}
+              value={depth}
+              onChange={(e) => setDepth(Math.max(1, Math.min(12, Number(e.target.value) || 1)))}
+              className="w-16 px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono tabular-nums text-slate-100"
+            />
+          </label>
+          <button
+            onClick={runDiagnosticCycle}
+            disabled={isRunning}
+            className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-50 cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRunning ? 'animate-spin' : ''}`} />
+            {isRunning ? 'Auditing Workspace…' : 'Run Diagnostic Cycle'}
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1">
-        <div className="lg:col-span-2 flex flex-col bg-slate-900/80 border border-slate-800 rounded-2xl p-5">
-          <h2 className="text-base font-bold text-slate-200 mb-4 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-cyan-400" /> Recent Autonomous Kernel Mutations
-          </h2>
-          <div className="space-y-3 flex-1 overflow-y-auto pr-1">
-            {mutations.map((m) => (
-              <div key={m.id} className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-cyan-500/40 transition-all">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                      {m.mutationType}
+      <div className="p-6 space-y-6 flex-1">
+        {errorMsg && (
+          <div className="p-3.5 rounded-lg bg-red-950/60 border border-red-800/70 text-red-200 text-xs flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Persisted Generation</div>
+            <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-cyan-400">
+              Gen {generation}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {dbStats?.sqliteActive ? 'SQLite WAL persisted' : 'Disk JSON persisted'}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Workspace Footprint</div>
+            <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-slate-100">
+              {latest ? latest.totalLines.toLocaleString() : totalFilesHashed.toLocaleString()}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {latest ? `lines across ${latest.filesScanned} source files` : 'files hashed in Merkle tree'}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Code Hygiene Signals</div>
+            <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-amber-400">
+              {latest ? latest.emptyCatchCount : '—'}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {latest ? `silent catch blocks · ${latest.todoCount} TODO/FIXME` : 'Run a cycle to measure'}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Kernel Axiom Ledger</div>
+            <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-emerald-400">
+              {dbStats ? dbStats.evolutiveAxioms : '—'}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {dbStats ? `${dbStats.agenticMemory} memories · ${dbStats.trajectories} trajectories` : 'Connecting to kernelDb…'}
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-slate-900/60 border border-slate-800 divide-y divide-slate-800/80">
+          <div className="p-4 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+              <Database className="w-4 h-4 text-cyan-400" />
+              Persisted Diagnostic Cycles & Target Analysis
+            </div>
+            <span className="text-xs font-mono tabular-nums text-slate-400">{cycles.length} recorded</span>
+          </div>
+
+          {cycles.length === 0 ? (
+            <div className="p-8 text-center space-y-2">
+              <div className="text-sm font-medium text-slate-200">No Diagnostic Cycles Recorded Yet</div>
+              <div className="text-xs text-slate-400">
+                Click "Run Diagnostic Cycle" to scan your live codebase, hash the largest target module, and record recommendations into SQLite.
+              </div>
+            </div>
+          ) : (
+            cycles.map((c) => (
+              <div key={c.id} className="p-4 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono font-semibold text-cyan-400">Gen {c.generation}</span>
+                    <span aria-hidden="true" className="text-slate-600">·</span>
+                    <span className="font-mono text-slate-200 flex items-center gap-1">
+                      <FileCode2 className="w-3.5 h-3.5 text-slate-400" />
+                      {c.targetFile}
                     </span>
-                    <span className="text-sm font-mono text-slate-300">{m.targetFile}</span>
+                    <span aria-hidden="true" className="text-slate-600">·</span>
+                    <span className="font-mono text-slate-400">SHA-256 {c.targetSha256}</span>
                   </div>
-                  <span className="text-xs text-slate-400">{m.timestamp}</span>
+                  <div className="flex items-center gap-2 font-mono text-slate-400">
+                    <span>{new Date(c.timestamp).toLocaleString()}</span>
+                    {c.status === 'VERIFIED' ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                    )}
+                  </div>
                 </div>
-                <pre className="text-xs font-mono bg-slate-900 p-2.5 rounded-lg text-emerald-400 whitespace-pre-wrap overflow-x-auto border border-slate-800">
-                  {m.diffPreview}
-                </pre>
-                <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-800/80 text-xs text-slate-400">
-                  <span>Confidence Score: <strong className="text-cyan-400">{(m.confidence * 100).toFixed(2)}%</strong></span>
-                  <span className="text-emerald-400 flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> {m.status}
-                  </span>
+                <div className="text-xs text-slate-300">{c.findingsSummary}</div>
+                <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-xs text-emerald-300/90 space-y-1">
+                  {c.recommendations.map((rec, i) => (
+                    <div key={i}>+ {rec}</div>
+                  ))}
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex flex-col bg-slate-900/80 border border-slate-800 rounded-2xl p-5">
-          <h2 className="text-base font-bold text-slate-200 mb-4 flex items-center gap-2">
-            <Terminal className="w-5 h-5 text-teal-400" /> Kernel Governor Logs
-          </h2>
-          <div className="flex-1 bg-slate-950 rounded-xl p-3 font-mono text-xs text-cyan-300/95 overflow-y-auto space-y-2 border border-slate-800">
-            {activeLog.map((log, idx) => (
-              <div key={idx} className="leading-relaxed border-b border-slate-900 pb-1">
-                {log}
-              </div>
-            ))}
-          </div>
+            ))
+          )}
         </div>
       </div>
     </div>

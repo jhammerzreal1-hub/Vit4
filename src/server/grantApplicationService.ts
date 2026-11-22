@@ -101,6 +101,41 @@ const DEFAULT_APPLICANT_PROFILE: GrantApplicantProfile = {
     'Open-source engineering, mainnet security auditing, decentralized RPC & GPU inference infrastructure, and autonomous on-chain public-goods tooling.'
 };
 
+const EMPTY_APPLICANT_PROFILE: GrantApplicantProfile = {
+  applicantName: '',
+  organizationName: '',
+  email: '',
+  website: '',
+  githubUrl: '',
+  zenodoDoi: '',
+  orcid: '',
+  projectTitle: '',
+  projectSummary: '',
+  requestedUseOfFunds: ''
+};
+
+const OWNER_GRANTS_SCOPE = '__owner__';
+const USER_WORKSPACES_DIR = path.join(DATA_DIR, 'user_workspaces');
+
+function normalizeGrantsScope(scopeId?: string): string {
+  const cleaned = String(scopeId || '').trim();
+  if (!cleaned || cleaned === OWNER_GRANTS_SCOPE) return OWNER_GRANTS_SCOPE;
+  const safe = cleaned.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 96);
+  if (!safe || safe === '.' || safe === '..') return OWNER_GRANTS_SCOPE;
+  return safe;
+}
+
+function getGrantsStoreFile(scopeKey: string): string {
+  if (scopeKey === OWNER_GRANTS_SCOPE) return GRANTS_STORE_FILE;
+  const userDir = path.resolve(USER_WORKSPACES_DIR, scopeKey);
+  const rootResolved = path.resolve(USER_WORKSPACES_DIR);
+  if (!userDir.startsWith(rootResolved + path.sep)) {
+    throw new Error('Invalid grants workspace scope');
+  }
+  fs.mkdirSync(userDir, { recursive: true, mode: 0o700 });
+  return path.join(userDir, 'grants_state.json');
+}
+
 const VERIFIED_NON_RECIPROCAL_GRANTS: Omit<NonReciprocalGrantOpportunity, 'discoveredAt'>[] = [
   {
     id: 'grant-nlnet-ngi0-commons',
@@ -340,67 +375,81 @@ function parseGeminiUpstreamError(err: any): {
   };
 }
 
-let cachedGrantsState: PersistedGrantsState | null = null;
+const cachedGrantsStateByScope = new Map<string, PersistedGrantsState>();
 
-function saveGrantsState(state: PersistedGrantsState) {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  const tmpFile = `${GRANTS_STORE_FILE}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), 'utf8');
-  fs.renameSync(tmpFile, GRANTS_STORE_FILE);
+function saveGrantsState(state: PersistedGrantsState, scopeId?: string) {
+  const scopeKey = normalizeGrantsScope(scopeId);
+  const storeFile = getGrantsStoreFile(scopeKey);
+  fs.mkdirSync(path.dirname(storeFile), { recursive: true });
+  const tmpFile = `${storeFile}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmpFile, storeFile);
+  cachedGrantsStateByScope.set(scopeKey, state);
 }
 
-export function loadGrantsState(): PersistedGrantsState {
-  if (cachedGrantsState) return cachedGrantsState;
+export function loadGrantsState(scopeId?: string): PersistedGrantsState {
+  const scopeKey = normalizeGrantsScope(scopeId);
+  const cached = cachedGrantsStateByScope.get(scopeKey);
+  if (cached) return cached;
 
+  const isOwner = scopeKey === OWNER_GRANTS_SCOPE;
+  const baseProfile = isOwner ? DEFAULT_APPLICANT_PROFILE : EMPTY_APPLICANT_PROFILE;
+  const storeFile = getGrantsStoreFile(scopeKey);
   const now = new Date().toISOString();
+
   try {
-    if (fs.existsSync(GRANTS_STORE_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(GRANTS_STORE_FILE, 'utf8')) as PersistedGrantsState;
+    if (fs.existsSync(storeFile)) {
+      const parsed = JSON.parse(fs.readFileSync(storeFile, 'utf8')) as PersistedGrantsState;
       if (parsed && Array.isArray(parsed.opportunities) && Array.isArray(parsed.applications)) {
-        cachedGrantsState = {
-          profile: { ...DEFAULT_APPLICANT_PROFILE, ...(parsed.profile || {}) },
+        const loaded: PersistedGrantsState = {
+          profile: { ...baseProfile, ...(parsed.profile || {}) },
           opportunities: parsed.opportunities,
           applications: parsed.applications,
           lastAutonomousScanAt: parsed.lastAutonomousScanAt || now,
           lastScanSummary: parsed.lastScanSummary || 'Loaded persisted non-reciprocal grant registry.',
           autoScanEnabled: parsed.autoScanEnabled !== false
         };
-        return cachedGrantsState;
+        cachedGrantsStateByScope.set(scopeKey, loaded);
+        return loaded;
       }
     }
   } catch {}
 
-  cachedGrantsState = {
-    profile: { ...DEFAULT_APPLICANT_PROFILE },
+  const fresh: PersistedGrantsState = {
+    profile: { ...baseProfile },
     opportunities: VERIFIED_NON_RECIPROCAL_GRANTS.map((g) => ({ ...g, discoveredAt: now })),
     applications: [],
     lastAutonomousScanAt: now,
-    lastScanSummary: 'Initialized with 12 verified 0%-equity non-reciprocal grant & credit programs. Ready for live Grants.gov + Google Search Grounding discovery.',
+    lastScanSummary: isOwner
+      ? 'Initialized with 12 verified 0%-equity non-reciprocal grant & credit programs. Ready for live Grants.gov + Google Search Grounding discovery.'
+      : 'Fresh personal Grant Hunter workspace initialized. Enter your own Applicant Profile details before drafting applications.',
     autoScanEnabled: true
   };
-  saveGrantsState(cachedGrantsState);
-  return cachedGrantsState;
+  saveGrantsState(fresh, scopeKey);
+  return fresh;
 }
 
-export function updateGrantApplicantProfile(patch: Partial<GrantApplicantProfile>): GrantApplicantProfile {
-  const state = loadGrantsState();
+export function updateGrantApplicantProfile(
+  patch: Partial<GrantApplicantProfile>,
+  scopeId?: string
+): GrantApplicantProfile {
+  const state = loadGrantsState(scopeId);
   state.profile = { ...state.profile, ...patch };
-  saveGrantsState(state);
+  saveGrantsState(state, scopeId);
   return state.profile;
 }
 
 export function updateGrantApplicationStatus(
   applicationId: string,
-  status: GeneratedGrantApplication['status']
+  status: GeneratedGrantApplication['status'],
+  scopeId?: string
 ): GeneratedGrantApplication | null {
-  const state = loadGrantsState();
+  const state = loadGrantsState(scopeId);
   const app = state.applications.find((a) => a.id === applicationId);
   if (!app) return null;
   app.status = status;
   app.updatedAt = new Date().toISOString();
-  saveGrantsState(state);
+  saveGrantsState(state, scopeId);
   return app;
 }
 
@@ -561,7 +610,7 @@ Return ONLY a valid JSON array (no markdown fences) of 6 real, currently active 
   return { grants: [], groundingUrls: [], warning: lastWarning };
 }
 
-export async function discoverRealNonReciprocalGrants(focusQuery?: string): Promise<{
+export async function discoverRealNonReciprocalGrants(focusQuery?: string, scopeId?: string): Promise<{
   success: boolean;
   discoveredNewCount: number;
   grantsGovCount: number;
@@ -570,7 +619,7 @@ export async function discoverRealNonReciprocalGrants(focusQuery?: string): Prom
   state: PersistedGrantsState;
   groundingUrls: Array<{ title: string; uri: string }>;
 }> {
-  const state = loadGrantsState();
+  const state = loadGrantsState(scopeId);
   const [govGrants, webDiscovery] = await Promise.all([
     fetchLiveGrantsGovOpportunities(focusQuery || 'artificial intelligence software cybersecurity'),
     discoverViaGeminiLiveSearch(focusQuery)
@@ -605,7 +654,7 @@ export async function discoverRealNonReciprocalGrants(focusQuery?: string): Prom
   state.opportunities = Array.from(byKey.values()).sort((a, b) => b.matchScore - a.matchScore);
   state.lastAutonomousScanAt = now;
   state.lastScanSummary = `Live autonomous grant scan completed: ${state.opportunities.length} total non-reciprocal opportunities (${govGrants.length} live Grants.gov federal listings, ${webDiscovery.grants.length} live Google Search Grounded programs, ${newCount} newly added).`;
-  saveGrantsState(state);
+  saveGrantsState(state, scopeId);
 
   return {
     success: true,
@@ -618,19 +667,22 @@ export async function discoverRealNonReciprocalGrants(focusQuery?: string): Prom
   };
 }
 
-export async function generateGrantApplicationPacket(grantId: string): Promise<{
+export async function generateGrantApplicationPacket(
+  grantId: string,
+  scopeId?: string
+): Promise<{
   success: boolean;
   statusCode?: number;
   application?: GeneratedGrantApplication;
   error?: string;
 }> {
-  const state = loadGrantsState();
+  const state = loadGrantsState(scopeId);
   const grant = state.opportunities.find((g) => g.id === grantId);
   if (!grant) {
     return { success: false, statusCode: 404, error: `Grant opportunity "${grantId}" not found.` };
   }
 
-  const walletState = loadWalletState();
+  const walletState = loadWalletState(scopeId);
   const agenticWallet =
     walletState.wallets.find((w) => w.role === 'AGENTIC_AUTONOMOUS') || walletState.wallets[0];
   const receivingWalletAddresses = {
@@ -752,7 +804,7 @@ Produce clean, persuasive Markdown with these exact sections:
     appRecord,
     ...state.applications.filter((existing) => existing.grantId !== grant.id)
   ].slice(0, 60);
-  saveGrantsState(state);
+  saveGrantsState(state, scopeId);
 
   return { success: true, application: appRecord };
 }
@@ -763,19 +815,22 @@ Produce clean, persuasive Markdown with these exact sections:
  * and real Agentic Treasury mainnet payout addresses with fill-in-the-blank
  * narrative prompts so users can prepare submissions without requiring AI quota.
  */
-export function buildStructuredProvenanceTemplate(grantId: string): {
+export function buildStructuredProvenanceTemplate(
+  grantId: string,
+  scopeId?: string
+): {
   success: boolean;
   statusCode?: number;
   application?: GeneratedGrantApplication;
   error?: string;
 } {
-  const state = loadGrantsState();
+  const state = loadGrantsState(scopeId);
   const grant = state.opportunities.find((g) => g.id === grantId);
   if (!grant) {
     return { success: false, statusCode: 404, error: `Grant opportunity "${grantId}" not found.` };
   }
 
-  const walletState = loadWalletState();
+  const walletState = loadWalletState(scopeId);
   const agenticWallet =
     walletState.wallets.find((w) => w.role === 'AGENTIC_AUTONOMOUS') || walletState.wallets[0];
   const receivingWalletAddresses = {
@@ -855,21 +910,28 @@ export function buildStructuredProvenanceTemplate(grantId: string): {
     appRecord,
     ...state.applications.filter((existing) => existing.grantId !== grant.id)
   ].slice(0, 60);
-  saveGrantsState(state);
+  saveGrantsState(state, scopeId);
 
   return { success: true, application: appRecord };
 }
 
-export function exportGrantApplicationToDesktop(applicationId: string): {
+export function exportGrantApplicationToDesktop(
+  applicationId: string,
+  scopeId?: string
+): {
   success: boolean;
   filePath?: string;
   error?: string;
 } {
-  const state = loadGrantsState();
+  const state = loadGrantsState(scopeId);
   const app = state.applications.find((a) => a.id === applicationId);
   if (!app) return { success: false, error: 'Application not found.' };
 
-  const desktopDir = path.join(process.cwd(), 'data', 'desktop');
+  const scopeKey = normalizeGrantsScope(scopeId);
+  const desktopDir =
+    scopeKey === OWNER_GRANTS_SCOPE
+      ? path.join(process.cwd(), 'data', 'desktop')
+      : path.join(USER_WORKSPACES_DIR, scopeKey, 'Desktop');
   fs.mkdirSync(desktopDir, { recursive: true });
   const safeName = app.grantTitle.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 48);
   const filePath = path.join(desktopDir, `Grant_Application_${safeName}.md`);

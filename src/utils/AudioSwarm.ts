@@ -10,17 +10,18 @@
  */
 
 /**
- * 🎙️ AUDIOSWARM MODULE (SINGLETON PATTERN + INFINITE-LENGTH STREAMING)
- * Enforces Mutex Lock on Audio Output, Prevents Chromium SpeechSynthesis GC Cutoffs,
- * Automatically Extracts Coherent Oral Narrative (No Code/Line-Number Noise),
- * and Streams Infinite-Length Responses Across Sentence-Aligned Chunks.
+ * 🎙️ AUDIOSWARM MODULE (SINGLETON STUDIO VOICE QUEUE — ZERO ROBOT FALLBACK)
+ * Routes all acoustic playback strictly through Sovereign Distilled Studio & Gemini 3.8 TTS
+ * (/api/tts -> 24kHz WAV) or pre-rendered audio buffers/URLs.
+ * Never reverts to legacy browser window.speechSynthesis robot voices.
  */
 
 import { dev_null } from './devNullLogger';
+import { apiFetch } from './authClient';
 import {
-  selectBestSystemVoice,
   extractCoherentOralNarrative,
-  splitIntoCoherentSpeechChunks
+  splitIntoCoherentSpeechChunks,
+  normalizeVoicePresetId
 } from './voiceEngine';
 
 export interface AudioRequest {
@@ -31,6 +32,7 @@ export interface AudioRequest {
   rate?: number;
   pitch?: number;
   personaId?: string;
+  accent?: 'en-US' | 'en-GB';
   appendToQueue?: boolean;
   skipSanitize?: boolean;
   onStart?: () => void;
@@ -41,20 +43,13 @@ export interface AudioRequest {
 export class AudioSwarm {
   private static instance: AudioSwarm | null = null;
 
-  // Mutex lock & FIFO chunk queue
   private isLocked: boolean = false;
   private queue: AudioRequest[] = [];
-
-  // Track current active sound instances (retained strongly to prevent Chromium GC mid-speech)
   private activeAudioElements: HTMLAudioElement[] = [];
   private activeAudioContexts: AudioContext[] = [];
-  private activeUtterances: SpeechSynthesisUtterance[] = [];
-  private lockedVoice: SpeechSynthesisVoice | null = null;
-  private lockedPersonaId: string | null = null;
-  private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
-  private chunkWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeFetchControllers: Set<AbortController> = new Set();
+  private generationEpoch: number = 0;
 
-  // State sync flag with Memory Swarm
   private isMemoryStateResolved: boolean = true;
 
   private constructor() {
@@ -64,9 +59,6 @@ export class AudioSwarm {
     }
   }
 
-  /**
-   * Singleton Accessor
-   */
   public static getInstance(): AudioSwarm {
     if (!AudioSwarm.instance) {
       AudioSwarm.instance = new AudioSwarm();
@@ -74,39 +66,36 @@ export class AudioSwarm {
     return AudioSwarm.instance;
   }
 
-  private clearTimers(): void {
-    if (this.keepAliveTimer) {
-      clearInterval(this.keepAliveTimer);
-      this.keepAliveTimer = null;
-    }
-    if (this.chunkWatchdogTimer) {
-      clearTimeout(this.chunkWatchdogTimer);
-      this.chunkWatchdogTimer = null;
-    }
-  }
-
   /**
-   * Hard stop and destroy all existing audio instances and queued chunks
+   * Immediately halts all playback, cancels any in-flight studio TTS synthesis, and clears queued chunks.
    */
   public stopAll(): void {
     if (typeof window === 'undefined') return;
 
-    this.clearTimers();
+    this.generationEpoch += 1;
     this.queue = [];
 
-    // 1. Stop Speech Synthesis
+    // 1. Abort all in-flight /api/tts fetches
+    for (const ctrl of Array.from(this.activeFetchControllers)) {
+      try {
+        ctrl.abort();
+      } catch (e) {
+        dev_null('AbortController abort note:', e);
+      }
+    }
+    this.activeFetchControllers.clear();
+
+    // 2. Hard-stop any browser speechSynthesis that another subsystem might have started
     try {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
       }
-    } catch (e) {
-      dev_null('SpeechSynthesis cancel note:', e);
-    }
-    this.activeUtterances = [];
+    } catch {}
 
-    // 2. Stop & pause HTMLAudioElements
+    // 3. Stop & pause HTMLAudioElements
     for (const audio of this.activeAudioElements) {
       try {
+        audio.onplay = null;
         audio.onended = null;
         audio.onerror = null;
         audio.pause();
@@ -119,7 +108,7 @@ export class AudioSwarm {
     }
     this.activeAudioElements = [];
 
-    // 3. Close AudioContexts
+    // 4. Close AudioContexts
     const contextsToClose = this.activeAudioContexts.splice(0, this.activeAudioContexts.length);
     for (const ctx of contextsToClose) {
       try {
@@ -134,16 +123,10 @@ export class AudioSwarm {
     this.isLocked = false;
   }
 
-  /**
-   * Alias for stopAll and complete cleanup
-   */
   public destroyAll(): void {
     this.stopAll();
   }
 
-  /**
-   * State-Sync Verification: Flag memory state resolution
-   */
   public setMemoryStateResolved(resolved: boolean): void {
     this.isMemoryStateResolved = resolved;
     if (resolved) {
@@ -151,49 +134,42 @@ export class AudioSwarm {
     }
   }
 
-  /**
-   * Convenience speak helper
-   */
   public speak(params: {
     text: string;
     personaId?: string;
+    accent?: 'en-US' | 'en-GB';
     chunkIndex?: number;
     rate?: number;
     pitch?: number;
     onStart?: () => void;
     onEnd?: () => void;
+    onError?: (err: any) => void;
   }): void {
     this.enqueue({
       id: `speak-${Date.now()}-${params.chunkIndex ?? 0}`,
       text: params.text,
-      personaId: params.personaId || 'DEFAULT',
+      personaId: normalizeVoicePresetId(params.personaId),
+      accent: params.accent,
       rate: params.rate,
       pitch: params.pitch,
       appendToQueue: (params.chunkIndex ?? 0) > 0,
       onStart: params.onStart,
-      onEnd: params.onEnd
+      onEnd: params.onEnd,
+      onError: params.onError
     });
   }
 
-  /**
-   * Public API to dispatch audio play request.
-   * Automatically extracts coherent oral narrative and splits arbitrarily long text
-   * into infinite-length sequential sentence chunks.
-   */
   public enqueue(request: AudioRequest): void {
-    // 1. Unless explicitly appending a subsequent stream chunk, stop previous playback
     if (!request.appendToQueue) {
       this.stopAll();
     }
 
-    // 2. If this is an audioUrl playback request, push directly to queue
     if (request.audioUrl) {
       this.queue.push(request);
       this.processQueue();
       return;
     }
 
-    // 3. For text speech synthesis, sanitize for oral coherence and split into infinite-length chunks
     if (request.text) {
       const oralNarrative = request.skipSanitize
         ? request.text.trim()
@@ -204,20 +180,13 @@ export class AudioSwarm {
         return;
       }
 
-      const chunks = splitIntoCoherentSpeechChunks(oralNarrative, 155);
+      const chunks = splitIntoCoherentSpeechChunks(oralNarrative, 420);
       if (chunks.length === 0) {
         if (request.onEnd) request.onEnd();
         return;
       }
 
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        const voices = window.speechSynthesis.getVoices();
-        const personaKey = request.personaId || 'DEFAULT';
-        if (voices.length > 0 && (!this.lockedVoice || this.lockedPersonaId !== personaKey)) {
-          this.lockedVoice = selectBestSystemVoice(voices, request.personaId, undefined, 'en-US');
-          this.lockedPersonaId = personaKey;
-        }
-      }
+      const normalizedVoice = normalizeVoicePresetId(request.personaId);
 
       chunks.forEach((chunkText, idx) => {
         const isFirst = idx === 0;
@@ -227,7 +196,8 @@ export class AudioSwarm {
           text: chunkText,
           rate: request.rate,
           pitch: request.pitch,
-          personaId: request.personaId,
+          personaId: normalizedVoice,
+          accent: request.accent,
           skipSanitize: true,
           appendToQueue: true,
           onStart: isFirst ? request.onStart : undefined,
@@ -240,11 +210,97 @@ export class AudioSwarm {
     }
   }
 
-  /**
-   * Process single-instance FIFO queue with seamless multi-chunk continuation
-   */
+  private async playAudioUrl(
+    audioUrl: string,
+    request: AudioRequest,
+    epoch: number
+  ): Promise<void> {
+    if (epoch !== this.generationEpoch) return;
+
+    await new Promise<void>((resolve) => {
+      const audio = new Audio(audioUrl);
+      if (request.rate) {
+        audio.playbackRate = Math.max(0.65, Math.min(1.85, request.rate));
+      }
+      this.activeAudioElements.push(audio);
+
+      let settled = false;
+      const finish = (err?: any) => {
+        if (settled) return;
+        settled = true;
+        audio.onplay = null;
+        audio.onended = null;
+        audio.onerror = null;
+        this.activeAudioElements = this.activeAudioElements.filter((a) => a !== audio);
+        if (err && request.onError && epoch === this.generationEpoch) {
+          request.onError(err);
+        }
+        resolve();
+      };
+
+      audio.onplay = () => {
+        if (epoch === this.generationEpoch && request.onStart) {
+          request.onStart();
+        }
+      };
+      audio.onended = () => finish();
+      audio.onerror = (err) => {
+        dev_null('[AudioSwarm] Studio audio playback error:', err);
+        finish(err);
+      };
+
+      audio.play().catch((playErr) => {
+        dev_null('[AudioSwarm] Audio play() rejected:', playErr);
+        finish(playErr);
+      });
+    });
+  }
+
+  private async synthesizeStudioUrl(
+    text: string,
+    voiceId: string,
+    accent: 'en-US' | 'en-GB' | undefined,
+    epoch: number
+  ): Promise<string | null> {
+    if (epoch !== this.generationEpoch) return null;
+    const ctrl = new AbortController();
+    this.activeFetchControllers.add(ctrl);
+    try {
+      const res = await apiFetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          voice: normalizeVoicePresetId(voiceId),
+          accent: accent || 'en-US',
+          lockedEngine: 'gemini'
+        }),
+        signal: ctrl.signal
+      });
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => null);
+      if (epoch !== this.generationEpoch) return null;
+      if (data?.success && typeof data.audioUrl === 'string' && data.audioUrl.startsWith('data:audio/')) {
+        return data.audioUrl;
+      }
+      return null;
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') {
+        dev_null('[AudioSwarm] Studio TTS fetch error:', e);
+      }
+      return null;
+    } finally {
+      this.activeFetchControllers.delete(ctrl);
+    }
+  }
+
   private async processQueue(): Promise<void> {
-    if (this.isLocked || !this.isMemoryStateResolved || this.queue.length === 0 || typeof window === 'undefined') {
+    if (
+      this.isLocked ||
+      !this.isMemoryStateResolved ||
+      this.queue.length === 0 ||
+      typeof window === 'undefined'
+    ) {
       return;
     }
 
@@ -252,157 +308,38 @@ export class AudioSwarm {
     if (!request) return;
 
     this.isLocked = true;
+    const epoch = this.generationEpoch;
 
     try {
       if (request.audioUrl) {
-        const audio = new Audio(request.audioUrl);
-        if (request.rate) audio.playbackRate = Math.max(0.5, Math.min(2.0, request.rate));
-        this.activeAudioElements.push(audio);
-
-        audio.onplay = () => {
-          if (request.onStart) request.onStart();
-        };
-
-        let settled = false;
-        const releaseAndNext = () => {
-          if (settled) return;
-          settled = true;
-          this.activeAudioElements = this.activeAudioElements.filter((a) => a !== audio);
-          this.isLocked = false;
-          if (request.onEnd) request.onEnd();
-          this.processQueue();
-        };
-
-        audio.onended = releaseAndNext;
-        audio.onerror = (err) => {
-          dev_null('[AudioSwarm] Audio element error, falling back to speechSynthesis if text available:', err);
-          this.activeAudioElements = this.activeAudioElements.filter((a) => a !== audio);
-          this.isLocked = false;
-          if (request.text) {
-            // Re-enqueue as Web Speech fallback for this chunk
-            this.queue.unshift({
-              ...request,
-              audioUrl: undefined
-            });
-            this.processQueue();
-            return;
-          }
-          if (request.onError) request.onError(err);
-          this.processQueue();
-        };
-
-        await audio.play().catch((e) => {
-          dev_null('[AudioSwarm] Play error, routing to speechSynthesis fallback:', e);
-          if (request.text) {
-            settled = true;
-            this.activeAudioElements = this.activeAudioElements.filter((a) => a !== audio);
-            this.isLocked = false;
-            this.queue.unshift({
-              ...request,
-              audioUrl: undefined
-            });
-            this.processQueue();
-          } else {
-            releaseAndNext();
-          }
-        });
+        await this.playAudioUrl(request.audioUrl, request, epoch);
       } else if (request.text) {
-        const synth = window.speechSynthesis;
-        if (!synth) {
-          this.isLocked = false;
-          if (request.onEnd) request.onEnd();
-          this.processQueue();
-          return;
-        }
-
-        if (synth.paused) {
-          synth.resume();
-        }
-
-        const utterance = new SpeechSynthesisUtterance(request.text);
-        utterance.rate = Math.max(0.75, Math.min(1.6, request.rate || 1.0));
-        utterance.pitch = Math.max(0.5, Math.min(1.8, request.pitch || 1.0));
-        utterance.lang = 'en-US';
-
-        const voices = synth.getVoices();
-        const personaKey = request.personaId || 'DEFAULT';
-        if (!this.lockedVoice || this.lockedPersonaId !== personaKey) {
-          this.lockedVoice = selectBestSystemVoice(voices, request.personaId, undefined, 'en-US');
-          this.lockedPersonaId = personaKey;
-        }
-        if (!this.lockedVoice) {
-          // Never allow browser default to fall back to a foreign or foreign-accented voice
-          this.isLocked = false;
-          if (request.onEnd) request.onEnd();
-          this.processQueue();
-          return;
-        }
-        utterance.voice = this.lockedVoice;
-        const vLang = (this.lockedVoice.lang || 'en-US').replace('_', '-');
-        utterance.lang = /^en-(US|GB|CA|AU|NZ|IE)$/i.test(vLang) ? vLang : 'en-US';
-
-        // Strongly retain utterance reference in class array so Chromium GC never collects it mid-sentence
-        this.activeUtterances.push(utterance);
-
-        let settled = false;
-        const releaseAndNext = () => {
-          if (settled) return;
-          settled = true;
-          this.clearTimers();
-          this.activeUtterances = this.activeUtterances.filter((u) => u !== utterance);
-          this.isLocked = false;
-          if (request.onEnd) request.onEnd();
-          this.processQueue();
-        };
-
-        utterance.onstart = () => {
-          if (request.onStart) request.onStart();
-        };
-
-        utterance.onend = releaseAndNext;
-        utterance.onerror = (err: any) => {
-          // Ignore 'interrupted' or 'canceled' when stopAll was intentionally invoked
-          if (err?.error === 'interrupted' || err?.error === 'canceled') {
-            return;
+        const audioUrl = await this.synthesizeStudioUrl(
+          request.text,
+          request.personaId || 'distilled-core-01',
+          request.accent,
+          epoch
+        );
+        if (epoch !== this.generationEpoch) return;
+        if (audioUrl) {
+          await this.playAudioUrl(audioUrl, request, epoch);
+        } else {
+          if (request.onError) {
+            request.onError(new Error('Studio voice engine unavailable (robot fallback disabled).'));
           }
-          dev_null('[AudioSwarm] SpeechSynthesis chunk notice:', err);
-          releaseAndNext();
-        };
-
-        // Chromium keep-alive heartbeat (prevents the 14-second Web Speech freeze on long sessions)
-        this.keepAliveTimer = setInterval(() => {
-          try {
-            if (synth.speaking && synth.paused) {
-              synth.resume();
-            }
-          } catch {}
-        }, 4000);
-
-        // Per-chunk watchdog timer (estimates max speaking duration + buffer so stuck browser drivers never hang the queue)
-        const estimatedMs = Math.max(8000, Math.ceil((request.text.length / 10) * 1000) + 6000);
-        this.chunkWatchdogTimer = setTimeout(() => {
-          if (!settled && !synth.speaking) {
-            releaseAndNext();
-          }
-        }, estimatedMs);
-
-        setTimeout(() => {
-          try {
-            if (synth.paused) synth.resume();
-            synth.speak(utterance);
-          } catch (speakErr) {
-            dev_null('[AudioSwarm] synth.speak error:', speakErr);
-            releaseAndNext();
-          }
-        }, 25);
-      } else {
-        this.isLocked = false;
-        this.processQueue();
+        }
       }
     } catch (e) {
       dev_null('[AudioSwarm] Execution exception:', e);
-      this.isLocked = false;
-      this.processQueue();
+      if (epoch === this.generationEpoch && request.onError) {
+        request.onError(e);
+      }
+    } finally {
+      if (epoch === this.generationEpoch) {
+        this.isLocked = false;
+        if (request.onEnd) request.onEnd();
+        this.processQueue();
+      }
     }
   }
 

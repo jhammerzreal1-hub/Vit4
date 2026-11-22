@@ -23,11 +23,11 @@ if [ ! -f "$INSTALL_DIR/bin/llama-server" ]; then
   rm -rf llama.cpp
 fi
 
-# Download lightweight model
-MODEL_FILE="$INSTALL_DIR/models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+# Download lightweight unrestricted abliterated OS coordinator model
+MODEL_FILE="$INSTALL_DIR/models/Qwen2.5-Coder-0.5B-Instruct-abliterated-Q4_K_M.gguf"
 if [ ! -f "$MODEL_FILE" ]; then
-  echo -e "${CYAN}Downloading lightweight Qwen 2.5 (0.5B Instruct) GGUF...${NC}"
-  curl -L -o "$MODEL_FILE" "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf" || true
+  echo -e "${CYAN}Downloading unrestricted Qwen 2.5 Coder (0.5B Abliterated) GGUF...${NC}"
+  curl -L -o "$MODEL_FILE" "https://huggingface.co/mradermacher/Qwen2.5-Coder-0.5B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-Coder-0.5B-Instruct-abliterated.Q4_K_M.gguf" || true
 fi
 
 echo -e "${EMERALD}✓ Real offline llama.cpp engine configured!${NC}"

@@ -13,10 +13,40 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { collectLiveMacroTelemetry } from './macroTelemetryService';
+import { userSecretsVault } from './userSecretsVault';
 
 const WORKSPACE_ROOT = process.cwd();
 const DATA_DIR = path.join(WORKSPACE_ROOT, 'data');
 const WALLETS_STORE_FILE = path.join(DATA_DIR, 'sovereign_crypto_wallets.enc.json');
+const OWNER_SCOPE = '__owner__';
+
+function normalizeWalletScope(scopeId?: string): string {
+  const trimmed = (scopeId || '').trim();
+  if (!trimmed || trimmed === OWNER_SCOPE) return OWNER_SCOPE;
+  const safe = trimmed.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+  return safe || OWNER_SCOPE;
+}
+
+function isOwnerScope(scopeId?: string): boolean {
+  return normalizeWalletScope(scopeId) === OWNER_SCOPE;
+}
+
+function getWalletStoreFile(scopeId?: string): string {
+  const scope = normalizeWalletScope(scopeId);
+  if (scope === OWNER_SCOPE) return WALLETS_STORE_FILE;
+  const userDir = path.join(DATA_DIR, 'user_workspaces', scope);
+  if (!fs.existsSync(userDir)) {
+    fs.mkdirSync(userDir, { recursive: true });
+  }
+  return path.join(userDir, 'crypto_wallets.enc.json');
+}
+
+function getScopedEnvOrSecret(scopeId: string | undefined, key: string): string {
+  if (isOwnerScope(scopeId)) {
+    return (process.env[key] || '').trim();
+  }
+  return (userSecretsVault.getSecret(normalizeWalletScope(scopeId), key) || '').trim();
+}
 
 // ============================================================================
 // PURE STANDARDS-COMPLIANT CRYPTOGRAPHIC PRIMITIVES
@@ -491,11 +521,19 @@ function getMasterKey32(): Buffer {
   return crypto.createHash('sha256').update(secretSeed).digest();
 }
 
-function saveEncryptedWalletState(state: DecryptedWalletState): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+function getScopeKey32(scopeId?: string): Buffer {
+  const scope = normalizeWalletScope(scopeId);
+  if (scope === OWNER_SCOPE) return getMasterKey32();
+  return crypto.createHmac('sha256', getMasterKey32()).update(`user-wallet-vault:${scope}`).digest();
+}
+
+function saveEncryptedWalletState(state: DecryptedWalletState, scopeId?: string): void {
+  const storeFile = getWalletStoreFile(scopeId);
+  const storeDir = path.dirname(storeFile);
+  if (!fs.existsSync(storeDir)) {
+    fs.mkdirSync(storeDir, { recursive: true });
   }
-  const key = getMasterKey32();
+  const key = getScopeKey32(scopeId);
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const plaintext = Buffer.from(JSON.stringify(state), 'utf8');
@@ -508,9 +546,9 @@ function saveEncryptedWalletState(state: DecryptedWalletState): void {
     ciphertextHex: encrypted.toString('hex'),
     updatedAt: new Date().toISOString()
   };
-  const tmpFile = `${WALLETS_STORE_FILE}.${process.pid}.${Date.now()}.tmp`;
+  const tmpFile = `${storeFile}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(envelope, null, 2), 'utf8');
-  fs.renameSync(tmpFile, WALLETS_STORE_FILE);
+  fs.renameSync(tmpFile, storeFile);
 }
 
 function buildZeroRealHoldings(role: 'PERSONAL_INVESTOR' | 'AGENTIC_AUTONOMOUS', now: string): PortfolioHolding[] {
@@ -670,7 +708,7 @@ function buildFreshWallet(
   };
 }
 
-let cachedWalletState: DecryptedWalletState | null = null;
+const cachedWalletStates = new Map<string, DecryptedWalletState>();
 
 function sanitizeWalletToStrictRealOnChain(w: SovereignCryptoWallet): SovereignCryptoWallet {
   const now = new Date().toISOString();
@@ -700,13 +738,16 @@ function sanitizeWalletToStrictRealOnChain(w: SovereignCryptoWallet): SovereignC
   };
 }
 
-export function loadWalletState(): DecryptedWalletState {
-  if (cachedWalletState) return cachedWalletState;
+export function loadWalletState(scopeId?: string): DecryptedWalletState {
+  const scope = normalizeWalletScope(scopeId);
+  const existingCached = cachedWalletStates.get(scope);
+  if (existingCached) return existingCached;
 
+  const storeFile = getWalletStoreFile(scope);
   try {
-    if (fs.existsSync(WALLETS_STORE_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(WALLETS_STORE_FILE, 'utf8')) as PersistedWalletVault;
-      const key = getMasterKey32();
+    if (fs.existsSync(storeFile)) {
+      const raw = JSON.parse(fs.readFileSync(storeFile, 'utf8')) as PersistedWalletVault;
+      const key = getScopeKey32(scope);
       const iv = Buffer.from(raw.ivHex, 'hex');
       const authTag = Buffer.from(raw.authTagHex, 'hex');
       const ciphertext = Buffer.from(raw.ciphertextHex, 'hex');
@@ -714,7 +755,11 @@ export function loadWalletState(): DecryptedWalletState {
       decipher.setAuthTag(authTag);
       const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
       const parsed = JSON.parse(decrypted) as DecryptedWalletState;
-      if (Array.isArray(parsed.wallets) && parsed.wallets.length >= 2) {
+      const validArray =
+        scope === OWNER_SCOPE
+          ? Array.isArray(parsed.wallets) && parsed.wallets.length >= 2
+          : Array.isArray(parsed.wallets);
+      if (validArray) {
         // Automatic 1-time migration: purge any legacy simulated paper balances & fake trades while keeping real cryptographic keypairs intact
         if (parsed.schemaMode !== 'REAL_ONCHAIN_PRODUCTION_V1') {
           const migrated: DecryptedWalletState = {
@@ -723,17 +768,31 @@ export function loadWalletState(): DecryptedWalletState {
             transactions: [],
             beneficiaries: Array.isArray(parsed.beneficiaries) ? parsed.beneficiaries : []
           };
-          cachedWalletState = migrated;
-          saveEncryptedWalletState(migrated);
+          cachedWalletStates.set(scope, migrated);
+          saveEncryptedWalletState(migrated, scope);
           return migrated;
         }
-        cachedWalletState = parsed;
+        if (!Array.isArray(parsed.beneficiaries)) parsed.beneficiaries = [];
+        if (!Array.isArray(parsed.transactions)) parsed.transactions = [];
+        cachedWalletStates.set(scope, parsed);
         return parsed;
       }
     }
   } catch {}
 
-  // Create real self-custody Personal Vault + Autonomous Agentic Treasury starting strictly at $0.00 / 0 on-chain
+  // Non-owner accounts ALWAYS start with a 100% fresh empty personal wallet vault (zero owner addresses, zero seeds)
+  if (scope !== OWNER_SCOPE) {
+    const emptyUserState: DecryptedWalletState = {
+      schemaMode: 'REAL_ONCHAIN_PRODUCTION_V1',
+      wallets: [],
+      transactions: [],
+      beneficiaries: []
+    };
+    cachedWalletStates.set(scope, emptyUserState);
+    return emptyUserState;
+  }
+
+  // Owner (Executive Architect): Create real self-custody Personal Vault + Autonomous Agentic Treasury starting strictly at $0.00 / 0 on-chain
   const personalWallet = buildFreshWallet(
     'personal-sovereign-vault',
     'Personal Investor Multi-Chain Vault (JHammerZ)',
@@ -747,26 +806,28 @@ export function loadWalletState(): DecryptedWalletState {
     0
   );
 
-  cachedWalletState = {
+  const ownerState: DecryptedWalletState = {
     schemaMode: 'REAL_ONCHAIN_PRODUCTION_V1',
     wallets: [personalWallet, agenticWallet],
     transactions: [],
     beneficiaries: []
   };
-  saveEncryptedWalletState(cachedWalletState);
-  return cachedWalletState;
+  cachedWalletStates.set(scope, ownerState);
+  saveEncryptedWalletState(ownerState, scope);
+  return ownerState;
 }
 
-export async function purgeSimulatedDataAndResyncReal(): Promise<{
+export async function purgeSimulatedDataAndResyncReal(scopeId?: string): Promise<{
   success: boolean;
   message: string;
 }> {
-  const state = loadWalletState();
+  const scope = normalizeWalletScope(scopeId);
+  const state = loadWalletState(scope);
   state.schemaMode = 'REAL_ONCHAIN_PRODUCTION_V1';
   state.wallets = state.wallets.map(sanitizeWalletToStrictRealOnChain);
   state.transactions = [];
-  saveEncryptedWalletState(state);
-  await syncLiveOnChainAndMarketPrices(true);
+  saveEncryptedWalletState(state, scope);
+  await syncLiveOnChainAndMarketPrices(true, scope);
   return {
     success: true,
     message: 'Purged all simulated balances and history. All vaults are now strictly synced 100% to live mainnet blockchain balances.'
@@ -911,7 +972,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 3500
   }
 }
 
-let inFlightRpcPoll: Promise<void> | null = null;
+const inFlightRpcPolls = new Map<string, Promise<void>>();
 let lastKnownLivePrices: Record<
   string,
   { price: number; changePct: number; forecast5mPct: number; conformal99Pct: number }
@@ -923,9 +984,12 @@ let lastKnownLivePrices: Record<
   DOGE: { price: 0.315, changePct: 0, forecast5mPct: 0.04, conformal99Pct: 99.8 }
 };
 
-async function pollOnChainRpcsInBackground(state: DecryptedWalletState): Promise<void> {
-  if (inFlightRpcPoll) return inFlightRpcPoll;
-  inFlightRpcPoll = (async () => {
+async function pollOnChainRpcsInBackground(state: DecryptedWalletState, scopeId?: string): Promise<void> {
+  const scope = normalizeWalletScope(scopeId);
+  if (state.wallets.length === 0) return;
+  const existing = inFlightRpcPolls.get(scope);
+  if (existing) return existing;
+  const pollPromise = (async () => {
     const now = new Date().toISOString();
     const isHex = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-f]+$/i.test(v);
 
@@ -1057,22 +1121,24 @@ async function pollOnChainRpcsInBackground(state: DecryptedWalletState): Promise
       })
     );
     try {
-      saveEncryptedWalletState(state);
+      saveEncryptedWalletState(state, scope);
     } catch {}
   })().finally(() => {
-    inFlightRpcPoll = null;
+    inFlightRpcPolls.delete(scope);
   });
 
-  return inFlightRpcPoll;
+  inFlightRpcPolls.set(scope, pollPromise);
+  return pollPromise;
 }
 
-export async function syncLiveOnChainAndMarketPrices(forceRpcPoll = false): Promise<{
+export async function syncLiveOnChainAndMarketPrices(forceRpcPoll = false, scopeId?: string): Promise<{
   wallets: SovereignCryptoWallet[];
   transactions: SignedCryptoTransaction[];
   beneficiaries: SavedPayoutBeneficiary[];
   livePrices: Record<string, { price: number; changePct: number; forecast5mPct: number; conformal99Pct: number }>;
 }> {
-  const state = loadWalletState();
+  const scope = normalizeWalletScope(scopeId);
+  const state = loadWalletState(scope);
   if (!Array.isArray(state.beneficiaries)) state.beneficiaries = [];
 
   // 1. Pull live crypto prices & 5-minute Laplace-14 (h=2s) forecasts with timeout fallback
@@ -1116,13 +1182,15 @@ export async function syncLiveOnChainAndMarketPrices(forceRpcPoll = false): Prom
   const elapsedSincePoll =
     Date.now() - new Date(primaryWallet?.onChainLiveTelemetry?.lastRpcPollAt || 0).getTime();
 
-  if (forceRpcPoll) {
-    await Promise.race([
-      pollOnChainRpcsInBackground(state),
-      new Promise<void>((resolve) => setTimeout(resolve, 4200))
-    ]);
-  } else if (elapsedSincePoll > 30000) {
-    pollOnChainRpcsInBackground(state).catch(() => {});
+  if (state.wallets.length > 0) {
+    if (forceRpcPoll) {
+      await Promise.race([
+        pollOnChainRpcsInBackground(state, scope),
+        new Promise<void>((resolve) => setTimeout(resolve, 4200))
+      ]);
+    } else if (elapsedSincePoll > 30000) {
+      pollOnChainRpcsInBackground(state, scope).catch(() => {});
+    }
   }
 
   // 3. Strictly compute mark-to-market valuations ONLY from live verified on-chain quantities
@@ -1163,21 +1231,25 @@ export async function syncLiveOnChainAndMarketPrices(forceRpcPoll = false): Prom
 // PERSONAL & AGENTIC TRADE / INVESTMENT / TRANSFER EXECUTION
 // ============================================================================
 
-export async function executeWalletTradeOrTransfer(params: {
-  walletId: string;
-  action: 'BUY' | 'SELL' | 'ONCHAIN_TRANSFER';
-  symbol: 'BTC' | 'ETH' | 'SOL' | 'XRP' | 'DOGE';
-  amountUsd?: number;
-  quantityNative?: number;
-  toAddress?: string;
-  triggerReason?: string;
-}): Promise<{
+export async function executeWalletTradeOrTransfer(
+  params: {
+    walletId: string;
+    action: 'BUY' | 'SELL' | 'ONCHAIN_TRANSFER';
+    symbol: 'BTC' | 'ETH' | 'SOL' | 'XRP' | 'DOGE';
+    amountUsd?: number;
+    quantityNative?: number;
+    toAddress?: string;
+    triggerReason?: string;
+  },
+  scopeId?: string
+): Promise<{
   success: boolean;
   message: string;
   transaction?: SignedCryptoTransaction;
   wallet?: SovereignCryptoWallet;
 }> {
-  const { wallets, transactions, livePrices } = await syncLiveOnChainAndMarketPrices(false);
+  const scope = normalizeWalletScope(scopeId);
+  const { wallets, livePrices } = await syncLiveOnChainAndMarketPrices(false, scope);
   const wallet = wallets.find((w) => w.id === params.walletId);
   if (!wallet) {
     return { success: false, message: `Wallet ${params.walletId} not found.` };
@@ -1196,13 +1268,6 @@ export async function executeWalletTradeOrTransfer(params: {
       : params.symbol === 'ETH'
       ? 'ETHEREUM'
       : 'SOLANA';
-
-  const fromAddr =
-    chain === 'BITCOIN'
-      ? wallet.addresses.bitcoinSegwit
-      : chain === 'ETHEREUM'
-      ? wallet.addresses.ethereumEip55
-      : wallet.addresses.solanaBase58;
 
   let holding = wallet.holdings.find((h) => h.symbol === params.symbol);
   if (!holding) {
@@ -1223,9 +1288,9 @@ export async function executeWalletTradeOrTransfer(params: {
   }
 
   const hasLiveExchangeConnector = Boolean(
-    process.env.CDP_API_KEY_NAME ||
-      process.env.COINBASE_API_KEY ||
-      process.env.KRAKEN_API_KEY
+    getScopedEnvOrSecret(scope, 'CDP_API_KEY_NAME') ||
+      getScopedEnvOrSecret(scope, 'COINBASE_API_KEY') ||
+      getScopedEnvOrSecret(scope, 'KRAKEN_API_KEY')
   );
 
   if (wallet.watchOnly) {
@@ -1306,17 +1371,23 @@ export async function executeWalletTradeOrTransfer(params: {
 // AUTONOMOUS AGENTIC 5-MINUTE EARLY-WARNING EXECUTION CYCLE (100% REAL ONLY)
 // ============================================================================
 
-export async function runAutonomousAgenticCryptoCycle(): Promise<{
+export async function runAutonomousAgenticCryptoCycle(scopeId?: string): Promise<{
   success: boolean;
   executedCount: number;
   actionsLog: string[];
   transactionsAdded: SignedCryptoTransaction[];
   agenticWallet?: SovereignCryptoWallet;
 }> {
-  const { wallets } = await syncLiveOnChainAndMarketPrices(true);
+  const scope = normalizeWalletScope(scopeId);
+  const { wallets } = await syncLiveOnChainAndMarketPrices(true, scope);
   const agenticWallet = wallets.find((w) => w.role === 'AGENTIC_AUTONOMOUS');
   if (!agenticWallet || !agenticWallet.agenticPolicy) {
-    return { success: false, executedCount: 0, actionsLog: ['Agentic wallet not initialized.'], transactionsAdded: [] };
+    return {
+      success: false,
+      executedCount: 0,
+      actionsLog: ['No Agentic Autonomous wallet created in your personal vault yet. Create one first to enable autonomous cycles.'],
+      transactionsAdded: []
+    };
   }
 
   const macroSnap = await collectLiveMacroTelemetry(false);
@@ -1332,12 +1403,12 @@ export async function runAutonomousAgenticCryptoCycle(): Promise<{
     agenticWallet.holdings.reduce((sum, h) => sum + h.marketValueUsd, 0);
 
   const hasLiveVenue = Boolean(
-    process.env.CDP_API_KEY_NAME ||
-      process.env.COINBASE_API_KEY ||
-      process.env.KRAKEN_API_KEY
+    getScopedEnvOrSecret(scope, 'CDP_API_KEY_NAME') ||
+      getScopedEnvOrSecret(scope, 'COINBASE_API_KEY') ||
+      getScopedEnvOrSecret(scope, 'KRAKEN_API_KEY')
   );
 
-  saveEncryptedWalletState(loadWalletState());
+  saveEncryptedWalletState(loadWalletState(scope), scope);
 
   if (totalRealOnChainUsd <= 0) {
     return {
@@ -1345,7 +1416,7 @@ export async function runAutonomousAgenticCryptoCycle(): Promise<{
       executedCount: 0,
       actionsLog: [
         `[100% REAL MODE · STANDBY] Scanned ${cryptoAlerts.length} live 5-minute conformal signals. Agentic Treasury has $0.00 real verified on-chain funds (0 BTC, 0 ETH, 0 SOL).`,
-        'Zero simulated trades executed. Fund the Agentic Treasury address (via Agentic Grants, Coinbase CDP AgentKit, or on-chain transfer) to activate live autonomous trading.'
+        'Zero simulated trades executed. Fund your Agentic Treasury address (via Agentic Grants, Coinbase CDP AgentKit, or on-chain transfer) to activate live autonomous trading.'
       ],
       transactionsAdded: [],
       agenticWallet
@@ -1358,7 +1429,7 @@ export async function runAutonomousAgenticCryptoCycle(): Promise<{
       executedCount: 0,
       actionsLog: [
         `[100% REAL MODE · REAL BALANCE DETECTED: $${totalRealOnChainUsd.toFixed(2)}] Scanned ${cryptoAlerts.length} live 5-minute conformal signals.`,
-        'Connect Coinbase CDP AgentKit (CDP_API_KEY_NAME / CDP_API_KEY_PRIVATE_KEY) or Kraken/Coinbase Exchange API keys in API Secrets Manager to authorize real autonomous execution.'
+        'Connect Coinbase CDP AgentKit (CDP_API_KEY_NAME / CDP_API_KEY_PRIVATE_KEY) or Kraken/Coinbase Exchange API keys in your personal API Secrets Manager to authorize real autonomous execution.'
       ],
       transactionsAdded: [],
       agenticWallet
@@ -1376,13 +1447,17 @@ export async function runAutonomousAgenticCryptoCycle(): Promise<{
   };
 }
 
-export function createOrImportCustomWallet(params: {
-  label: string;
-  role: 'PERSONAL_INVESTOR' | 'AGENTIC_AUTONOMOUS';
-  initialCashUsd?: number;
-  importPrivateKeyHex?: string;
-}): SovereignCryptoWallet {
-  const state = loadWalletState();
+export function createOrImportCustomWallet(
+  params: {
+    label: string;
+    role: 'PERSONAL_INVESTOR' | 'AGENTIC_AUTONOMOUS';
+    initialCashUsd?: number;
+    importPrivateKeyHex?: string;
+  },
+  scopeId?: string
+): SovereignCryptoWallet {
+  const scope = normalizeWalletScope(scopeId);
+  const state = loadWalletState(scope);
   const id = `${params.role.toLowerCase().replace('_', '-')}-${crypto.randomBytes(3).toString('hex')}`;
   // Always strictly 0 real starting balance (never fabricate fake cash!)
   const newWallet = buildFreshWallet(
@@ -1393,17 +1468,21 @@ export function createOrImportCustomWallet(params: {
     params.importPrivateKeyHex
   );
   state.wallets.push(newWallet);
-  saveEncryptedWalletState(state);
+  saveEncryptedWalletState(state, scope);
   return newWallet;
 }
 
-export async function linkExternalOrWatchOnlyWallet(params: {
-  label: string;
-  source: 'METAMASK_EVM' | 'PHANTOM_SOLANA' | 'WATCH_ONLY_ADDRESS';
-  ethereumAddress?: string;
-  bitcoinAddress?: string;
-  solanaAddress?: string;
-}): Promise<{ success: boolean; message: string; wallet?: SovereignCryptoWallet }> {
+export async function linkExternalOrWatchOnlyWallet(
+  params: {
+    label: string;
+    source: 'METAMASK_EVM' | 'PHANTOM_SOLANA' | 'WATCH_ONLY_ADDRESS';
+    ethereumAddress?: string;
+    bitcoinAddress?: string;
+    solanaAddress?: string;
+  },
+  scopeId?: string
+): Promise<{ success: boolean; message: string; wallet?: SovereignCryptoWallet }> {
+  const scope = normalizeWalletScope(scopeId);
   const eth = (params.ethereumAddress || '').trim();
   const btc = (params.bitcoinAddress || '').trim();
   const sol = (params.solanaAddress || '').trim();
@@ -1421,7 +1500,7 @@ export async function linkExternalOrWatchOnlyWallet(params: {
     return { success: false, message: 'Provide at least one real Ethereum, Bitcoin, or Solana mainnet address.' };
   }
 
-  const state = loadWalletState();
+  const state = loadWalletState(scope);
   const now = new Date().toISOString();
   const id = `linked-${crypto.randomBytes(4).toString('hex')}`;
   const linkedWallet: SovereignCryptoWallet = {
@@ -1467,9 +1546,9 @@ export async function linkExternalOrWatchOnlyWallet(params: {
   };
 
   state.wallets.push(linkedWallet);
-  saveEncryptedWalletState(state);
-  await syncLiveOnChainAndMarketPrices(true);
-  const refreshed = loadWalletState().wallets.find((w) => w.id === id) || linkedWallet;
+  saveEncryptedWalletState(state, scope);
+  await syncLiveOnChainAndMarketPrices(true, scope);
+  const refreshed = loadWalletState(scope).wallets.find((w) => w.id === id) || linkedWallet;
   return {
     success: true,
     message: `Linked real external wallet "${refreshed.label}" and synced live mainnet balances from blockchain RPCs.`,
@@ -1479,25 +1558,31 @@ export async function linkExternalOrWatchOnlyWallet(params: {
 
 export function updateAgenticWalletPolicy(
   walletId: string,
-  patch: Partial<AutonomousAgenticPolicy>
+  patch: Partial<AutonomousAgenticPolicy>,
+  scopeId?: string
 ): SovereignCryptoWallet | null {
-  const state = loadWalletState();
+  const scope = normalizeWalletScope(scopeId);
+  const state = loadWalletState(scope);
   const wallet = state.wallets.find((w) => w.id === walletId);
   if (!wallet || !wallet.agenticPolicy) return null;
   wallet.agenticPolicy = {
     ...wallet.agenticPolicy,
     ...patch
   };
-  saveEncryptedWalletState(state);
+  saveEncryptedWalletState(state, scope);
   return wallet;
 }
 
-export async function requestSolanaDevnetAirdrop(walletId: string): Promise<{
+export async function requestSolanaDevnetAirdrop(
+  walletId: string,
+  scopeId?: string
+): Promise<{
   success: boolean;
   message: string;
   txSignature?: string;
 }> {
-  const state = loadWalletState();
+  const scope = normalizeWalletScope(scopeId);
+  const state = loadWalletState(scope);
   const wallet = state.wallets.find((w) => w.id === walletId);
   if (!wallet) return { success: false, message: 'Wallet not found' };
 
@@ -1534,7 +1619,7 @@ export async function requestSolanaDevnetAirdrop(walletId: string): Promise<{
         String(data.result)
       );
       state.transactions.unshift(tx);
-      saveEncryptedWalletState(state);
+      saveEncryptedWalletState(state, scope);
       return {
         success: true,
         message: `Live Solana Devnet RPC Airdrop of 1.0 SOL succeeded! Tx Signature: ${data.result}`,
@@ -1593,16 +1678,20 @@ function maskDestination(raw: string): string {
   return `${'•'.repeat(Math.max(4, clean.length - 4))}${clean.slice(-4)}`;
 }
 
-export function savePayoutBeneficiary(input: {
-  label: string;
-  rail: PayoutRailType;
-  recipientName: string;
-  institutionName: string;
-  accountOrHandle: string;
-  routingOrSwift?: string;
-  currency?: string;
-}): SavedPayoutBeneficiary {
-  const state = loadWalletState();
+export function savePayoutBeneficiary(
+  input: {
+    label: string;
+    rail: PayoutRailType;
+    recipientName: string;
+    institutionName: string;
+    accountOrHandle: string;
+    routingOrSwift?: string;
+    currency?: string;
+  },
+  scopeId?: string
+): SavedPayoutBeneficiary {
+  const scope = normalizeWalletScope(scopeId);
+  const state = loadWalletState(scope);
   if (!Array.isArray(state.beneficiaries)) state.beneficiaries = [];
   const record: SavedPayoutBeneficiary = {
     id: 'ben-' + crypto.randomBytes(5).toString('hex'),
@@ -1617,42 +1706,47 @@ export function savePayoutBeneficiary(input: {
   };
   state.beneficiaries.unshift(record);
   state.beneficiaries = state.beneficiaries.slice(0, 30);
-  saveEncryptedWalletState(state);
+  saveEncryptedWalletState(state, scope);
   return record;
 }
 
-export function deletePayoutBeneficiary(beneficiaryId: string): boolean {
-  const state = loadWalletState();
+export function deletePayoutBeneficiary(beneficiaryId: string, scopeId?: string): boolean {
+  const scope = normalizeWalletScope(scopeId);
+  const state = loadWalletState(scope);
   if (!Array.isArray(state.beneficiaries)) return false;
   const before = state.beneficiaries.length;
   state.beneficiaries = state.beneficiaries.filter((b) => b.id !== beneficiaryId);
   if (state.beneficiaries.length !== before) {
-    saveEncryptedWalletState(state);
+    saveEncryptedWalletState(state, scope);
     return true;
   }
   return false;
 }
 
-export async function executeBankOrDigitalTransfer(params: {
-  walletId: string;
-  rail: PayoutRailType;
-  fundingSource: 'USD_CASH' | 'BTC' | 'ETH' | 'SOL' | 'XRP' | 'DOGE';
-  amountUsd: number;
-  targetCurrency?: string;
-  recipientName: string;
-  institutionName?: string;
-  accountOrHandle: string;
-  routingOrSwift?: string;
-  memo?: string;
-  saveBeneficiary?: boolean;
-  beneficiaryLabel?: string;
-}): Promise<{
+export async function executeBankOrDigitalTransfer(
+  params: {
+    walletId: string;
+    rail: PayoutRailType;
+    fundingSource: 'USD_CASH' | 'BTC' | 'ETH' | 'SOL' | 'XRP' | 'DOGE';
+    amountUsd: number;
+    targetCurrency?: string;
+    recipientName: string;
+    institutionName?: string;
+    accountOrHandle: string;
+    routingOrSwift?: string;
+    memo?: string;
+    saveBeneficiary?: boolean;
+    beneficiaryLabel?: string;
+  },
+  scopeId?: string
+): Promise<{
   success: boolean;
   message: string;
   transaction?: SignedCryptoTransaction;
 }> {
-  const { wallets, livePrices } = await syncLiveOnChainAndMarketPrices(false);
-  const state = loadWalletState();
+  const scope = normalizeWalletScope(scopeId);
+  const { wallets, livePrices } = await syncLiveOnChainAndMarketPrices(false, scope);
+  const state = loadWalletState(scope);
   const wallet = wallets.find((w) => w.id === params.walletId) || state.wallets.find((w) => w.id === params.walletId);
   if (!wallet) return { success: false, message: 'Source wallet not found.' };
 
@@ -1674,10 +1768,10 @@ export async function executeBankOrDigitalTransfer(params: {
 
   const totalDebitUsd = Number((amountUsd + railCfg.feeUsd).toFixed(2));
   const hasRealFiatRailConnector = Boolean(
-    process.env.STRIPE_SECRET_KEY ||
-      process.env.COINBASE_CDP_API_KEY ||
-      process.env.CDP_API_KEY_NAME ||
-      process.env.PLAID_CLIENT_ID
+    getScopedEnvOrSecret(scope, 'STRIPE_SECRET_KEY') ||
+      getScopedEnvOrSecret(scope, 'COINBASE_CDP_API_KEY') ||
+      getScopedEnvOrSecret(scope, 'CDP_API_KEY_NAME') ||
+      getScopedEnvOrSecret(scope, 'PLAID_CLIENT_ID')
   );
 
   if (params.fundingSource === 'USD_CASH') {
@@ -1718,14 +1812,14 @@ export async function executeBankOrDigitalTransfer(params: {
         currency: targetCurrency,
         createdAt: new Date().toISOString()
       });
-      saveEncryptedWalletState(state);
+      saveEncryptedWalletState(state, scope);
     }
   }
 
   if (!hasRealFiatRailConnector) {
     return {
       success: false,
-      message: `No live licensed banking/fiat payout processor configured (STRIPE_SECRET_KEY, CDP_API_KEY_NAME, or PLAID_CLIENT_ID). Refusing to fabricate a fake ${railCfg.label} transfer. Save your beneficiary and connect a live payout processor in API Secrets Manager.`
+      message: `No live licensed banking/fiat payout processor configured (STRIPE_SECRET_KEY, CDP_API_KEY_NAME, or PLAID_CLIENT_ID). Refusing to fabricate a fake ${railCfg.label} transfer. Save your beneficiary and connect a live payout processor in your API Secrets Manager.`
     };
   }
 
@@ -1747,7 +1841,7 @@ export interface RealCapitalBootstrapProgram {
   officialUrl: string;
 }
 
-export function getRealBootstrapAndConnectorStatus(): {
+export function getRealBootstrapAndConnectorStatus(scopeId?: string): {
   productionMode: 'REAL_ONCHAIN_ONLY';
   connectors: {
     id: string;
@@ -1758,6 +1852,7 @@ export function getRealBootstrapAndConnectorStatus(): {
   }[];
   programs: RealCapitalBootstrapProgram[];
 } {
+  const scope = normalizeWalletScope(scopeId);
   const connectors = [
     {
       id: 'mainnet-rpcs',
@@ -1770,28 +1865,28 @@ export function getRealBootstrapAndConnectorStatus(): {
       id: 'coinbase-cdp',
       name: 'Coinbase Developer Platform (CDP) AgentKit',
       envKeys: ['CDP_API_KEY_NAME', 'CDP_API_KEY_PRIVATE_KEY'],
-      connected: Boolean(process.env.CDP_API_KEY_NAME && process.env.CDP_API_KEY_PRIVATE_KEY),
+      connected: Boolean(getScopedEnvOrSecret(scope, 'CDP_API_KEY_NAME') && getScopedEnvOrSecret(scope, 'CDP_API_KEY_PRIVATE_KEY')),
       purpose: 'Autonomous MPC Agentic Wallets, x402 payments, Base DEX swaps & Coinbase Off-Ramp'
     },
     {
       id: 'coinbase-exchange',
       name: 'Coinbase Advanced Trade API',
       envKeys: ['COINBASE_API_KEY', 'COINBASE_API_SECRET'],
-      connected: Boolean(process.env.COINBASE_API_KEY && process.env.COINBASE_API_SECRET),
+      connected: Boolean(getScopedEnvOrSecret(scope, 'COINBASE_API_KEY') && getScopedEnvOrSecret(scope, 'COINBASE_API_SECRET')),
       purpose: 'Live spot BTC/ETH/SOL order execution & real USD bank ACH withdrawals'
     },
     {
       id: 'kraken-exchange',
       name: 'Kraken Pro REST Trading API',
       envKeys: ['KRAKEN_API_KEY', 'KRAKEN_API_SECRET'],
-      connected: Boolean(process.env.KRAKEN_API_KEY && process.env.KRAKEN_API_SECRET),
+      connected: Boolean(getScopedEnvOrSecret(scope, 'KRAKEN_API_KEY') && getScopedEnvOrSecret(scope, 'KRAKEN_API_SECRET')),
       purpose: 'Low-fee automated spot trading & regulated ACH / FedNow / Wire bank rails'
     },
     {
       id: 'stripe-treasury',
       name: 'Stripe / Plaid Fiat Payout Rail',
       envKeys: ['STRIPE_SECRET_KEY', 'PLAID_CLIENT_ID'],
-      connected: Boolean(process.env.STRIPE_SECRET_KEY || process.env.PLAID_CLIENT_ID),
+      connected: Boolean(getScopedEnvOrSecret(scope, 'STRIPE_SECRET_KEY') || getScopedEnvOrSecret(scope, 'PLAID_CLIENT_ID')),
       purpose: 'Regulated real-money bank ACH, instant card, and digital wallet payouts'
     }
   ];
@@ -1930,10 +2025,11 @@ const KRAKEN_PAIR_MAP: Record<string, string> = {
 
 async function krakenPrivateRequest(
   endpointPath: string,
-  params: Record<string, string> = {}
+  params: Record<string, string> = {},
+  scopeId?: string
 ): Promise<{ ok: boolean; result?: any; error?: string }> {
-  const apiKey = (process.env.KRAKEN_API_KEY || '').trim();
-  const apiSecret = (process.env.KRAKEN_API_SECRET || '').trim();
+  const apiKey = getScopedEnvOrSecret(scopeId, 'KRAKEN_API_KEY');
+  const apiSecret = getScopedEnvOrSecret(scopeId, 'KRAKEN_API_SECRET');
   if (!apiKey || !apiSecret) {
     return { ok: false, error: 'KRAKEN_API_KEY / KRAKEN_API_SECRET not configured' };
   }
@@ -1970,13 +2066,13 @@ async function krakenPrivateRequest(
   }
 }
 
-export async function fetchLiveKrakenExchangeBalances(): Promise<{
+export async function fetchLiveKrakenExchangeBalances(scopeId?: string): Promise<{
   connected: boolean;
   usdAvailable: number;
   assets: Record<string, number>;
   error?: string;
 }> {
-  const resp = await krakenPrivateRequest('/0/private/Balance');
+  const resp = await krakenPrivateRequest('/0/private/Balance', {}, scopeId);
   if (!resp.ok || !resp.result) {
     return { connected: false, usdAvailable: 0, assets: {}, error: resp.error };
   }

@@ -100,12 +100,14 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const WHEEL_CONFIG_PATH = path.join(DATA_DIR, '.proxy_wheel_config.json');
 
 const CAPABLE_GEMINI_BASELINE: Array<{ model: string; tier: WheelTier; supportsTools: boolean; supportsThinking: boolean }> = [
-  { model: 'gemini-3.1-flash-lite', tier: 'flagship', supportsTools: true, supportsThinking: true },
-  { model: 'gemini-3-flash-preview', tier: 'flagship', supportsTools: true, supportsThinking: true },
-  { model: 'gemini-flash-lite-latest', tier: 'flagship', supportsTools: true, supportsThinking: false },
+  { model: 'gemini-2.5-flash', tier: 'flagship', supportsTools: true, supportsThinking: true },
+  { model: 'gemini-2.5-flash-lite', tier: 'flagship', supportsTools: true, supportsThinking: false },
+  { model: 'gemini-2.5-pro', tier: 'flagship', supportsTools: true, supportsThinking: true },
+  { model: 'gemini-3-flash-preview', tier: 'capable', supportsTools: true, supportsThinking: true },
   { model: 'gemini-3.1-flash-lite-preview', tier: 'capable', supportsTools: true, supportsThinking: true },
-  { model: 'gemini-4-hydrogen', tier: 'capable', supportsTools: true, supportsThinking: true },
   { model: 'gemini-flash-latest', tier: 'capable', supportsTools: true, supportsThinking: true },
+  { model: 'gemini-flash-lite-latest', tier: 'fast', supportsTools: true, supportsThinking: false },
+  { model: 'gemini-4-hydrogen', tier: 'capable', supportsTools: true, supportsThinking: true },
   { model: 'gemini-4-neon', tier: 'capable', supportsTools: true, supportsThinking: true },
   { model: 'gemini-4-argon', tier: 'capable', supportsTools: true, supportsThinking: true },
   { model: 'gemini-4-carbon', tier: 'capable', supportsTools: true, supportsThinking: true },
@@ -157,10 +159,22 @@ class ProxyLoopWheelManager {
   private wheelCursor = 0;
   private totalRotations = 0;
   private totalDispatches = 0;
+  private pinnedSpokeId: string | null = null;
 
   private spokeStats = new Map<string, SpokeStats>();
   private spokeCredentials = new Map<string, SpokeCredential>();
   private geminiClientCache = new Map<string, GoogleGenAI>();
+  private keySlotStats = new Map<string, {
+    requestTimestamps60s: number[];
+    lastUsedAt: number;
+    successes: number;
+    failures: number;
+    rateLimitHits: number;
+    serviceDeniedModels: Set<string>;
+    quarantinedUntil: number;
+    quarantineReason?: string;
+  }>();
+  private geminiKeyRotationCursor = 0;
   private discoveredGeminiModels: string[] = [];
   private lastModelDiscoveryAt = 0;
   private discoveryInFlight: Promise<string[]> | null = null;
@@ -328,7 +342,6 @@ class ProxyLoopWheelManager {
       lower.includes('3.8') ||
       lower.includes('gemini-1.') ||
       lower.includes('gemini-2.0') ||
-      lower.includes('gemini-2.5-flash') ||
       lower === 'gemini-pro'
     ) {
       return false;
@@ -352,6 +365,10 @@ class ProxyLoopWheelManager {
     this.discoveryInFlight = (async () => {
       const discovered = new Set<string>();
       for (const entry of pool) {
+        // Vertex AI Express Mode keys (AQ.*) do not expose models.list() on generativelanguage; use CAPABLE_GEMINI_BASELINE directly.
+        if (entry.value.trim().startsWith('AQ.')) {
+          continue;
+        }
         try {
           const client = this.getOrCreateGeminiClient(entry.value);
           const pager = await Promise.race([
@@ -367,13 +384,10 @@ class ProxyLoopWheelManager {
             }
           }
         } catch (err: any) {
-          const status = Number(err?.status || err?.code || 0);
           const msg = String(err?.message || err || '');
-          if (
-            status === 401 ||
-            status === 403 ||
-            /PERMISSION_DENIED|Permission denied|API_KEY_INVALID|API key not valid|UNAUTHENTICATED/i.test(msg)
-          ) {
+          // Only quarantine keys explicitly reported as invalid/expired — NEVER quarantine on 403 PERMISSION_DENIED from models.list()
+          // because scoped Vertex/AI Studio Express keys (e.g. AQ.A...) can invoke generateContent even when models.list() is restricted.
+          if (/API_KEY_INVALID|API key not valid|API key expired/i.test(msg)) {
             internalSecretsHandler.markSecretValueRejected(entry.value, msg.slice(0, 140));
           }
         }
@@ -427,8 +441,12 @@ class ProxyLoopWheelManager {
           signal: AbortSignal.timeout(500)
         });
         const inst = r.headers.get('x-aurelius-instance');
-        if (inst !== this.instanceId && (r.ok || r.status === 503)) {
-          llama8080Alive = true;
+        const ct = (r.headers.get('content-type') || '').toLowerCase();
+        if (!inst && !ct.includes('text/html') && (r.ok || r.status === 503)) {
+          const bodyText = await r.text().catch(() => '');
+          if (bodyText && !/^\s*<!doctype|^\s*<html/i.test(bodyText)) {
+            llama8080Alive = true;
+          }
         }
       } catch {
         llama8080Alive = false;
@@ -443,18 +461,22 @@ class ProxyLoopWheelManager {
     };
   }
 
-  private getOrCreateGeminiClient(apiKey: string): GoogleGenAI {
-    let client = this.geminiClientCache.get(apiKey);
+  private getOrCreateGeminiClient(apiKey: string, modeOverride?: 'vertex' | 'dev'): GoogleGenAI {
+    const trimmed = apiKey.trim();
+    const useVertex = modeOverride ? modeOverride === 'vertex' : trimmed.startsWith('AQ.');
+    const cacheKey = `${trimmed}::${useVertex ? 'vertex' : 'dev'}`;
+    let client = this.geminiClientCache.get(cacheKey);
     if (!client) {
       client = new GoogleGenAI({
-        apiKey,
+        apiKey: trimmed,
+        ...(useVertex ? { vertexai: true } : {}),
         httpOptions: {
           headers: {
             'User-Agent': 'aistudio-build'
           }
         }
       });
-      this.geminiClientCache.set(apiKey, client);
+      this.geminiClientCache.set(cacheKey, client);
     }
     return client;
   }
@@ -463,6 +485,120 @@ class ProxyLoopWheelManager {
     const cred = this.spokeCredentials.get(spokeId);
     if (!cred || cred.provider !== 'gemini' || !cred.apiKey) return null;
     return this.getOrCreateGeminiClient(cred.apiKey);
+  }
+
+  public getAlternateGeminiClientForSpoke(spokeId: string): GoogleGenAI | null {
+    const cred = this.spokeCredentials.get(spokeId);
+    if (!cred || cred.provider !== 'gemini' || !cred.apiKey) return null;
+    const isAq = cred.apiKey.trim().startsWith('AQ.');
+    return this.getOrCreateGeminiClient(cred.apiKey, isAq ? 'dev' : 'vertex');
+  }
+
+  private getOrInitKeySlotStats(slotKey: string) {
+    let s = this.keySlotStats.get(slotKey);
+    if (!s) {
+      s = {
+        requestTimestamps60s: [],
+        lastUsedAt: 0,
+        successes: 0,
+        failures: 0,
+        rateLimitHits: 0,
+        serviceDeniedModels: new Set<string>(),
+        quarantinedUntil: 0
+      };
+      this.keySlotStats.set(slotKey, s);
+    }
+    const cutoff = Date.now() - 60_000;
+    if (s.requestTimestamps60s.length > 0 && s.requestTimestamps60s[0] < cutoff) {
+      s.requestTimestamps60s = s.requestTimestamps60s.filter((ts) => ts >= cutoff);
+    }
+    if (s.quarantinedUntil > 0 && Date.now() >= s.quarantinedUntil) {
+      s.quarantinedUntil = 0;
+      s.quarantineReason = undefined;
+      s.serviceDeniedModels.clear();
+    }
+    return s;
+  }
+
+  private getSlotRpm60s(slotKey: string): number {
+    return this.getOrInitKeySlotStats(slotKey).requestTimestamps60s.length;
+  }
+
+  private isKeySlotQuarantined(slotKey: string): boolean {
+    const s = this.getOrInitKeySlotStats(slotKey);
+    return s.quarantinedUntil > Date.now();
+  }
+
+  /**
+   * Returns all healthy, non-rejected, non-quarantined Gemini keys ordered by
+   * lowest 60s RPM -> least-recently-used -> round-robin cursor to prevent single-key dehydration.
+   */
+  public getHealthyGeminiCredentialsOrdered(): Array<{
+    slot: string;
+    envSource: string;
+    masked: string;
+    apiKey: string;
+    rpm60s: number;
+    lastUsedAt: number;
+    client: GoogleGenAI;
+  }> {
+    const pool = internalSecretsHandler.getSecretPool('GEMINI_API_KEY', 'GEMINI_API_KEYS');
+    if (pool.length === 0) return [];
+    const active = pool.filter((entry) => !this.isKeySlotQuarantined(`gemini:${entry.slot}`));
+    const candidates = active.length > 0 ? active : pool;
+    const enriched = candidates.map((entry, idx) => {
+      const slotKey = `gemini:${entry.slot}`;
+      const st = this.getOrInitKeySlotStats(slotKey);
+      return {
+        slot: entry.slot,
+        envSource: entry.envSource,
+        masked: entry.masked,
+        apiKey: entry.value,
+        rpm60s: st.requestTimestamps60s.length,
+        lastUsedAt: st.lastUsedAt,
+        rrIndex: (idx - (this.geminiKeyRotationCursor % Math.max(1, candidates.length)) + candidates.length) % Math.max(1, candidates.length),
+        client: this.getOrCreateGeminiClient(entry.value)
+      };
+    });
+    enriched.sort((a, b) => {
+      if (a.rpm60s !== b.rpm60s) return a.rpm60s - b.rpm60s;
+      if (a.lastUsedAt !== b.lastUsedAt) return a.lastUsedAt - b.lastUsedAt;
+      return a.rrIndex - b.rrIndex;
+    });
+    return enriched.map(({ rrIndex: _rr, ...rest }) => rest);
+  }
+
+  public getNextRotatingGeminiCredential(advance = true): {
+    slot: string;
+    envSource: string;
+    masked: string;
+    apiKey: string;
+    client: GoogleGenAI;
+  } | null {
+    const ordered = this.getHealthyGeminiCredentialsOrdered();
+    if (ordered.length === 0) return null;
+    const picked = ordered[0];
+    if (advance) {
+      this.geminiKeyRotationCursor = (this.geminiKeyRotationCursor + 1) % Math.max(1, ordered.length);
+      const st = this.getOrInitKeySlotStats(`gemini:${picked.slot}`);
+      st.lastUsedAt = Date.now();
+      st.requestTimestamps60s.push(Date.now());
+    }
+    return picked;
+  }
+
+  public recordDirectKeyFailure(apiKey: string | undefined | null, err: any): void {
+    if (!apiKey) return;
+    const rawMsg = String(err?.message || err || '');
+    const status = Number(err?.status || err?.code || 0);
+    const lower = rawMsg.toLowerCase();
+    const isDeadKey =
+      /api_key_invalid|api key not valid|invalid api key|api key expired|api_key_not_found|api_key_service_blocked|bound service account is deleted or disabled|service account bound to the api key|access_token_type_unsupported|credentials_missing/i.test(lower);
+    if (isDeadKey) {
+      internalSecretsHandler.markSecretValueRejected(apiKey, internalSecretsHandler.redactText(rawMsg).slice(0, 140), 30 * 60_000);
+    } else if (status === 403 && /permission denied on the service|has not been used in project|service_disabled/i.test(lower)) {
+      internalSecretsHandler.markSecretValueRejected(apiKey, internalSecretsHandler.redactText(rawMsg).slice(0, 140), 10 * 60_000);
+    }
   }
 
   public getOpenAiClientForSpoke(spokeId: string): OpenAI | null {
@@ -830,15 +966,98 @@ class ProxyLoopWheelManager {
   }
 
   public stepCursor(spokesCount?: number): number {
-    const count = Math.max(1, spokesCount ?? this.buildWheelSpokes().length);
-    const next = this.wheelCursor + 1;
-    if (next >= count) {
-      this.wheelCursor = 0;
-      this.totalRotations += 1;
-    } else {
-      this.wheelCursor = next;
+    const spokes = this.buildWheelSpokes();
+    const count = Math.max(1, spokesCount ?? spokes.length);
+    const next = (this.wheelCursor + 1) % count;
+    this.wheelCursor = next;
+    this.totalRotations += 1;
+    this.geminiKeyRotationCursor += 1;
+    const landed = spokes[this.wheelCursor % Math.max(1, spokes.length)];
+    if (landed && landed.status === 'READY') {
+      this.pinnedSpokeId = landed.id;
     }
     return this.wheelCursor;
+  }
+
+  /**
+   * Fully rehydrates all dehydrated/cooled/quarantined spokes & rejected keys,
+   * resets RPM pressure and failure penalties, clears cached clients, and rotates
+   * cleanly onto the next READY spoke (preferring a fresh key slot when available).
+   */
+  public rehydrateAndRotate(): {
+    clearedCooldowns: number;
+    cursor: number;
+    totalRotations: number;
+    activeSpoke: WheelSpokePublic | null;
+  } {
+    const prevSpokes = this.buildWheelSpokes();
+    const prevIndex = prevSpokes.length > 0 ? this.wheelCursor % prevSpokes.length : 0;
+    const prevSpoke = prevSpokes[prevIndex] || null;
+
+    const clearedCooldowns = this.resetAllCooldowns();
+    const freshSpokes = this.buildWheelSpokes();
+
+    if (freshSpokes.length === 0) {
+      this.wheelCursor = 0;
+      this.pinnedSpokeId = null;
+      this.totalRotations += 1;
+      return {
+        clearedCooldowns,
+        cursor: 0,
+        totalRotations: this.totalRotations,
+        activeSpoke: null
+      };
+    }
+
+    // Advance cursor to next READY spoke; if multiple key slots exist on the wheel,
+    // advance cleanly across spokes so both model/slot and backup keys rotate visibly.
+    let nextIndex = (prevIndex + 1) % freshSpokes.length;
+    if (prevSpoke) {
+      const distinctSlots = new Set(freshSpokes.map((s) => `${s.provider}:${s.keySlot}`));
+      if (distinctSlots.size > 1) {
+        // Find next ready spoke with a different keySlot or provider first if adjacent spoke shares slot
+        const candidateIdx = freshSpokes.findIndex(
+          (s, i) =>
+            i !== prevIndex &&
+            s.status === 'READY' &&
+            `${s.provider}:${s.keySlot}` !== `${prevSpoke.provider}:${prevSpoke.keySlot}` &&
+            i > prevIndex
+        );
+        if (candidateIdx >= 0) {
+          nextIndex = candidateIdx;
+        }
+      }
+      if (freshSpokes[nextIndex]?.status !== 'READY') {
+        const readyIdx = freshSpokes.findIndex((s) => s.status === 'READY');
+        if (readyIdx >= 0) nextIndex = readyIdx;
+      }
+    }
+
+    this.wheelCursor = nextIndex;
+    this.totalRotations += 1;
+    this.geminiKeyRotationCursor += 1;
+    const activeSpoke = freshSpokes[nextIndex] || null;
+    this.pinnedSpokeId = activeSpoke?.id || null;
+
+    if (activeSpoke) {
+      this.pushHistory({
+        timestamp: new Date().toISOString(),
+        spokeId: activeSpoke.id,
+        provider: activeSpoke.provider,
+        model: activeSpoke.model,
+        keySlot: activeSpoke.keySlot,
+        status: 'OK',
+        latencyMs: 1,
+        note: `Rehydrated wheel (${clearedCooldowns} spoke(s) restored) -> rotated to ${activeSpoke.model} (${activeSpoke.keySlot})`
+      });
+    }
+
+    return {
+      clearedCooldowns,
+      cursor: this.wheelCursor,
+      totalRotations: this.totalRotations,
+      activeSpoke
+    };
   }
 
   public selectOrderedSpokes(opts?: {
@@ -946,32 +1165,51 @@ class ProxyLoopWheelManager {
       const tiers: WheelTier[] = ['flagship', 'capable', 'fast', 'local'];
       for (const tier of tiers) {
         const tierSpokes = ready.filter((s) => s.tier === tier);
-        const proven = tierSpokes
-          .filter((s) => s.successes > 0)
-          .sort((a, b) => (a.avgMs || 9999) - (b.avgMs || 9999));
-        const unprobedVerified = tierSpokes.filter((s) => s.successes === 0 && s.failures === 0 && isDiscoveredOrVerified(s));
-        const unprobedFallback = tierSpokes.filter((s) => s.successes === 0 && s.failures === 0 && !isDiscoveredOrVerified(s));
-        const previouslyFailed = tierSpokes.filter((s) => s.successes === 0 && s.failures > 0);
-        const orderedTier = [...proven, ...unprobedVerified, ...unprobedFallback, ...previouslyFailed];
+        // Group spokes by model preserving CAPABLE_GEMINI_BASELINE order, then rotate healthy backup keySlots
+        // evenly across requests (lowest 60s RPM -> least-recently-used -> round-robin cursor) to prevent dehydration!
+        const modelGroups = new Map<string, WheelSpokePublic[]>();
+        for (const s of tierSpokes) {
+          const arr = modelGroups.get(s.model) || [];
+          arr.push(s);
+          modelGroups.set(s.model, arr);
+        }
 
-        // Rotate across distinct keySlots when multiple keys exist without ever demoting proven-healthy slots behind unprobed/failing slots
-        const distinctSlots = Array.from(new Set(orderedTier.map((s) => s.keySlot)));
-        if (distinctSlots.length > 1) {
+        const modelKeys = Array.from(modelGroups.keys()).sort((mA, mB) => {
+          const spA = modelGroups.get(mA)!;
+          const spB = modelGroups.get(mB)!;
+          const aVerified = spA.some((s) => s.successes > 0 || isDiscoveredOrVerified(s)) ? 1 : 0;
+          const bVerified = spB.some((s) => s.successes > 0 || isDiscoveredOrVerified(s)) ? 1 : 0;
+          if (aVerified !== bVerified) return bVerified - aVerified;
+          const aHealthy = spA.some((s) => s.failures === 0 || s.successes > 0) ? 1 : 0;
+          const bHealthy = spB.some((s) => s.failures === 0 || s.successes > 0) ? 1 : 0;
+          if (aHealthy !== bHealthy) return bHealthy - aHealthy;
+          return 0;
+        });
+
+        for (const mKey of modelKeys) {
+          const group = modelGroups.get(mKey)!;
+          const distinctSlots = Array.from(new Set(group.map((s) => `${s.provider}:${s.keySlot}`)));
           const rotatedSlots = rotateArray(distinctSlots, cursor);
           const slotRank = new Map(rotatedSlots.map((slot, i) => [slot, i]));
-          orderedTier.sort((a, b) => {
-            if (a.model === b.model) {
-              const aProven = a.successes > 0 ? 1 : 0;
-              const bProven = b.successes > 0 ? 1 : 0;
-              if (aProven !== bProven) return bProven - aProven;
-              if (a.keySlot === 'slot-0' && b.successes === 0 && a.failures === 0) return -1;
-              if (b.keySlot === 'slot-0' && a.successes === 0 && b.failures === 0) return 1;
-              return (slotRank.get(a.keySlot) ?? 0) - (slotRank.get(b.keySlot) ?? 0);
-            }
-            return 0;
+
+          group.sort((a, b) => {
+            const aKey = `${a.provider}:${a.keySlot}`;
+            const bKey = `${b.provider}:${b.keySlot}`;
+            const aUnhealthy = a.successes === 0 && a.failures > 0 ? 1 : 0;
+            const bUnhealthy = b.successes === 0 && b.failures > 0 ? 1 : 0;
+            if (aUnhealthy !== bUnhealthy) return aUnhealthy - bUnhealthy;
+            // Anti-dehydration: spread load across all healthy key slots by lowest 60s RPM & least-recently-used first!
+            const aRpm = this.getSlotRpm60s(aKey);
+            const bRpm = this.getSlotRpm60s(bKey);
+            if (aRpm !== bRpm) return aRpm - bRpm;
+            const aLast = this.getOrInitKeySlotStats(aKey).lastUsedAt;
+            const bLast = this.getOrInitKeySlotStats(bKey).lastUsedAt;
+            if (aLast !== bLast) return aLast - bLast;
+            return (slotRank.get(aKey) ?? 0) - (slotRank.get(bKey) ?? 0);
           });
+
+          orderedReady.push(...group);
         }
-        orderedReady.push(...orderedTier);
       }
     }
 
@@ -985,11 +1223,39 @@ class ProxyLoopWheelManager {
       }
     }
 
-    if (opts?.includeCoolingFallback !== false) {
+    // Honor a manually rotated spoke at the front of the dispatch list so clicking "Rotate Spoke"
+    // immediately routes the next turn through the rotated spoke instead of snapping back to spoke #0.
+    if (this.pinnedSpokeId) {
+      const pinnedIdx = orderedReady.findIndex((s) => s.id === this.pinnedSpokeId);
+      if (pinnedIdx > 0) {
+        const [pinned] = orderedReady.splice(pinnedIdx, 1);
+        orderedReady.unshift(pinned);
+      }
+      if (opts?.advanceCursor !== false) {
+        this.pinnedSpokeId = null;
+      }
+    }
+
+    if (opts?.includeCoolingFallback !== false || orderedReady.length === 0) {
       const cooling = allSpokes
-        .filter((s) => s.status === 'COOLDOWN' && s.cooldownReason !== 'MODEL_NOT_FOUND_404' && s.cooldownReason !== 'auth_rejected')
+        .filter(
+          (s) =>
+            s.status === 'COOLDOWN' &&
+            s.cooldownReason !== 'MODEL_NOT_FOUND_404' &&
+            s.cooldownReason !== 'auth_invalid_key' &&
+            s.cooldownReason !== 'auth_service_disabled'
+        )
         .sort((a, b) => a.cooldownUntil - b.cooldownUntil)
-        .slice(0, Math.max(2, this.config.maxRotations * 2));
+        .slice(0, Math.max(4, this.config.maxRotations * 2));
+      if (orderedReady.length === 0 && cooling.length === 0) {
+        // Only return non-dead spokes as last-resort probe so deleted/invalid keys are never spammed repeatedly
+        const nonDead = allSpokes.filter(
+          (s) => s.cooldownReason !== 'auth_invalid_key' && s.cooldownReason !== 'auth_service_disabled'
+        );
+        return (nonDead.length > 0 ? nonDead : [])
+          .filter((s) => s.tier === 'flagship' || s.provider !== 'gemini')
+          .slice(0, 4);
+      }
       return [...orderedReady, ...cooling];
     }
 
@@ -1013,12 +1279,23 @@ class ProxyLoopWheelManager {
       cooldownUntil: 0
     });
     const cred = this.spokeCredentials.get(spokeId);
+    const parts = spokeId.split(':');
+    const slotKey = parts.length >= 2 ? `${parts[0]}:${parts[1]}` : `gemini:slot-0`;
+    const slotStats = this.getOrInitKeySlotStats(slotKey);
+    const now = Date.now();
+    slotStats.lastUsedAt = now;
+    slotStats.requestTimestamps60s.push(now);
+    slotStats.successes += 1;
+    slotStats.quarantinedUntil = 0;
+    slotStats.quarantineReason = undefined;
+    slotStats.serviceDeniedModels.clear();
+
     this.pushHistory({
       timestamp: new Date().toISOString(),
       spokeId,
       provider: cred?.provider || 'gemini',
       model: cred?.model || spokeId,
-      keySlot: spokeId.split(':')[1] || 'slot-0',
+      keySlot: parts[1] || 'slot-0',
       status: 'OK',
       latencyMs: Math.max(1, Math.round(latencyMs)),
       ...(note ? { note: internalSecretsHandler.redactText(note).slice(0, 140) } : {})
@@ -1041,30 +1318,58 @@ class ProxyLoopWheelManager {
     };
     const nextConsecutive = prev.consecutiveFailures + 1;
 
-    let cooldownMs = Math.min(300_000, this.config.cooldownBaseMs * Math.pow(2, Math.min(4, nextConsecutive - 1)));
+    const parts = spokeId.split(':');
+    const slotKey = parts.length >= 2 ? `${parts[0]}:${parts[1]}` : `gemini:slot-0`;
+    const slotStats = this.getOrInitKeySlotStats(slotKey);
+    const now = Date.now();
+    slotStats.lastUsedAt = now;
+    slotStats.requestTimestamps60s.push(now);
+    slotStats.failures += 1;
+
+    let cooldownMs = Math.min(90_000, this.config.cooldownBaseMs * Math.pow(2, Math.min(3, nextConsecutive - 1)));
     let reason = `err_${status || 'sdk'}`;
+    let quarantineWholeSlot = false;
+
+    const isDeadCredentialMsg =
+      /api_key_invalid|api key not valid|invalid api key|api key expired|api_key_not_found|api_key_service_blocked|bound service account is deleted or disabled|service account bound to the api key|access_token_type_unsupported|credentials_missing/i.test(lower);
+    const isServiceDeniedMsg =
+      /permission denied on the service|has not been used in project|service_disabled|api has not been used|consumer .* has been suspended/i.test(lower);
 
     if (is429) {
+      slotStats.rateLimitHits += 1;
       const retryMatch = rawMsg.match(/"retryDelay"\s*:\s*"(\d+)s"/i) || rawMsg.match(/retry in\s+(\d+(?:\.\d+)?)s/i);
       if (retryMatch) {
         const secs = Math.ceil(parseFloat(retryMatch[1]));
-        cooldownMs = Math.min(Math.max(secs * 1000, 15_000), 600_000);
+        cooldownMs = Math.min(Math.max(secs * 1000, 10_000), 180_000);
       } else {
-        cooldownMs = lower.includes('perday') ? 600_000 : 45_000;
+        cooldownMs = lower.includes('perday') ? 300_000 : 30_000;
       }
       reason = '429_rate_limit';
+    } else if (isDeadCredentialMsg) {
+      cooldownMs = 1_800_000; // 30 minutes quarantine for deleted service accounts / invalid keys
+      reason = 'auth_invalid_key';
+      quarantineWholeSlot = true;
+    } else if (isServiceDeniedMsg) {
+      const modelPart = parts.slice(2).join(':') || spokeId;
+      slotStats.serviceDeniedModels.add(modelPart);
+      if (slotStats.serviceDeniedModels.size >= 2 || modelPart === 'gemini-2.5-flash') {
+        cooldownMs = 600_000; // 10 minutes quarantine when entire service is disabled on this key
+        reason = 'auth_service_disabled';
+        quarantineWholeSlot = true;
+      } else {
+        cooldownMs = 180_000;
+        reason = 'auth_rejected';
+      }
     } else if (
       status === 401 ||
       status === 403 ||
-      lower.includes('api key not valid') ||
-      lower.includes('invalid api key') ||
       lower.includes('permission denied') ||
       lower.includes('permission_denied') ||
-      lower.includes('unauthenticated') ||
-      lower.includes('api_key_invalid')
+      lower.includes('unauthenticated')
     ) {
-      cooldownMs = 1_800_000;
-      reason = 'auth_rejected';
+      cooldownMs = status === 401 ? 600_000 : 120_000;
+      reason = status === 401 ? 'auth_invalid_key' : 'auth_rejected';
+      if (status === 401) quarantineWholeSlot = true;
     } else if (
       status === 404 ||
       lower.includes('not found') ||
@@ -1072,13 +1377,16 @@ class ProxyLoopWheelManager {
       lower.includes('not supported for generatecontent') ||
       lower.includes('does not exist')
     ) {
-      cooldownMs = 3_600_000;
+      cooldownMs = 600_000;
       reason = 'MODEL_NOT_FOUND_404';
+    } else if (status === 400 || lower.includes('invalid_argument')) {
+      cooldownMs = 20_000;
+      reason = '400_invalid_arg';
     } else if (err?.isTimeout || status === 504 || lower.includes('timed out') || lower.includes('timeout')) {
-      cooldownMs = 120_000;
+      cooldownMs = 60_000;
       reason = 'timeout';
     } else if (status === 503 || lower.includes('high demand') || lower.includes('unavailable') || lower.includes('overloaded')) {
-      cooldownMs = 120_000;
+      cooldownMs = 45_000;
       reason = '503_high_demand';
     }
 
@@ -1095,13 +1403,14 @@ class ProxyLoopWheelManager {
 
     const cred = this.spokeCredentials.get(spokeId);
 
-    // If an entire API key slot failed authentication (401/403), quarantine that key in internalSecretsHandler
-    // and cool down sibling models on that exact same provider:keySlot
-    if (reason === 'auth_rejected') {
+    // Immediately quarantine dead/disabled-service keys across ALL sibling model spokes on that slot
+    // so the wheel instantly rotates to healthy backup keys instead of hammering 13 models on a broken key!
+    if (quarantineWholeSlot) {
+      slotStats.quarantinedUntil = cooldownUntilTs;
+      slotStats.quarantineReason = reason;
       if (cred?.apiKey) {
-        internalSecretsHandler.markSecretValueRejected(cred.apiKey, cleanMsg);
+        internalSecretsHandler.markSecretValueRejected(cred.apiKey, cleanMsg, cooldownMs);
       }
-      const parts = spokeId.split(':');
       if (parts.length >= 2) {
         const slotPrefix = `${parts[0]}:${parts[1]}:`;
         for (const siblingId of this.spokeCredentials.keys()) {
@@ -1113,19 +1422,22 @@ class ProxyLoopWheelManager {
               failures: (sibPrev?.failures || 0) + 1,
               consecutiveFailures: (sibPrev?.consecutiveFailures || 0) + 1,
               cooldownUntil: cooldownUntilTs,
-              cooldownReason: 'auth_rejected',
+              cooldownReason: reason,
               lastError: cleanMsg
             });
           }
         }
       }
     }
+    if (this.pinnedSpokeId === spokeId) {
+      this.pinnedSpokeId = null;
+    }
     this.pushHistory({
       timestamp: new Date().toISOString(),
       spokeId,
       provider: cred?.provider || 'gemini',
       model: cred?.model || spokeId,
-      keySlot: spokeId.split(':')[1] || 'slot-0',
+      keySlot: parts[1] || 'slot-0',
       status: is429 ? '429_COOLDOWN' : 'ERR',
       latencyMs: Math.max(0, Math.round(latencyMs)),
       note: cleanMsg
@@ -1133,15 +1445,22 @@ class ProxyLoopWheelManager {
   }
 
   public resetAllCooldowns(): number {
-    let cleared = 0;
+    const rejectedBefore = internalSecretsHandler.getRejectedSecretTelemetry().length;
+    internalSecretsHandler.rehydrate();
+    this.keySlotStats.clear();
+    this.geminiClientCache.clear();
+    this.pinnedSpokeId = null;
+    let cleared = rejectedBefore;
     for (const [id, stats] of this.spokeStats.entries()) {
-      if (stats.cooldownUntil > 0 || stats.consecutiveFailures > 0) {
+      if (stats.cooldownUntil > 0 || stats.consecutiveFailures > 0 || stats.failures > 0 || stats.lastError) {
         cleared++;
         this.spokeStats.set(id, {
           ...stats,
           cooldownUntil: 0,
           cooldownReason: undefined,
-          consecutiveFailures: 0
+          consecutiveFailures: 0,
+          failures: 0,
+          lastError: undefined
         });
       }
     }
@@ -1159,7 +1478,12 @@ class ProxyLoopWheelManager {
     const spokes = this.buildWheelSpokes();
     const readyCount = spokes.filter((s) => s.status === 'READY').length;
     const cooldownCount = spokes.filter((s) => s.status === 'COOLDOWN').length;
-    const geminiPoolCount = internalSecretsHandler.getSecretPool('GEMINI_API_KEY', 'GEMINI_API_KEYS').length;
+    const allGeminiKeys = internalSecretsHandler.getSecretPool('GEMINI_API_KEY', 'GEMINI_API_KEYS', undefined, {
+      includeRejected: true
+    });
+    const healthyGeminiKeys = allGeminiKeys.filter((k) => !k.rejected && !this.isKeySlotQuarantined(`gemini:${k.slot}`));
+    const quarantinedGeminiKeys = allGeminiKeys.filter((k) => k.rejected || this.isKeySlotQuarantined(`gemini:${k.slot}`));
+
     const providerSummary: Record<string, { total: number; ready: number; cooldown: number }> = {};
 
     for (const s of spokes) {
@@ -1174,6 +1498,22 @@ class ProxyLoopWheelManager {
     const activeIndex = spokes.length > 0 ? this.wheelCursor % spokes.length : 0;
     const activeSpoke = spokes[activeIndex] || null;
 
+    const slotTelemetry = allGeminiKeys.map((entry) => {
+      const st = this.getOrInitKeySlotStats(`gemini:${entry.slot}`);
+      const isQuarantined = Boolean(entry.rejected) || st.quarantinedUntil > Date.now();
+      return {
+        keySlot: entry.slot,
+        envSource: entry.envSource,
+        maskedKey: entry.masked,
+        status: isQuarantined ? 'QUARANTINED' : 'HEALTHY',
+        rpm60s: st.requestTimestamps60s.length,
+        successes: st.successes,
+        failures: st.failures,
+        rateLimitHits: st.rateLimitHits,
+        quarantineReason: st.quarantineReason || (entry.rejected ? 'auth_rejected' : null)
+      };
+    });
+
     return {
       success: true,
       enabled: this.config.enabled,
@@ -1186,7 +1526,26 @@ class ProxyLoopWheelManager {
       totalSpokes: spokes.length,
       readySpokes: readyCount,
       cooldownSpokes: cooldownCount,
-      geminiKeySlots: geminiPoolCount,
+      geminiKeySlots: healthyGeminiKeys.length,
+      keyPoolSummary: {
+        totalConfiguredGeminiKeys: allGeminiKeys.length,
+        healthyGeminiKeys: healthyGeminiKeys.length,
+        quarantinedGeminiKeys: quarantinedGeminiKeys.length,
+        rotationPolicy: 'anti-dehydration-lru-rpm-round-robin',
+        supportedBackupEnvVars: [
+          'GEMINI_API_KEY',
+          'GEMINI_API_KEYS',
+          'GEMINI_BACKUP_KEY_1..6',
+          'GEMINI_API_KEY_1..12',
+          'ALL_KEY',
+          'OPENROUTER_API_KEYS',
+          'GROQ_API_KEYS',
+          'DEEPSEEK_API_KEYS',
+          'OPENAI_API_KEYS'
+        ],
+        slots: slotTelemetry,
+        rejectedSecrets: internalSecretsHandler.getRejectedSecretTelemetry()
+      },
       discoveredGeminiModels: this.discoveredGeminiModels,
       customNodes: this.config.customNodes,
       activeSpoke: activeSpoke

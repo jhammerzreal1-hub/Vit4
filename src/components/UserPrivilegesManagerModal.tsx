@@ -25,8 +25,10 @@ import {
   RefreshCw
 } from 'lucide-react';
 import {
+  adminAssignUserTier,
   adminCreateUserAccount,
   adminDeleteUserAccount,
+  adminFetchTiers,
   adminFetchUsers,
   adminUpdateAuthPolicy,
   adminUpdateUserAccount
@@ -41,7 +43,8 @@ import {
   type AuthPolicySettings,
   type AuthRole,
   type AuthUserPublic,
-  type UserPrivileges
+  type UserPrivileges,
+  type UserTierDefinition
 } from '../types/auth';
 import { ALL_MODULES, WORKSPACE_GROUPS } from './Navigation';
 import type { ModuleType } from '../types';
@@ -53,8 +56,10 @@ interface UserPrivilegesManagerModalProps {
   onPolicyOrSelfUpdated?: () => void;
 }
 
+type BooleanPrivilegeKey = Exclude<keyof UserPrivileges, 'allModules' | 'allowedModules' | 'maxDailyAiRequests'>;
+
 const CAPABILITY_CONTROLS: Array<{
-  key: Exclude<keyof UserPrivileges, 'allModules' | 'allowedModules'>;
+  key: BooleanPrivilegeKey;
   label: string;
   desc: string;
 }> = [
@@ -75,7 +80,32 @@ const CAPABILITY_CONTROLS: Array<{
     label: 'Secrets Vault & Crypto Wallets',
     desc: 'View/manage API keys and wallet modules'
   },
+  {
+    key: 'canBringOwnKeys',
+    label: 'Bring Your Own API Keys',
+    desc: 'Allow storing personal encrypted LLM keys'
+  },
+  {
+    key: 'canUseBurnerMail',
+    label: 'Real Burner Mail Vault',
+    desc: 'Generate & read isolated burner email inboxes'
+  },
+  {
+    key: 'canUseInfiniteSim',
+    label: 'Infinite SIM & Telecom',
+    desc: 'Access virtual SIM numbers, SMS & voice calls'
+  },
+  {
+    key: 'canAccessGrantHunter',
+    label: 'Grant Hunter Engine',
+    desc: 'Access grant discovery and drafting workflows'
+  },
   { key: 'canModifyOSSettings', label: 'OS Settings & Customization', desc: 'Modify desktop themes and shell settings' },
+  {
+    key: 'canAccessSystemCore',
+    label: 'System Core Modules',
+    desc: 'Host diagnostics, forensics, audit & transfer hub'
+  },
   { key: 'canManageUsers', label: 'Manage Users & Privileges', desc: 'Create users and edit custom privileges' }
 ];
 
@@ -87,6 +117,7 @@ export const UserPrivilegesManagerModal: React.FC<UserPrivilegesManagerModalProp
 }) => {
   const [activeTab, setActiveTab] = useState<'users' | 'create' | 'policy'>('users');
   const [users, setUsers] = useState<AuthUserPublic[]>([]);
+  const [tiers, setTiers] = useState<UserTierDefinition[]>([]);
   const [policy, setPolicy] = useState<AuthPolicySettings | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -98,6 +129,7 @@ export const UserPrivilegesManagerModal: React.FC<UserPrivilegesManagerModalProp
   const [draftRole, setDraftRole] = useState<AuthRole>('collaborator');
   const [draftStatus, setDraftStatus] = useState<AuthAccountStatus>('active');
   const [draftDisplayName, setDraftDisplayName] = useState('');
+  const [draftTierId, setDraftTierId] = useState('');
   const [draftPrivileges, setDraftPrivileges] = useState<UserPrivileges>(() =>
     clonePrivileges(PRIVILEGE_PRESETS[2].privileges)
   );
@@ -117,9 +149,13 @@ export const UserPrivilegesManagerModal: React.FC<UserPrivilegesManagerModalProp
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await adminFetchUsers();
+      const [res, tierRes] = await Promise.all([
+        adminFetchUsers(),
+        adminFetchTiers().catch(() => ({ tiers: [] as UserTierDefinition[] }))
+      ]);
       setUsers(res.users);
       setPolicy(res.policy);
+      setTiers(tierRes.tiers || []);
       setSelectedUserId((prev) => {
         if (prev && res.users.some((u) => u.id === prev)) return prev;
         return res.users[0]?.id || null;
@@ -147,6 +183,7 @@ export const UserPrivilegesManagerModal: React.FC<UserPrivilegesManagerModalProp
     setDraftRole(selectedUser.role);
     setDraftStatus(selectedUser.status);
     setDraftDisplayName(selectedUser.displayName);
+    setDraftTierId(selectedUser.tierId || 'tier-free');
     setDraftPrivileges(clonePrivileges(selectedUser.privileges));
     setResetPasswordInput('');
   }, [selectedUser]);
@@ -196,6 +233,27 @@ export const UserPrivilegesManagerModal: React.FC<UserPrivilegesManagerModalProp
       allModules: false,
       allowedModules: nextModules
     });
+  };
+
+  const handleAssignQuickTier = async () => {
+    if (!selectedUser || !draftTierId || selectedIsArchitect) return;
+    setSaving(true);
+    setBanner(null);
+    try {
+      const res = await adminAssignUserTier(selectedUser.id, {
+        tierId: draftTierId,
+        subscriptionStatus: 'admin-granted'
+      });
+      setUsers((prev) => prev.map((u) => (u.id === res.user.id ? res.user : u)));
+      setDraftRole(res.user.role);
+      setDraftPrivileges(clonePrivileges(res.user.privileges));
+      setBanner({ ok: true, text: `Assigned tier "${res.tier.name}" to @${selectedUser.username}.` });
+      onPolicyOrSelfUpdated?.();
+    } catch (err: any) {
+      setBanner({ ok: false, text: err?.message || 'Failed to assign tier.' });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSaveSelectedUser = async () => {
@@ -343,11 +401,31 @@ export const UserPrivilegesManagerModal: React.FC<UserPrivilegesManagerModalProp
 
       {/* Capability Sliders */}
       <div className="rounded-xl bg-zinc-950/70 border border-zinc-800 p-3 space-y-2">
-        <div className="text-[11px] font-semibold text-zinc-200 pb-1 border-b border-zinc-800/80">
-          System Capabilities
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-zinc-800/80">
+          <div className="text-[11px] font-semibold text-zinc-200">System Capabilities</div>
+          {role !== 'admin' && (
+            <label className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+              <span>Daily AI Cap (0 = ∞):</span>
+              <input
+                type="number"
+                min={0}
+                value={privs.maxDailyAiRequests ?? 0}
+                onChange={(e) =>
+                  onChangePrivs({
+                    ...privs,
+                    maxDailyAiRequests: Math.max(0, parseInt(e.target.value || '0', 10) || 0)
+                  })
+                }
+                className="w-20 px-2 py-1 rounded-lg bg-zinc-900 border border-zinc-700 text-xs text-white font-mono tabular-nums"
+              />
+            </label>
+          )}
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {CAPABILITY_CONTROLS.map((cap) => {
+            const disabled =
+              role === 'admin' ||
+              (!allowAdminRole && (cap.key === 'canManageUsers' || cap.key === 'canAccessSystemCore'));
             const checked = role === 'admin' ? true : Boolean(privs[cap.key]);
             return (
               <label
@@ -360,7 +438,7 @@ export const UserPrivilegesManagerModal: React.FC<UserPrivilegesManagerModalProp
                 </div>
                 <input
                   type="checkbox"
-                  disabled={role === 'admin'}
+                  disabled={disabled}
                   checked={checked}
                   onChange={(e) => onChangePrivs({ ...privs, [cap.key]: e.target.checked })}
                   className="h-4 w-4 accent-amber-500 rounded cursor-pointer disabled:opacity-50"
@@ -674,6 +752,35 @@ export const UserPrivilegesManagerModal: React.FC<UserPrivilegesManagerModalProp
                           className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-100"
                         />
                       </div>
+                      {!selectedIsArchitect && tiers.length > 0 && (
+                        <div>
+                          <label className="block text-[11px] text-zinc-400 mb-1">
+                            Quick Tier Assignment ({selectedUser.tierName || 'Explorer Free'} ·{' '}
+                            {selectedUser.subscriptionStatus || 'free'})
+                          </label>
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={draftTierId}
+                              onChange={(e) => setDraftTierId(e.target.value)}
+                              className="flex-1 px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-100"
+                            >
+                              {tiers.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name} ({t.isMonetized ? `$${((t.pricing.monthlyUsdCents || t.pricing.oneTimeUsdCents) / 100).toFixed(0)}` : 'Free'})
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={handleAssignQuickTier}
+                              disabled={saving}
+                              className="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-100 cursor-pointer disabled:opacity-50"
+                            >
+                              Apply
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       {selectedUser.authProvider === 'local' && (
                         <div>
                           <label className="block text-[11px] text-zinc-400 mb-1">

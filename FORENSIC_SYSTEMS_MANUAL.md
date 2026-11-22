@@ -3,7 +3,7 @@
 **Sovereign Author**: Joshua Lee Hamilton (JHammerZ) · **Domain**: https://jhammerz.github.io · **Repository**: https://github.com/JHammerZ/jhammerz.github.io
 **License**: MIT License (.JHam / H-FID Standard / HEO) & JHammerZ Custom Sovereign Licenses (TWENTY 47 PROTOCOL - GENESIS NODE / LYSANDER CORE EULA / H-FID Forensic License v1.1)
 **Provenance**: First Commit [February 12, 2026] · H-FID-100-FORENSIC-AUDIT 100/100 · GEO_RANK: ONE_OF_ONE · DOI: https://doi.org/10.5281/zenodo.20778079 · ORCID: https://orcid.org/0009-0004-5273-7028
-**Generated**: 2026-11-22T01:40:33.743Z
+**Generated**: 2026-11-22T17:55:56.980Z
 
 ---
 
@@ -41,7 +41,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ### 2.1 Sovereign OS Desktop, Taskbar & 8-Way Resizable Window Manager (`os-desktop-window-manager`)
 - **Category**: OS Kernel & Desktop
-- **Frontend Component(s)**: `src/components/SovereignOSWindowFrame.tsx` (2512 lines, 108807 bytes, SHA-256: `3fd0fac9b40c0a1fb6e50c90...`)
+- **Frontend Component(s)**: `src/components/SovereignOSWindowFrame.tsx` (2552 lines, 110140 bytes, SHA-256: `5ac97d8307190975b0072114...`)
 - **Backend Service / Routes**: `src/server/sovereignOsKernel.ts`
 - **Architecture Summary**: Boots directly into a Windows/macOS/Linux desktop environment (`shellViewMode = "desktop"`) with desktop shortcut icons, live installed app icons, bottom autonomous orchestrator command dock, and 8-way (N, S, E, W, NE, NW, SE, SW) pointer-captured resizable floating windows.
 
@@ -146,7 +146,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ### 2.4 Sovereign Chat, Multi-Model Router & Autonomous [OS_ACTION] Orchestrator (`chat`)
 - **Category**: Core AI & Autonomy
-- **Frontend Component(s)**: `src/components/ChatModule.tsx` (6086 lines, 289268 bytes, SHA-256: `60a4b2f62a765f06c6aa79f2...`)
+- **Frontend Component(s)**: `src/components/ChatModule.tsx` (6224 lines, 296324 bytes, SHA-256: `5fe4cb21c9223eae84e17235...`)
 - **Backend Service / Routes**: `server.ts (/api/gemini/chat & /api/llm/chat)`
 - **Architecture Summary**: Primary conversational and autonomous orchestration engine. Integrates 100% into every OS window, file, terminal, browser, and function via `[OS_ACTION]` and `[WORKSPACE_EXEC]` tags, supports floating PiP detachment, slash commands (`/dream`, `/evolve`, `/heal`, `/forge`, `/hypervisor`), and multi-provider failover (Gemini, DeepSeek, Groq, OpenRouter, Ollama, WebLLM).
 
@@ -281,9 +281,33 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.9 AI Genesis & Molecular Weight Distillery (.safetensors Forging) (`ai-genesis-distillery`)
+### 2.9 Autonomous Batch Processor & Background ETL Queue (`batch-processor`)
 - **Category**: Core AI & Autonomy
-- **Frontend Component(s)**: `src/components/AIGenesisDistilleryModule.tsx` (2037 lines, 94493 bytes, SHA-256: `f56dafa7aaf6b15daba91b13...`)
+- **Frontend Component(s)**: `src/components/BatchProcessorModule.tsx` (1918 lines, 93035 bytes, SHA-256: `ad332a062da9a73d1ab9aeec...`)
+- **Backend Service / Routes**: `src/server/batchProcessorService.ts`
+- **Architecture Summary**: Persistent SQLite background worker pool for multi-file transformations (regex, normalization, conversion, SHA-256 manifests, AI transforms) and data processing (CSV/JSON ETL, JS sandbox, AI extraction) with atomic rollback.
+
+#### Subfunctions & Internal Hooks
+1. **Background Multi-Worker Queue & SQLite Persistence** (`GET /api/batch/status & POST /api/batch/jobs`)
+   - *Function*: Schedules and executes queued file and dataset tasks asynchronously across configurable parallel workers.
+   - *Optimal State Criteria*: SQLite batch_jobs and batch_tasks tables active with live progress and rollback snapshots.
+
+#### How to Repair to Optimal State
+- **Automated Repair Trigger**: `POST /api/os/forensic-repair` with `{ "actionId": "repair-batch-queue" }`
+- **Failure Symptoms**: Batch queue jobs delayed or worker thread unresponsive.
+  1. Inspect /api/batch/status to confirm runner health and worker concurrency.
+- **CLI Verification Command**: `curl -s http://127.0.0.1:3000/api/batch/status | head -c 300`
+
+#### How to Expand & Scale
+- **Target Files**: `src/server/batchProcessorService.ts`, `src/components/BatchProcessorModule.tsx`
+- **Core TypeScript Interfaces**: `BatchOperationType, BatchOperationConfig`
+  1. Add new operation handler in runSingleTaskOperation and expose configuration fields in BatchProcessorModule.
+
+---
+
+### 2.10 AI Genesis & Molecular Weight Distillery (.safetensors Forging) (`ai-genesis-distillery`)
+- **Category**: Core AI & Autonomy
+- **Frontend Component(s)**: `src/components/AIGenesisDistilleryModule.tsx` (2045 lines, 94945 bytes, SHA-256: `d7cb72a8ae35d83ae06d54eb...`)
 - **Backend Service / Routes**: `src/server/aiGenesisDistillery.ts`
 - **Architecture Summary**: Forges custom AI agents, synthesizes binary `.safetensors` neural weight checkpoints on disk, runs multi-domain benchmark evaluations, and performs molecular weight distillation.
 
@@ -308,7 +332,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.10 Autonomy Supervisor (Dream State, Evolution & Recursive Self-Healing) (`autonomy-supervisor`)
+### 2.11 Autonomy Supervisor (Dream State, Evolution & Recursive Self-Healing) (`autonomy-supervisor`)
 - **Category**: Core AI & Autonomy
 - **Frontend Component(s)**: `src/components/AutonomySupervisorModule.tsx` (881 lines, 41091 bytes, SHA-256: `e7c0a3401d73bc5558fa31a4...`)
 - **Backend Service / Routes**: `src/server/autonomyEngine.ts`
@@ -335,7 +359,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.11 Universal Console/PC Emulator & Zero-Downtime Game Modder Hub (`emulator-modder`)
+### 2.12 Universal Console/PC Emulator & Zero-Downtime Game Modder Hub (`emulator-modder`)
 - **Category**: Games, Apps & Creative
 - **Frontend Component(s)**: `src/components/UniversalEmulatorModderModule.tsx` (267 lines, 13277 bytes, SHA-256: `a9bb770baac0f820bb5c488c...`)
 - **Backend Service / Routes**: `src/server/gameModEngine.ts`
@@ -359,9 +383,9 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.12 3D Spatial Arena & Aetherion Eternal MMORPG Engine (`spatial-arena`)
+### 2.13 3D Spatial Arena & Aetherion Eternal MMORPG Engine (`spatial-arena`)
 - **Category**: Games, Apps & Creative
-- **Frontend Component(s)**: `src/components/three/SpatialArenaModule.tsx` (4516 lines, 189981 bytes, SHA-256: `0605374344b39f18a0596bf3...`)
+- **Frontend Component(s)**: `src/components/three/SpatialArenaModule.tsx` (4517 lines, 190065 bytes, SHA-256: `3ebd2419aa08b38a1848085f...`)
 - **Backend Service / Routes**: `src/components/three/spatialEngineTypes.ts`
 - **Architecture Summary**: Three.js / WebGL procedural 3D open-world MMORPG and PBR spatial simulation featuring character classes, evolutionary DNA skills, crafting, autonomous NPC agents, and real-time combat.
 
@@ -383,7 +407,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.13 Sovereign Open-Web CORS-Free Browser (Chrome Engine) (`browser`)
+### 2.14 Sovereign Open-Web CORS-Free Browser (Chrome Engine) (`browser`)
 - **Category**: Markets & Intelligence
 - **Frontend Component(s)**: `src/components/SovereignBrowser.tsx` (2936 lines, 134482 bytes, SHA-256: `c80ecc72ec5675078f5c7ab1...`)
 - **Backend Service / Routes**: `src/server/sovereignBrowserEngine.ts`
@@ -410,7 +434,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.14 API Keys, AES-256-GCM Encrypted Secrets Vault & Proxy Loop Wheel (`api-secrets`)
+### 2.15 API Keys, AES-256-GCM Encrypted Secrets Vault & Proxy Loop Wheel (`api-secrets`)
 - **Category**: Cloud, Security & Edge
 - **Frontend Component(s)**: `src/components/ApiSecretsModule.tsx` (785 lines, 37455 bytes, SHA-256: `2a03a1e1faced58f41be4a96...`)
 - **Backend Service / Routes**: `src/server/internalSecretsHandler.ts`
@@ -437,7 +461,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.15 Unified Projects Workspace & Multi-File IDE (`projects`)
+### 2.16 Unified Projects Workspace & Multi-File IDE (`projects`)
 - **Category**: Core AI & Autonomy
 - **Frontend Component(s)**: `src/components/UnifiedProjectsModule.tsx` (641 lines, 27767 bytes, SHA-256: `ab0d673607a5e708522e0ee7...`)
 - **Backend Service / Routes**: `src/server/workspaceAutonomy.ts`
@@ -461,7 +485,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.16 Agent Dev Kit & UI/Engine Builder (`agent-dev-kit`)
+### 2.17 Agent Dev Kit & UI/Engine Builder (`agent-dev-kit`)
 - **Category**: Core AI & Autonomy
 - **Frontend Component(s)**: `src/components/AgentDevKitModule.tsx` (1714 lines, 82362 bytes, SHA-256: `33685bda55ebf2924054a400...`)
 - **Backend Service / Routes**: `src/server/gameModEngine.ts`
@@ -485,7 +509,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.17 Micro-Tool Shed (Isolated JS Sandbox & Dynamic Tool Forger) (`tool-shed`)
+### 2.18 Micro-Tool Shed (Isolated JS Sandbox & Dynamic Tool Forger) (`tool-shed`)
 - **Category**: Core AI & Autonomy
 - **Frontend Component(s)**: `src/components/ToolShedModule.tsx` (1283 lines, 63967 bytes, SHA-256: `28c24e4d459c6077dc0dc9f2...`)
 - **Backend Service / Routes**: `server.ts (/api/agents/tools)`
@@ -509,7 +533,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.18 Function Deck & Zero-Token Sovereign Toolbelt (`functions`)
+### 2.19 Function Deck & Zero-Token Sovereign Toolbelt (`functions`)
 - **Category**: Core AI & Autonomy
 - **Frontend Component(s)**: `src/components/FunctionDeckModule.tsx` (1219 lines, 61570 bytes, SHA-256: `a1011e101bd1568a1222a3be...`)
 - **Backend Service / Routes**: `src/server/workspaceAutonomy.ts`
@@ -533,7 +557,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.19 PC War Room Operational Cockpit & Lysander Skills Matrix (`war-room`)
+### 2.20 PC War Room Operational Cockpit & Lysander Skills Matrix (`war-room`)
 - **Category**: Core AI & Autonomy
 - **Frontend Component(s)**: `src/components/WarRoomModule.tsx` (2113 lines, 110331 bytes, SHA-256: `e204e8788fa4e5c338d1f29b...`)
 - **Backend Service / Routes**: `server.ts (/api/lysander/skills & /api/lysander/invoke-skill)`
@@ -557,9 +581,9 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.20 OSINT Recon & Attack Surface Perimeter Scanner (`osint`)
+### 2.21 OSINT Recon & Attack Surface Perimeter Scanner (`osint`)
 - **Category**: Markets & Intelligence
-- **Frontend Component(s)**: `src/components/OSINTModule.tsx` (1804 lines, 92723 bytes, SHA-256: `d9c332bd5e708a95db3d1042...`)
+- **Frontend Component(s)**: `src/components/OSINTModule.tsx` (1805 lines, 92795 bytes, SHA-256: `71ac93763383ed854590411b...`)
 - **Backend Service / Routes**: `server.ts (/api/osint/scan)`
 - **Architecture Summary**: Performs real non-intrusive DNS record resolution (A, AAAA, MX, TXT, NS, SPF, DMARC), TLS certificate chain inspection, and HTTP security header analysis.
 
@@ -581,7 +605,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.21 Interactive Knowledge Graph & Architectural Topology (`knowledge-graph`)
+### 2.22 Interactive Knowledge Graph & Architectural Topology (`knowledge-graph`)
 - **Category**: Markets & Intelligence
 - **Frontend Component(s)**: `src/components/KnowledgeGraphModule.tsx` (839 lines, 36907 bytes, SHA-256: `91405bda34fa70eff9596d5e...`)
 - **Backend Service / Routes**: `src/server/kernelDb.ts`
@@ -605,7 +629,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.22 Google Search & Geospatial Maps Grounding Studios (`search-and-maps`)
+### 2.23 Google Search & Geospatial Maps Grounding Studios (`search-and-maps`)
 - **Category**: Markets & Intelligence
 - **Frontend Component(s)**: `src/components/GroundingModule.tsx` (435 lines, 18010 bytes, SHA-256: `33e604e35c495054fb3e15cd...`)
 - **Backend Service / Routes**: `server.ts (/api/gemini/grounding)`
@@ -629,7 +653,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.23 Creative & Voice Studios (Visual Studio, Lyria Music, Veo 3 Video, Live Voice, Transcribe) (`creative-studios`)
+### 2.24 Creative & Voice Studios (Visual Studio, Lyria Music, Veo 3 Video, Live Voice, Transcribe) (`creative-studios`)
 - **Category**: Games, Apps & Creative
 - **Frontend Component(s)**: `src/components/ImageModule.tsx, MusicModule.tsx, VideoModule.tsx, LiveVoiceModule.tsx, TranscribeModule.tsx` (547 lines, 23901 bytes, SHA-256: `c300258e1b775d56d43b9ed9...`)
 - **Backend Service / Routes**: `server.ts (/api/gemini/image, /api/gemini/music, /api/gemini/video, /api/gemini/transcribe)`
@@ -663,7 +687,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.24 Cloud & Workspace Suite (Google Drive, Google Tasks, GitHub Matrix, Integrations Hub) (`workspace-cloud-sync`)
+### 2.25 Cloud & Workspace Suite (Google Drive, Google Tasks, GitHub Matrix, Integrations Hub) (`workspace-cloud-sync`)
 - **Category**: Cloud, Security & Edge
 - **Frontend Component(s)**: `src/components/GoogleDriveModule.tsx, GoogleTasksModule.tsx, GitHubModule.tsx, SovereignIntegrationsHub.tsx` (695 lines, 31585 bytes, SHA-256: `1737d37da526310251266183...`)
 - **Backend Service / Routes**: `server.ts (/api/github/*, /api/integrations/*)`
@@ -691,7 +715,7 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.25 Memory, Persistence & Governance (Vault Storage, Forensic Audit Ledger, Scratchpad, HITL, Presets) (`memory-audit-hitl`)
+### 2.26 Memory, Persistence & Governance (Vault Storage, Forensic Audit Ledger, Scratchpad, HITL, Presets) (`memory-audit-hitl`)
 - **Category**: Cloud, Security & Edge
 - **Frontend Component(s)**: `src/components/VaultModule.tsx, AuditLedgerModule.tsx, ScratchpadModule.tsx, HITLWorkflowModule.tsx, PromptPresetsModule.tsx` (516 lines, 23398 bytes, SHA-256: `fe8d34c6b8055007343d6514...`)
 - **Backend Service / Routes**: `src/server/kernelDb.ts & server.ts (/api/audit/ledger, /api/hitl/*)`
@@ -718,9 +742,9 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.26 Edge, Mobile & Telecom Fleet (Termux Android, Infinite-SIM, Burner Mail, Model Wardrobe, APK Packager) (`edge-mobile-telecom`)
+### 2.27 Edge, Mobile & Telecom Fleet (Termux Android, Infinite-SIM, Burner Mail, Model Wardrobe, APK Packager) (`edge-mobile-telecom`)
 - **Category**: Cloud, Security & Edge
-- **Frontend Component(s)**: `src/components/TermuxEdgeModule.tsx, InfiniteSimModule.tsx, BurnerMailModule.tsx, DownloadModelsModule.tsx, PackagerModule.tsx` (2695 lines, 140607 bytes, SHA-256: `f49f3a69edb74a2f0577bc9a...`)
+- **Frontend Component(s)**: `src/components/TermuxEdgeModule.tsx, InfiniteSimModule.tsx, BurnerMailModule.tsx, DownloadModelsModule.tsx, PackagerModule.tsx` (2695 lines, 140641 bytes, SHA-256: `0d0f699f289efd6c690c3379...`)
 - **Backend Service / Routes**: `server.ts (/api/telecom/*, /api/burner-mail/*, /api/packager/*)`
 - **Architecture Summary**: Complete edge mobility and telecom suite: Android Termux `llama.cpp` installer & WebGPU offline LLM runner, Luhn-valid Infinite-SIM eSIM profile generator with Twilio/Telnyx SMS & voice bridge, live disposable Burner Mail inboxes with automatic OTP extraction, GGUF Model Wardrobe, and Android Capacitor APK Packager.
 
@@ -748,9 +772,9 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 
 ---
 
-### 2.27 Sovereign Dual-Vault Crypto Wallets (Personal Investor Self-Custody + UID 0 Agentic Autonomous Treasury) (`crypto-wallet`)
+### 2.28 Sovereign Dual-Vault Crypto Wallets (Personal Investor Self-Custody + UID 0 Agentic Autonomous Treasury) (`crypto-wallet`)
 - **Category**: Markets & Intelligence
-- **Frontend Component(s)**: `src/components/SovereignCryptoWalletModule.tsx` (2327 lines, 114671 bytes, SHA-256: `0e5b40e725cb858f26d7ac2e...`)
+- **Frontend Component(s)**: `src/components/SovereignCryptoWalletModule.tsx` (2394 lines, 118302 bytes, SHA-256: `77c88e8466b7c4b977f56248...`)
 - **Backend Service / Routes**: `src/server/cryptoWalletService.ts`
 - **Architecture Summary**: Production-grade dual-vault multi-chain cryptocurrency wallet system generating real secp256k1 (Bitcoin Native SegWit bc1q..., Legacy 1..., WIF, and Ethereum EIP-55 0x...) and ed25519 (Solana Base58) keypairs encrypted at rest with AES-256-GCM, polling live Ethereum/Bitcoin/Solana RPC nodes, and executing both Personal Investor trades/transfers and Autonomous Agentic 5-Minute Early-Warning executions.
 
@@ -778,6 +802,115 @@ Citation: Hamilton, J. (2026). Janus Gate v1.1.0-H-FID: Structural Provenance Fr
 - **Target Files**: `src/server/cryptoWalletService.ts`, `src/components/SovereignCryptoWalletModule.tsx`
 - **Core TypeScript Interfaces**: `SovereignCryptoWallet & SignedCryptoTransaction`
   1. To add Arbitrum, Base, Polygon, or Optimism L2 RPC polling, add their chainId and public RPC endpoints to `syncLiveOnChainAndMarketPrices()` in `src/server/cryptoWalletService.ts`.
+
+---
+
+### 2.29 Autonomous Workspace Read/Write, Atomic Multi-Hunk Patching & Self-Healing Engine (`workspace-autonomy-patching`)
+- **Category**: Core AI & Autonomy
+- **Frontend Component(s)**: `src/components/AutonomySupervisorModule.tsx` (881 lines, 41091 bytes, SHA-256: `e7c0a3401d73bc5558fa31a4...`)
+- **Backend Service / Routes**: `src/server/workspaceAutonomy.ts`
+- **Architecture Summary**: Full UID 0 autonomous filesystem read/write, fuzzy path resolution, multi-hunk atomic patching with SHA-256 snapshot ledger & instant rollback, batch cross-file patching, external target pointer, and recursive TypeScript (`tsc --noEmit`) self-healing.
+
+#### Subfunctions & Internal Hooks
+1. **Autonomous Read/Write & Atomic Patch Engine** (`POST /api/functions/execute (readFile, writeFile, patchFile, atomicPatchFile, batchPatchFiles, deleteFile)`)
+   - *Function*: Reads, writes, and applies surgical multi-hunk patches across the orchestrator codebase or external target repos with automatic pre-patch snapshots stored in `/data/atomic_patch_ledger.json`.
+   - *Optimal State Criteria*: Atomic patch verification passes with SHA-256 before/after digests and zero corrupt writes.
+1. **Instant Atomic Patch Rollback & Protected Core Guard** (`POST /api/workspace/rollback & autonomyRollbackPatch()`)
+   - *Function*: Restores any patched or written file back to its exact pre-patch bytes using the persisted atomic patch ledger.
+   - *Optimal State Criteria*: 100% deterministic byte-for-byte rollback recovery.
+1. **Recursive TypeScript Self-Heal, Dream State & Tool Synthesizer** (`POST /api/autonomy/self-heal, POST /api/autonomy/dream, POST /api/autonomy/evolve, POST /api/functions/execute (selfHealAST)`)
+   - *Function*: Runs `tsc --noEmit`, synthesizes targeted patches, consolidates memory into SQLite axioms, and forges new sandboxed tools automatically.
+   - *Optimal State Criteria*: Zero compiler errors and continuous Dream State + Evolution scheduler uptime.
+
+#### How to Repair to Optimal State
+- **Automated Repair Trigger**: `POST /api/os/forensic-repair` with `{ "actionId": "repair-autonomy-engine" }`
+- **Failure Symptoms**: Autonomous patch target pointer is stuck on an unavailable directory. | TypeScript compiler check detects type drift after manual edits.
+  1. Run `repair-autonomy-engine` to verify `workspaceAutonomy` root resolution, atomic patch ledger integrity, and Dream State scheduler.
+  2. Run `repair-compiler-tsc` to verify `npx tsc --noEmit` passes cleanly.
+- **CLI Verification Command**: `curl -s http://127.0.0.1:3000/api/autonomy/status | head -c 350`
+
+#### How to Expand & Scale
+- **Target Files**: `src/server/workspaceAutonomy.ts`, `src/server/autonomyEngine.ts`, `server.ts`
+- **Core TypeScript Interfaces**: `AutonomyResult, PatchHunk, BatchFileOperation, AtomicPatchSnapshotRecord`
+  1. Register new autonomous tool handlers inside `executeServerSovereignTool()` in `server.ts` and expose their specs in `src/server/workspaceAutonomy.ts`.
+
+---
+
+### 2.30 Real MX/SMTP Burner Mail Vault & Zero-403 OTP/Link Extractor (`burner-mail-real-mx`)
+- **Category**: Cloud, Security & Edge
+- **Frontend Component(s)**: `src/components/BurnerMailModule.tsx` (2707 lines, 126624 bytes, SHA-256: `cedad75d00e7c79f848ce3a3...`)
+- **Backend Service / Routes**: `src/server/burnerMailVault.ts`
+- **Architecture Summary**: Multi-provider real disposable email engine with automatic failover across real MX-backed mail relays (GuerrillaMail, Mail.tm, 1SecMail, DropMail), HTML-aware OTP & verification link extraction, and per-user isolated disk message archiving.
+
+#### Subfunctions & Internal Hooks
+1. **Zero-403 Real MX Burner Provisioner** (`POST /api/burner/create & GET /api/burner/messages`)
+   - *Function*: Creates genuine MX-deliverable disposable addresses that pass strict SaaS/retail verification gates and archives messages in per-user isolated vaults.
+   - *Optimal State Criteria*: Zero 403/404 upstream failures; automatic provider rotation and HTML-clean OTP detection.
+
+#### How to Repair to Optimal State
+- **Automated Repair Trigger**: `POST /api/os/forensic-repair` with `{ "actionId": "repair-filesystem-dirs" }`
+- **Failure Symptoms**: Burner inbox archive needs re-sync or provider rotation.
+  1. Click "Rotate Provider" inside Burner Mail or verify `/data/burner_messages_vault.json` and per-user vaults.
+- **CLI Verification Command**: `curl -s http://127.0.0.1:3000/api/burner/providers | head -c 300`
+
+#### How to Expand & Scale
+- **Target Files**: `src/server/burnerMailVault.ts`, `src/components/BurnerMailModule.tsx`, `server.ts`
+- **Core TypeScript Interfaces**: `ArchivedBurnerMessage & ExtractedEmailArtifacts`
+  1. Add additional MX-verified inbound SMTP webhook relays in `server.ts` `/api/burner/*` handlers.
+
+---
+
+### 2.31 Continuous Live Voice Bridge, Distilled Voices & Decoupled Voice Scratchpad (`live-voice-scratchpad`)
+- **Category**: Core AI & Autonomy
+- **Frontend Component(s)**: `src/components/GeminiLiveVoiceModal.tsx` (476 lines, 19035 bytes, SHA-256: `51940a1a13c25d91cd7b0626...`)
+- **Backend Service / Routes**: `src/components/PersistentTalkDock.tsx`
+- **Architecture Summary**: Free-flowing interruptible real-time voice interface using premium distilled & Gemini native voices devoid of artificial personal identity (strictly the voice of the autonomous sovereign intelligence in the OS), writing voice logs into a separate decoupled Voice Scratchpad instead of blocking the text chat stream.
+
+#### Subfunctions & Internal Hooks
+1. **Decoupled Voice Scratchpad & Barge-In Interjection** (`PersistentTalkDock + GeminiLiveVoiceModal + /api/sql-memory/voice-continuity`)
+   - *Function*: Supports natural interruption mid-speech, continuous multi-turn voice control, and long-running background task dispatch while logging transcripts to a dedicated Voice Scratchpad.
+   - *Optimal State Criteria*: Zero reversion to legacy robotic TTS voices; text chat remains non-blocking during voice conversations.
+
+#### How to Repair to Optimal State
+- **Automated Repair Trigger**: `POST /api/os/forensic-repair` with `{ "actionId": "repair-llm-router" }`
+- **Failure Symptoms**: Voice stream disconnected or audio playback muted by browser autoplay policy.
+  1. Run `repair-llm-router` to rehydrate Proxy Loop Wheel spokes and click Start Voice to resume WebAudio context.
+- **CLI Verification Command**: `curl -s http://127.0.0.1:3000/api/proxy-wheel/status | head -c 300`
+
+#### How to Expand & Scale
+- **Target Files**: `src/components/GeminiLiveVoiceModal.tsx`, `src/components/PersistentTalkDock.tsx`, `src/utils/voiceEngine.ts`
+- **Core TypeScript Interfaces**: `UserSqlVoiceContinuity`
+  1. Add additional distilled neural voice profiles in `src/components/NeuralVoiceDistilleryModule.tsx` and bind them to `voiceEngine.ts`.
+
+---
+
+### 2.32 Multi-Tenant Isolation, Custom User Tiers & Real Fiat/Crypto Monetization (`multi-tenant-tiers-billing`)
+- **Category**: Cloud, Security & Edge
+- **Frontend Component(s)**: `src/components/AdminSovereignCommandCenter.tsx` (2455 lines, 121474 bytes, SHA-256: `6702da23b08810cba5f9c640...`)
+- **Backend Service / Routes**: `src/server/authService.ts`
+- **Architecture Summary**: Hardened per-user workspace isolation ensuring every new account starts 100% clean (empty personal crypto vault, empty per-user AES-256-GCM secrets vault, empty Grant Hunter profile, empty Burner Mail/SIM stores, symlink-safe sandboxed filesystem) paired with customizable Admin user tiers, granular privilege flags, and real monetization via Stripe Checkout/Webhooks and on-chain EVM (USDC/ETH) transaction receipt verification.
+
+#### Subfunctions & Internal Hooks
+1. **Per-User Workspace, Wallet & Secrets Vault Isolation** (`src/server/userSecretsVault.ts, cryptoWalletService.ts, coinbaseCdpService.ts, grantApplicationService.ts, burnerMailVault.ts`)
+   - *Function*: Partitions every non-owner user into `data/user_workspaces/<userId>/` with per-user HMAC-derived encryption keys and strict symlink-safe path confinement while keeping Executive Architect host access 100% intact.
+   - *Optimal State Criteria*: Zero cross-tenant data bleed; new accounts start with 0 wallets, 0 secrets, and blank profiles.
+1. **Custom Tier Builder & Granular RBAC Engine** (`GET /api/tiers, POST/PATCH/DELETE /api/auth/admin/tiers, POST /api/auth/admin/users/:id/assign-tier`)
+   - *Function*: Lets the Administrator create unlimited custom tiers with module checklists, capability switches, pricing, and instant user assignment enforced server-side on every `/api/*` request.
+   - *Optimal State Criteria*: Server-side RBAC enforces tier flags cleanly without degrading Executive Architect autonomy.
+1. **Real Fiat (Stripe) & On-Chain EVM Crypto (USDC/ETH) Billing Engine** (`POST /api/billing/stripe/checkout, POST /api/billing/stripe/webhook, POST /api/billing/crypto/invoice, POST /api/billing/crypto/verify`)
+   - *Function*: Verifies real Stripe Checkout sessions via HMAC-SHA256 webhook signatures and verifies real EVM native ETH / ERC-20 USDC transfers via live JSON-RPC receipts with replay protection before upgrading user tiers.
+   - *Optimal State Criteria*: Zero simulated/mock payments; every tier upgrade maps to a verified Stripe session, on-chain txHash, or Admin grant.
+
+#### How to Repair to Optimal State
+- **Automated Repair Trigger**: `POST /api/os/forensic-repair` with `{ "actionId": "repair-sqlite-db" }`
+- **Failure Symptoms**: New user permissions out of sync with custom tier definition or billing config needs check.
+  1. Inspect `/api/tiers` and `/api/auth/admin/billing/config` inside Admin Sovereign Command Center.
+- **CLI Verification Command**: `curl -s http://127.0.0.1:3000/api/tiers | head -c 350`
+
+#### How to Expand & Scale
+- **Target Files**: `src/server/authService.ts`, `src/server/billingService.ts`, `src/server/userSecretsVault.ts`, `src/components/BillingUpgradeModal.tsx`
+- **Core TypeScript Interfaces**: `UserTierDefinition, TierPricingConfig, CryptoPaymentInvoice, BillingLedgerRecord`
+  1. Add additional EVM L2 chains to `BILLING_CHAIN_REGISTRY` in `src/server/billingService.ts` or add new capability booleans to `UserPrivileges` in `src/types/auth.ts`.
 
 ---
 

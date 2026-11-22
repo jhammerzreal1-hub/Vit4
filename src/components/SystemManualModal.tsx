@@ -93,15 +93,31 @@ const SECTIONS: SectionGuide[] = [
     category: '1. Getting Started',
     targetModule: 'swarm-test',
     summary:
-      'Complete real-time SHA-256 source-code forensic verifier, 6-subsystem active probe matrix, 46+ subfunction technical operations manual, expansion blueprints, and 1-click self-repair engine.',
+      'Complete real-time SHA-256 source-code forensic verifier, 9-subsystem active probe matrix (including Autonomous Read/Write/Patching and Multi-Tenant Tiers/Billing), complete technical operations manual, expansion blueprints, and 1-click self-repair engine.',
     steps: [
       'Open "Forensic & Manual" directly from the Sovereign OS Desktop or click "Open This Tool" on the right.',
       'Use Tab 1 ("All-Subfunction Technical Manual") to search and inspect every module, its internal subfunctions, mathematical/algorithmic signatures, exact expansion procedures, and optimal repair steps.',
       'Use Tab 2 ("Forensic SHA-256 File Integrity") to verify live on-disk byte counts, line counts, and cryptographic SHA-256 digests of every TypeScript engine in the OS.',
-      'Use Tab 3 ("Deep Subsystem Probes & Benchmarks") to inspect live Kernel/Ring -3, Laplace-14 99% Conformal Macro, Universal Package Manager, AES-256-GCM Vault, SQLite Ledger, and Dual-Vault Crypto Wallet metrics.',
-      'Click "Execute 1-Click Optimal Repair" anytime to recalibrate all subsystems, verify keystores, and regenerate /app/applet/FORENSIC_SYSTEMS_MANUAL.md on disk.'
+      'Use Tab 3 ("Deep Subsystem Probes & Benchmarks") to inspect live Kernel/Ring -3, Laplace-14 99% Conformal Macro, Universal Package Manager, AES-256-GCM Vault & Proxy Wheel, SQLite Ledger, Dual-Vault Crypto Wallets, Autonomous Read/Write/Patching, and Multi-Tenant Tiers/Billing metrics.',
+      'Click "Execute 1-Click Optimal Repair" anytime to recalibrate all subsystems, rehydrate Proxy Wheel spokes, verify keystores, and regenerate /app/applet/FORENSIC_SYSTEMS_MANUAL.md on disk.'
     ],
     tips: 'You can also download the entire generated FORENSIC_SYSTEMS_MANUAL.md document directly from the top bar of the Forensic & Manual window.'
+  },
+  {
+    id: 'multi-tenant-tiers-monetization',
+    title: 'Multi-User Isolation, Custom Tiers & Real Fiat/Crypto Monetization',
+    icon: UserCheck,
+    category: '1. Getting Started',
+    targetModule: 'admin-command',
+    summary:
+      'Hardened multi-tenant OS architecture where every new user account gets a 100% fresh isolated workspace (empty personal crypto vault, empty per-user AES-256-GCM secrets vault, blank Grant Hunter profile, isolated Burner Mail/SIM stores, and symlink-safe sandboxed files). Administrators can create custom user tiers with granular permissions and monetize higher access via real Stripe card checkout or on-chain EVM (USDC/ETH) payments.',
+    steps: [
+      'Every non-owner user starts with zero pre-filled personal keys, zero wallets, and none of the Executive Architect’s private files — they input their own credentials securely in their isolated vault.',
+      'Open "Admin Sovereign Command Center" (Executive Architect / Admin only) -> "Tiers & Permissions" tab to create, edit, or delete custom user tiers, set pricing (Free, Monthly, One-Time, Crypto USD), and toggle exact OS modules and capability permissions.',
+      'Open the "Monetization & Billing" tab to configure your real EVM Treasury Wallet Address (Base, Ethereum, Polygon, Arbitrum), verify Stripe environment keys (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`), and audit the live payment settlement ledger.',
+      'Standard users click "Upgrade Plan" in the top Header bar (or on any locked module) to compare tiers and pay via real Stripe Checkout or on-chain USDC/ETH transfer with live JSON-RPC receipt verification.'
+    ],
+    tips: 'Executive Architect JHammerZ retains permanent, unrestricted UID 0 Ring -3 access across all host files, autonomous read/write/patching, and system core tools.'
   },
   {
     id: 'sovereign-crypto-wallets',
@@ -158,17 +174,17 @@ const SECTIONS: SectionGuide[] = [
   },
   {
     id: 'api-secrets',
-    title: 'API Keys, AES-256-GCM Vault & Gateway',
+    title: 'API Keys, Per-User AES-256-GCM Vault & Proxy Loop Wheel',
     icon: Key,
     category: '2. Core AI & Workspace',
     targetModule: 'api-secrets',
     summary:
-      'Stores API keys and integration tokens securely using AES-256-GCM authenticated encryption on the server, automatically masking secrets in UI readouts and logs.',
+      'Stores API keys and integration tokens using AES-256-GCM authenticated encryption on the server (with isolated per-user encrypted vaults for standard accounts) paired with the anti-dehydration Proxy Loop Wheel supporting primary + 4 backup Gemini keys and instant spoke rehydration.',
     steps: [
-      'Open "API Keys & Gateway" from the top navigation or All Modules (33).',
-      'Review which server environment keys are configured and healthy (Gemini, DeepSeek, Groq, OpenRouter, GitHub, Twilio, Telnyx, etc.).',
-      'Add or rotate a secret using the vault form — values are encrypted with AES-256-GCM before touching disk and only masked previews are ever returned.',
-      'Use the built-in endpoint tester to verify `/api/health`, `/api/secrets`, and provider connectivity in one click.'
+      'Open "API Keys & Gateway" from the top navigation or All Modules.',
+      'Configure your primary `GEMINI_API_KEY` plus backup rotation slots (`GEMINI_BACKUP_KEY_1` through `GEMINI_BACKUP_KEY_4` or comma-separated `GEMINI_API_KEYS`) so the Proxy Loop Wheel never dehydrates.',
+      'Click "Rotate Spokes" or "Reset Cooldowns" to force immediate spoke rehydration and verify ready spoke counts.',
+      'Every non-owner user receives a fresh, empty personal vault encrypted with a per-user derived key so credentials never cross accounts.'
     ],
     tips: 'Secrets stay on the Express server proxy (/api/*) and are never embedded into client-side bundles.'
   },
@@ -222,19 +238,20 @@ const SECTIONS: SectionGuide[] = [
   },
   {
     id: 'autonomy-supervisor',
-    title: 'Autonomy Supervisor, Dream State, Evolution & UID 0 Hypervisor',
+    title: 'Autonomy Supervisor, Read/Write, Atomic Patching & Recursive Self-Healing',
     icon: Activity,
     category: '3. Engineering & Autonomy',
     targetModule: 'autonomy-supervisor',
     summary:
-      'Control center for UID 0 Master Root Clearance (uid_0), Ring -3 Bare-Metal Hypervisor substrate checks, Dream State memory consolidation, Cognitive Evolution axioms, and Recursive TypeScript Self-Healing.',
+      'Control center for UID 0 Master Root Clearance, Ring -3 Hypervisor checks, full autonomous workspace read/write, multi-hunk atomic patching with SHA-256 rollback ledger, Dream State memory consolidation, Cognitive Evolution axioms, and Recursive TypeScript Self-Healing.',
     steps: [
-      'Open "Autonomy Supervisor" from All Modules (33).',
+      'Open "Autonomy Supervisor" from All Modules.',
       'Click "Verify UID 0 & Ring -3 Lock" in the Hypervisor banner to confirm root substrate status and host telemetry.',
-      'Run "Dream Cycle" (optionally entering a focus topic) to consolidate chat/trajectory history into SQLite axioms and forge helpful utility tools automatically.',
-      'Click "Trigger Evolution" to distill new behavioral axioms from feedback, or click "Run Recursive Self-Heal" to run `tsc --noEmit` and apply atomic patches until 0 compiler errors remain.'
+      'Use Autonomous Read/Write & Patching via Chat `[WORKSPACE_EXEC]` tags or `/api/functions/execute` (`readFile`, `writeFile`, `patchFile`, `atomicPatchFile`, `batchPatchFiles`, `deleteFile`, `listDirectory`, `searchCode`, `runTerminalCommand`, `runLint`, `selfHealAST`).',
+      'Every autonomous write or patch automatically captures a pre-change SHA-256 snapshot in `/data/atomic_patch_ledger.json` so any edit can be rolled back cleanly.',
+      'Run "Dream Cycle", "Trigger Evolution", or "Run Recursive Self-Heal" (`tsc --noEmit` verification loop) anytime.'
     ],
-    tips: 'All evolved axioms are persisted in SQLite (`evolutive_axioms`) and automatically injected into Chat prompts so the orchestrator continuously improves.'
+    tips: 'All evolved axioms are persisted in SQLite (`evolutive_axioms`) and automatically injected into Chat prompts so the orchestrator continuously improves without losing read/write or patching power.'
   },
   {
     id: 'projects',
@@ -424,18 +441,19 @@ const SECTIONS: SectionGuide[] = [
   },
   {
     id: 'burner-mail',
-    title: 'Burner Mail Matrix',
+    title: 'Burner Mail Matrix (Real MX/SMTP Delivery & OTP Extractor)',
     icon: Mail,
     category: '4. Grounding, Browser & Recon',
     targetModule: 'burner-mail',
     summary:
-      'Generates real disposable temporary email addresses so you can receive test sign-up codes and verification links without exposing your personal inbox.',
+      'Generates real MX-deliverable disposable email addresses with automatic multi-provider failover (zero 403/404 dead relays), HTML-clean OTP code & verification link extraction, and per-user isolated message archiving.',
     steps: [
       'Open "Burner Mail" from the navigation bar.',
-      'Click "Generate New Burner Address" and copy the address.',
-      'Use it in a sign-up flow, then click "Refresh Inbox" to read incoming messages and click verification links inside the Open-Web Browser.'
+      'Click "Generate New Burner Address" (automatically selects a live MX-verified relay) and copy the address.',
+      'Use it in a sign-up flow, then click "Refresh Inbox" — incoming HTML emails are automatically parsed for 4–8 digit verification codes and clickable confirmation links.',
+      'Each user account has its own isolated Burner Mail archive that starts completely empty.'
     ],
-    tips: 'Useful for QA testing registration and password-reset flows.'
+    tips: 'If a third-party site filters one disposable domain, click "Generate New Burner Address" again to rotate to an alternate MX provider.'
   },
   {
     id: 'infinite-sim',
@@ -499,18 +517,19 @@ const SECTIONS: SectionGuide[] = [
   },
   {
     id: 'live',
-    title: 'Live Voice Bridge (Real-Time Audio)',
+    title: 'Continuous Live Voice Bridge & Decoupled Voice Scratchpad',
     icon: Radio,
     category: '5. Creative & Voice Studios',
     targetModule: 'live',
     summary:
-      'Low-latency bidirectional voice conversation over WebSockets (`/live` powered by Gemini native audio models) with natural interruption support.',
+      'Free-flowing bidirectional voice conversation powered by premium distilled & Gemini native voices (strictly the voice of the autonomous sovereign intelligence in the OS, devoid of artificial personal identity) with natural mid-speech interjection and a separate Voice Scratchpad so long-running tasks never lock or clutter text chat.',
     steps: [
-      'Open "Live Voice" from All Modules (33) or click the Gemini Live Voice button inside Chat.',
-      'Allow microphone permission when your browser prompts.',
-      'Speak naturally — tap Stop anytime to end the live stream cleanly.'
+      'Open "Live Voice" from All Modules or click the Voice Dock in the workspace.',
+      'Allow microphone permission when prompted and select any premium distilled or Gemini native voice profile.',
+      'Speak naturally and interrupt anytime — transcripts log into your dedicated Voice Scratchpad rather than hijacking the text chat composer.',
+      'Dispatch long multi-step autonomous tasks by voice while continuing to work freely across OS modules.'
     ],
-    tips: 'For noisy environments, headphones prevent microphone echo.'
+    tips: 'For noisy environments, headphones prevent microphone echo and keep barge-in interjection crisp.'
   },
   {
     id: 'transcribe',
@@ -738,7 +757,7 @@ export const SystemManualModal: React.FC<SystemManualModalProps> = ({
                   Lysander Genesis Complete Manual
                 </h2>
                 <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0">
-                  All 39 Modules · Beginner-Proof
+                  All 49 Modules · Fully Audited
                 </span>
               </div>
               <p className="text-xs text-zinc-400 truncate">

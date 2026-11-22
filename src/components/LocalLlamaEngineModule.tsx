@@ -5,192 +5,447 @@
  * Licensed under the MIT License & JHammerZ Custom Sovereign Licenses
  */
 
-import React, { useState, useEffect } from 'react';
-import { Cpu, Server, Terminal, Play, Square, RefreshCw, ShieldCheck, Zap, Globe } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Server, Play, Square, RefreshCw, Activity, Send, Cpu, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../utils/authClient';
 
-interface VirtualPortProcess {
+interface ListeningSocketInfo {
   port: number;
-  pid: number;
+  address: string;
+  protocol: 'tcp' | 'tcp6';
+  managedByController: boolean;
   appName: string;
-  status: 'RUNNING' | 'STOPPED';
-  uptimeSec: number;
+  pid: number | null;
+  status: 'RUNNING' | 'LISTENING';
+  uptimeSec: number | null;
+  requestCount: number;
   endpoint: string;
 }
 
+interface LocalLlmStatus {
+  ollama: {
+    reachable: boolean;
+    endpoint: string;
+    models: Array<{ name: string; sizeGb: number; modifiedAt: string }>;
+    error?: string;
+  };
+  hardware: {
+    hostname: string;
+    platform: string;
+    nodeVersion: string;
+    cpuCount: number;
+    cpuModel: string;
+    loadAvg1m: number;
+    totalMemGb: number;
+    usedMemGb: number;
+    freeMemGb: number;
+    processRssMb: number;
+    uptimeSec: number;
+  };
+  serverAiFallbackReady: boolean;
+}
+
 export const LocalLlamaEngineModule: React.FC = () => {
-  const [processes, setProcesses] = useState<VirtualPortProcess[]>([
-    { port: 8080, pid: 4102, appName: 'Virtual Llama Fallback Engine (Ollama Standard)', status: 'RUNNING', uptimeSec: 1420, endpoint: 'http://127.0.0.1:8080/api/generate' },
-    { port: 8081, pid: 4188, appName: 'Autonomous Test Sandbox Web Server', status: 'RUNNING', uptimeSec: 310, endpoint: 'http://127.0.0.1:8081/' }
-  ]);
+  const [status, setStatus] = useState<LocalLlmStatus | null>(null);
+  const [ports, setPorts] = useState<ListeningSocketInfo[]>([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [targetPort, setTargetPort] = useState(8082);
-  const [appName, setAppName] = useState('Custom Test App');
-  const [scriptContent, setScriptContent] = useState('console.log("Autonomous test app running on virtual port");');
-  const [logs, setLogs] = useState<string[]>([
-    '[VirtualLlama] Fallback engine initialized on port 8080. Ready for offline inference.',
-    '[PortController] Systemic port controller online. Ports 8080-8090 reserved for virtual services.'
-  ]);
+  const [appName, setAppName] = useState('Sovereign API Sandbox');
   const [isSpawning, setIsSpawning] = useState(false);
 
-  const spawnVirtualPortApp = async () => {
+  const [prompt, setPrompt] = useState('Summarize the health and architecture of this Sovereign OS environment in 3 bullet points.');
+  const [selectedModel, setSelectedModel] = useState('llama3.2');
+  const [allowFallback, setAllowFallback] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [inferenceResult, setInferenceResult] = useState<{
+    engine: string;
+    model: string;
+    latencyMs: number;
+    text: string;
+    note?: string;
+  } | null>(null);
+
+  const [logs, setLogs] = useState<string[]>([]);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const appendLog = (msg: string) => {
+    setLogs((prev) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev].slice(0, 60));
+  };
+
+  const refreshAll = async () => {
+    setIsRefreshing(true);
+    setErrorMsg(null);
+    try {
+      const [stRes, portsRes] = await Promise.all([
+        apiFetch('/api/local-llama/status'),
+        apiFetch('/api/ports/list')
+      ]);
+      const stData = await stRes.json().catch(() => ({}));
+      const portsData = await portsRes.json().catch(() => ({}));
+
+      if (stRes.ok && stData.success) {
+        setStatus({
+          ollama: stData.ollama,
+          hardware: stData.hardware,
+          serverAiFallbackReady: stData.serverAiFallbackReady
+        });
+        if (stData.ollama?.models?.length > 0) {
+          setSelectedModel((prev) => prev || stData.ollama.models[0].name);
+        }
+      }
+      if (portsRes.ok && portsData.success) {
+        setPorts(portsData.ports || []);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to query local engine and OS sockets.');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshAll();
+  }, []);
+
+  const spawnRealPort = async (e: React.FormEvent) => {
+    e.preventDefault();
     setIsSpawning(true);
-    setLogs(prev => [`[PortController] Spawning "${appName}" on port ${targetPort}...`, ...prev]);
+    setErrorMsg(null);
     try {
       const res = await apiFetch('/api/ports/spawn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ port: targetPort, appName, scriptContent })
+        body: JSON.stringify({ port: targetPort, appName })
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.success) {
-        setProcesses(prev => [
-          ...prev,
-          {
-            port: Number(data.port || targetPort),
-            pid: data.pid || Math.floor(Math.random() * 5000 + 1000),
-            appName,
-            status: 'RUNNING',
-            uptimeSec: 1,
-            endpoint: `http://127.0.0.1:${data.port || targetPort}/`
-          }
-        ]);
-        setLogs(prev => [`[Success] App successfully deployed and listening on http://127.0.0.1:${data.port || targetPort}`, ...prev]);
-        setTargetPort(p => p + 1);
-      } else {
-        setLogs(prev => [`[Notice] Virtual port service simulated successfully on port ${targetPort}.`, ...prev]);
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Failed to bind port ${targetPort}`);
       }
-    } catch {
-      setLogs(prev => [`[Notice] Autonomous port spawn registered successfully on port ${targetPort}.`, ...prev]);
+      appendLog(`Bound real HTTP loopback server "${appName}" on http://127.0.0.1:${data.port}/ (PID ${data.pid})`);
+      setTargetPort((p) => (p < 9999 ? p + 1 : 8082));
+      await refreshAll();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to bind loopback port.');
+      appendLog(`Error: ${err?.message || 'Port bind failed'}`);
     } finally {
       setIsSpawning(false);
     }
   };
 
-  const killPortProcess = async (port: number) => {
-    setLogs(prev => [`[PortController] Terminating process on port ${port}...`, ...prev]);
+  const probePort = async (port: number) => {
+    setErrorMsg(null);
     try {
-      await apiFetch('/api/ports/kill', {
+      const res = await apiFetch('/api/ports/probe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ port })
       });
-    } catch {}
-    setProcesses(prev => prev.filter(p => p.port !== port));
-    setLogs(prev => [`[Success] Port ${port} freed and process terminated.`, ...prev]);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Probe failed');
+      const p = data.probe;
+      appendLog(
+        `Probe 127.0.0.1:${port} -> ${p.reachable ? `HTTP ${p.statusCode} in ${p.latencyMs}ms` : 'Unreachable'} | ${p.bodyPreview.slice(0, 120)}`
+      );
+      await refreshAll();
+    } catch (err: any) {
+      appendLog(`Probe 127.0.0.1:${port} error: ${err?.message || 'failed'}`);
+    }
   };
 
+  const stopManagedPort = async (port: number) => {
+    setErrorMsg(null);
+    try {
+      const res = await apiFetch('/api/ports/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Stop failed');
+      appendLog(`Closed real HTTP listener on 127.0.0.1:${port} and released socket.`);
+      await refreshAll();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to stop listener.');
+    }
+  };
+
+  const runInference = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!prompt.trim()) return;
+    setIsGenerating(true);
+    setErrorMsg(null);
+    try {
+      const res = await apiFetch('/api/local-llama/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          model: selectedModel,
+          allowCloudFallback: allowFallback
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Inference failed.');
+      }
+      setInferenceResult({
+        engine: data.engine,
+        model: data.model,
+        latencyMs: data.latencyMs,
+        text: data.response,
+        note: data.note
+      });
+      appendLog(`Inference complete via ${data.engine} (${data.model}) in ${data.latencyMs}ms.`);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Inference error.');
+      appendLog(`Inference error: ${err?.message || 'failed'}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const managedCount = ports.filter((p) => p.managedByController).length;
+
   return (
-    <div className="h-full flex flex-col bg-slate-950 text-slate-100 p-6 overflow-y-auto">
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+    <div className="h-full flex flex-col bg-slate-950 text-slate-100 overflow-y-auto">
+      <div className="px-6 py-5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="p-2 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/30">
-              <Server className="w-6 h-6 animate-pulse" />
-            </span>
-            <h1 className="text-2xl font-black tracking-wider bg-gradient-to-r from-amber-400 via-orange-300 to-cyan-400 bg-clip-text text-transparent">
-              Virtual Local Llama / Ollama Engine & Port Controller
-            </h1>
+          <h1 className="text-xl font-semibold text-slate-50 tracking-tight">
+            Local LLM & Live Loopback Port Controller
+          </h1>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            <span>Real Ollama daemon probe (127.0.0.1:11434)</span>
+            <span aria-hidden="true">·</span>
+            <span>Live /proc/net/tcp socket scanner</span>
+            <span aria-hidden="true">·</span>
+            <span>Real Node HTTP loopback sandbox (8000–9999)</span>
           </div>
-          <p className="text-sm text-slate-400 mt-1">
-            Offline local LLM fallback inference engine and systemic port control for autonomous app testing.
-          </p>
         </div>
+        <button
+          onClick={refreshAll}
+          disabled={isRefreshing}
+          className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-100 text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+          Refresh Telemetry
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Fallback Engine Status</span>
-          <span className="text-3xl font-black text-emerald-400 mt-2">ACTIVE (Port 8080)</span>
-          <span className="text-xs text-slate-400 mt-1">Ready for zero-key API fallback</span>
-        </div>
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Virtual Ports</span>
-          <span className="text-3xl font-black text-cyan-400 mt-2">{processes.length} Ports</span>
-          <span className="text-xs text-emerald-400 mt-1">Managed by port controller</span>
-        </div>
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Inference Backend</span>
-          <span className="text-3xl font-black text-amber-400 mt-2">Ollama / Llama 3</span>
-          <span className="text-xs text-amber-300 mt-1">Compatible REST API endpoint</span>
-        </div>
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Sandbox Security</span>
-          <span className="text-3xl font-black text-indigo-400 mt-2">Isolated</span>
-          <span className="text-xs text-slate-400 mt-1">Virtual process isolation</span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1">
-        {/* Active Virtual Ports & Processes */}
-        <div className="flex flex-col bg-slate-900/80 border border-slate-800 rounded-2xl p-5">
-          <h2 className="text-base font-bold text-slate-200 mb-4 flex items-center gap-2">
-            <Globe className="w-5 h-5 text-amber-400" /> Active Virtual Ports & Services
-          </h2>
-          <div className="space-y-3 flex-1 overflow-y-auto pr-1">
-            {processes.map(proc => (
-              <div key={proc.port} className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono">
-                      Port {proc.port}
-                    </span>
-                    <h3 className="text-sm font-bold text-slate-200">{proc.appName}</h3>
-                  </div>
-                  <div className="text-xs font-mono text-cyan-400 mt-1">{proc.endpoint} (PID: {proc.pid})</div>
-                </div>
-                <button
-                  onClick={() => killPortProcess(proc.port)}
-                  className="px-3 py-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/30 text-red-300 text-xs font-bold border border-red-500/30 transition-all cursor-pointer flex items-center gap-1.5"
-                >
-                  <Square className="w-3.5 h-3.5" /> Stop
-                </button>
-              </div>
-            ))}
+      <div className="p-6 space-y-6 flex-1">
+        {errorMsg && (
+          <div className="p-3.5 rounded-lg bg-red-950/60 border border-red-800/70 text-red-200 text-xs flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
+            <span>{errorMsg}</span>
           </div>
+        )}
 
-          {/* Spawn New Virtual App */}
-          <div className="mt-5 pt-4 border-t border-slate-800 space-y-3">
-            <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-              <Play className="w-4 h-4 text-emerald-400" /> Autonomous Port App Spawner
-            </h3>
-            <div className="grid grid-cols-3 gap-2">
-              <input
-                type="text"
-                value={appName}
-                onChange={e => setAppName(e.target.value)}
-                placeholder="App Name"
-                className="col-span-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-amber-500"
-              />
-              <input
-                type="number"
-                value={targetPort}
-                onChange={e => setTargetPort(Number(e.target.value))}
-                placeholder="Port"
-                className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs font-mono focus:outline-none focus:border-amber-500"
-              />
+        {/* Real Hardware & Daemon KPIs */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Local Ollama Daemon</div>
+            <div className={`mt-2 text-xl font-semibold ${status?.ollama.reachable ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {status ? (status.ollama.reachable ? 'Online' : 'Not Detected') : '—'}
             </div>
-            <button
-              onClick={spawnVirtualPortApp}
-              disabled={isSpawning}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 disabled:opacity-50 transition-all cursor-pointer"
-            >
-              <RefreshCw className={`w-4 h-4 ${isSpawning ? 'animate-spin' : ''}`} />
-              {isSpawning ? 'Deploying to Virtual Port...' : 'Deploy App to Virtual Port'}
-            </button>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {status?.ollama.reachable
+                ? `${status.ollama.models.length} local model(s) ready`
+                : status?.serverAiFallbackReady
+                ? 'Server AI fallback available'
+                : 'Start with `ollama serve`'}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Listening TCP Sockets</div>
+            <div className="mt-2 text-xl font-semibold font-mono tabular-nums text-cyan-400">
+              {ports.length}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {managedCount} managed sandbox listener(s)
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Host Compute</div>
+            <div className="mt-2 text-xl font-semibold font-mono tabular-nums text-slate-100">
+              {status ? `${status.hardware.cpuCount} Cores` : '—'}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {status ? `Load 1m: ${status.hardware.loadAvg1m} · ${status.hardware.nodeVersion}` : 'Reading host…'}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Host Memory & Process RSS</div>
+            <div className="mt-2 text-xl font-semibold font-mono tabular-nums text-slate-100">
+              {status ? `${status.hardware.usedMemGb}/${status.hardware.totalMemGb} GB` : '—'}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {status ? `OS Process RSS: ${status.hardware.processRssMb} MB` : 'Measuring…'}
+            </div>
           </div>
         </div>
 
-        {/* Systemic Port Controller & Engine Logs */}
-        <div className="flex flex-col bg-slate-900/80 border border-slate-800 rounded-2xl p-5">
-          <h2 className="text-base font-bold text-slate-200 mb-4 flex items-center gap-2">
-            <Terminal className="w-5 h-5 text-cyan-400" /> Systemic Port Control & Engine Logs
-          </h2>
-          <div className="flex-1 bg-slate-950 rounded-xl p-3 font-mono text-xs text-amber-300/95 overflow-y-auto space-y-2 border border-slate-800">
-            {logs.map((log, idx) => (
-              <div key={idx} className="leading-relaxed border-b border-slate-900 pb-1">
-                {log}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Real Port Scanner & Loopback Spawner */}
+          <div className="rounded-xl bg-slate-900/60 border border-slate-800 flex flex-col">
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                <Server className="w-4 h-4 text-amber-400" />
+                Live OS Listening Sockets & Loopback Sandboxes
               </div>
-            ))}
+              <span className="text-xs font-mono text-slate-400">127.0.0.1</span>
+            </div>
+
+            <div className="divide-y divide-slate-800/70 max-h-80 overflow-y-auto">
+              {ports.length === 0 ? (
+                <div className="p-6 text-xs text-slate-400 text-center">No active TCP sockets detected.</div>
+              ) : (
+                ports.map((p) => (
+                  <div key={`${p.protocol}-${p.port}`} className="p-3.5 flex items-center justify-between gap-3 hover:bg-slate-900">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="font-mono font-semibold tabular-nums text-amber-300">:{p.port}</span>
+                        <span className="text-slate-100 font-medium truncate">{p.appName}</span>
+                      </div>
+                      <div className="text-xs font-mono text-slate-400 mt-0.5 tabular-nums">
+                        {p.address} · {p.protocol.toUpperCase()}
+                        {p.pid ? ` · PID ${p.pid}` : ''}
+                        {p.managedByController ? ` · ${p.requestCount} reqs` : ''}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => probePort(p.port)}
+                        className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                      >
+                        <Activity className="w-3 h-3 text-cyan-400" />
+                        Probe
+                      </button>
+                      {p.managedByController && (
+                        <button
+                          onClick={() => stopManagedPort(p.port)}
+                          className="px-2.5 py-1 rounded-md bg-red-950 hover:bg-red-900 border border-red-800/70 text-red-200 text-xs flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                        >
+                          <Square className="w-3 h-3" />
+                          Stop
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Real Sandbox Spawner */}
+            <form onSubmit={spawnRealPort} className="p-4 border-t border-slate-800 space-y-3 mt-auto">
+              <div className="text-xs font-medium text-slate-200 flex items-center gap-1.5">
+                <Play className="w-3.5 h-3.5 text-emerald-400" />
+                Bind Real Local HTTP Sandbox (Ports 8000–9999)
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <input
+                  type="text"
+                  value={appName}
+                  onChange={(e) => setAppName(e.target.value)}
+                  placeholder="Service name"
+                  className="col-span-2 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
+                />
+                <input
+                  type="number"
+                  min={8000}
+                  max={9999}
+                  value={targetPort}
+                  onChange={(e) => setTargetPort(Number(e.target.value))}
+                  className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono tabular-nums text-slate-100 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isSpawning}
+                className="w-full py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                {isSpawning ? 'Binding 127.0.0.1 Socket…' : 'Bind Live Loopback Service'}
+              </button>
+            </form>
+          </div>
+
+          {/* Live Hybrid Inference Console + Event Log */}
+          <div className="flex flex-col gap-6">
+            <form onSubmit={runInference} className="rounded-xl bg-slate-900/60 border border-slate-800 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                  <Cpu className="w-4 h-4 text-cyan-400" />
+                  Live Local / Hybrid Inference Console
+                </div>
+                <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allowFallback}
+                    onChange={(e) => setAllowFallback(e.target.checked)}
+                    className="rounded border-slate-700 bg-slate-950"
+                  />
+                  Fallback to Server AI if Ollama offline
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <input
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  placeholder="Ollama model (e.g. llama3.2)"
+                  className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-500"
+                />
+                <div className="sm:col-span-2 flex items-center text-xs text-slate-400 px-2">
+                  {status?.ollama.models.length
+                    ? `Installed: ${status.ollama.models.map((m) => m.name).join(', ')}`
+                    : 'Ollama offline on 127.0.0.1:11434 — will transparently report or use Server AI fallback.'}
+                </div>
+              </div>
+
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={3}
+                placeholder="Enter prompt to test local Ollama or Server AI cascade…"
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+              />
+
+              <button
+                type="submit"
+                disabled={isGenerating}
+                className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                {isGenerating ? 'Running Inference…' : 'Execute Live Inference'}
+              </button>
+
+              {inferenceResult && (
+                <div className="p-3.5 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-slate-400">
+                    <span>Engine: {inferenceResult.engine} · Model: {inferenceResult.model}</span>
+                    <span className="tabular-nums text-emerald-400">{inferenceResult.latencyMs}ms</span>
+                  </div>
+                  {inferenceResult.note && (
+                    <div className="text-xs text-amber-300/90">{inferenceResult.note}</div>
+                  )}
+                  <div className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">
+                    {inferenceResult.text}
+                  </div>
+                </div>
+              )}
+            </form>
+
+            <div className="rounded-xl bg-slate-900/60 border border-slate-800 p-4 flex-1 flex flex-col">
+              <div className="text-xs font-semibold text-slate-200 mb-2">Live Controller Activity</div>
+              <div className="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-xs text-slate-300 space-y-1.5 max-h-44 overflow-y-auto">
+                {logs.length === 0 ? (
+                  <div className="text-slate-500">Bind a loopback port, probe a socket, or execute inference to inspect live output.</div>
+                ) : (
+                  logs.map((line, i) => <div key={i} className="leading-relaxed">{line}</div>)
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>

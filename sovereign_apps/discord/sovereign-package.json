@@ -3,7 +3,7 @@
   "name": "Discord Live API v10, Guild Gateway, Webhook & Voice Client",
   "version": "1.0.9164-APIv10",
   "vendor": "Discord Inc.",
-  "installedAt": "2026-11-22T01:42:36.369Z",
+  "installedAt": "2026-11-22T17:55:56.061Z",
   "nativeProtocolUri": "discord://-/channels/@me",
   "wingetId": "Discord.Discord",
   "cliInstallCmds": {

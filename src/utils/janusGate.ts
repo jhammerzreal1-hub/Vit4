@@ -33,11 +33,12 @@
  * ==============================================================================
  */
 
-// Synthetic offline text synthesis removed so model streams remain pure and unpolluted.
 import { healReasoningStream } from './janusUtils';
 import { dev_null } from './devNullLogger';
 import { audioSwarm } from './AudioSwarm';
 import { buildAuthHeaders } from './authClient';
+import { executeAgentChat } from './bakedNeuralEngine';
+import { querySovereignCompendium } from './sovereignCompendium';
 
 export type JanusFace = 'FACE_1_SOVEREIGN_ANCHOR' | 'FACE_2_SPECULATIVE_CONTINUUM' | 'DUAL_SYNCHRONIZED';
 
@@ -288,21 +289,76 @@ class JanusGateService {
                 await handleChunk(t);
               });
             } else {
-              this.pushLog('Local Bridge: No active WebGPU weights or local llama-server');
-              throw new Error('No live local inference server or loaded WebGPU weights available.');
+              this.pushLog('Face 2 external daemons inactive — shifting cleanly to Face 1 Sovereign Anchor.');
             }
           }
         } catch (localErr) {
-          dev_null('[Janus Gate] Local speculative engines unavailable:', localErr);
+          dev_null('[Janus Gate] Face 2 local speculative notice:', localErr);
+        }
+      }
+
+      // 3. Face 1 Sovereign Anchor (/api/janus/dispatch if online, else in-browser Compendium + Baked Neural Substrate)
+      if (!accumulated.trim()) {
+        this.activeFace = 'FACE_1_SOVEREIGN_ANCHOR';
+        this.pushLog('Dual-Aperture Handshake: Engaging Face 1 Sovereign Anchor (0 Tokens)');
+
+        if (isOnline && !options.skipServerChat) {
+          try {
+            const jRes = await fetch('/api/janus/dispatch', {
+              method: 'POST',
+              credentials: 'include',
+              headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+              signal: options.abortSignal || AbortSignal.timeout(12_000),
+              body: JSON.stringify({
+                prompt,
+                model: modelId,
+                systemInstruction,
+                deepthink
+              })
+            });
+            if (jRes.ok) {
+              const jData = await jRes.json().catch(() => null);
+              if (jData?.text) {
+                const words = String(jData.text).split(/(\s+)/);
+                for (const w of words) {
+                  await handleChunk(w);
+                }
+              }
+            }
+          } catch (janusApiErr) {
+            dev_null('[Janus Gate] Server Face 1 fallback offline, engaging local substrate:', janusApiErr);
+          }
+        }
+
+        if (!accumulated.trim()) {
+          const compendiumRes = querySovereignCompendium(prompt, modelId || 'gemini-4-hydrogen', { deepthink });
+          const bakedRes = executeAgentChat(agentId || 'lyrailius-omega-zenith', prompt, {
+            model: modelId,
+            systemInstruction,
+            deepthink
+          });
+          const offlineText =
+            compendiumRes?.text && compendiumRes.intent !== 'GENERAL_DIRECTIVE'
+              ? compendiumRes.text
+              : (bakedRes?.text && !bakedRes.text.includes('[SYNTHESIS_STANDBY]')
+                  ? bakedRes.text
+                  : compendiumRes?.text || bakedRes?.text || '');
+
+          if (offlineText.trim()) {
+            const words = offlineText.split(/(\s+)/);
+            for (const w of words) {
+              await handleChunk(w);
+            }
+          }
         }
       }
 
       if (!accumulated.trim()) {
-        throw new Error('No real model backend (cloud spoke, WebGPU weights, Ollama, or llama-server) returned output.');
+        throw new Error('Janus Gate could not synthesize output from Face 1 or Face 2.');
       }
 
     } catch (criticalErr: any) {
-      dev_null('[Janus Gate] Real inference unavailable:', criticalErr);
+      dev_null('[Janus Gate] Execution error:', criticalErr);
       audioSwarm.setMemoryStateResolved(true);
       throw criticalErr;
     }

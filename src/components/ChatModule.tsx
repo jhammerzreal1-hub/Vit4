@@ -1353,10 +1353,12 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
     mode: string;
     readySpokes: number;
     totalSpokes: number;
+    cooldownSpokes?: number;
     totalRotations: number;
-    activeSpoke?: { model: string; providerLabel: string; keySlot: string } | null;
+    activeSpoke?: { model: string; providerLabel: string; keySlot: string; status?: string } | null;
   } | null>(null);
   const [rotatingWheel, setRotatingWheel] = useState(false);
+  const [wheelFeedback, setWheelFeedback] = useState<string | null>(null);
 
   const refreshProxyWheelStatus = async () => {
     try {
@@ -1373,6 +1375,22 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
 
   useEffect(() => {
     refreshProxyWheelStatus();
+    const onWheelUpdated = (evt: Event) => {
+      const detail = (evt as CustomEvent).detail;
+      if (detail && typeof detail.totalSpokes === 'number') {
+        setProxyWheelStatus(detail);
+      } else {
+        refreshProxyWheelStatus();
+      }
+    };
+    window.addEventListener('aurelius:proxy-wheel-updated', onWheelUpdated);
+    const interval = window.setInterval(() => {
+      refreshProxyWheelStatus();
+    }, 30000);
+    return () => {
+      window.removeEventListener('aurelius:proxy-wheel-updated', onWheelUpdated);
+      window.clearInterval(interval);
+    };
   }, []);
 
   const handleToggleProxyWheel = async () => {
@@ -1384,7 +1402,11 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
         headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ enabled: !(proxyWheelStatus?.enabled ?? true) })
       });
-      if (res.ok) setProxyWheelStatus(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setProxyWheelStatus(data);
+        window.dispatchEvent(new CustomEvent('aurelius:proxy-wheel-updated', { detail: data }));
+      }
     } catch {} finally {
       setRotatingWheel(false);
     }
@@ -1397,12 +1419,22 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
         method: 'POST',
         credentials: 'include',
         headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ action: 'step' })
+        body: JSON.stringify({ action: 'rehydrate-rotate' })
       });
       if (res.ok) {
         const data = await res.json();
         setProxyWheelStatus(data);
-        janusGate.pushLog(`[PROXY WHEEL] Rotated spoke -> ${data.activeSpoke?.model || 'next'} (${data.activeSpoke?.keySlot || 'slot-0'})`);
+        window.dispatchEvent(new CustomEvent('aurelius:proxy-wheel-updated', { detail: data }));
+        const cleared = typeof data.clearedCooldowns === 'number' ? data.clearedCooldowns : 0;
+        setWheelFeedback(
+          cleared > 0
+            ? `Rehydrated ${cleared} · ${data.readySpokes}/${data.totalSpokes}`
+            : `Rehydrated · ${data.readySpokes}/${data.totalSpokes}`
+        );
+        window.setTimeout(() => setWheelFeedback(null), 2600);
+        janusGate.pushLog(
+          `[PROXY WHEEL] Rehydrated (${cleared} restored, ${data.readySpokes}/${data.totalSpokes} ready) -> ${data.activeSpoke?.model || 'next'} (${data.activeSpoke?.keySlot || 'slot-0'})`
+        );
       }
     } catch {} finally {
       setRotatingWheel(false);
@@ -3117,7 +3149,7 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
         deepTrace = bakedNeuralEngine.runDeepThink(userMessage.content);
       }
 
-      if (result.quotaNotice) {
+      if (result.quotaNotice && !result.builtInLlama) {
         setErrorMessage(result.quotaNotice);
       }
 
@@ -3208,7 +3240,7 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
           return `${d.success ? '✓' : '✗'} [${d.tag}] ${d.action} (${d.summary})\nOutput:\n${cappedOut}`;
         }).join('\n\n');
 
-      if (result.quotaNotice || result.authRejected || result.isError) {
+      if ((result.quotaNotice || result.authRejected || result.isError) && (!result.builtInLlama || result.isError)) {
         setErrorMessage(result.quotaNotice || 'Agent dispatch reported an upstream error.');
       }
 
@@ -3343,16 +3375,10 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
       const errMsg = err?.message || 'Unexpected error dispatching agent turn.';
       setErrorMessage(errMsg);
 
-      let fallbackContent = `[Agent Dispatch Interrupted — ${selectedRole.name.split(' (')[0]}]\n\n${errMsg}\n\nCheck API Keys & Gateway or verify network connectivity.`;
-      let fallbackLabel = `${selectedRole.name.split(' (')[0]} · Dispatch Error`;
-      let bakedTrace: any = undefined;
-
-      if (zeroTokenMode) {
-        const bakedResult = executeAgentChat(selectedRole.agentId || model, userMessage.content, { deepthink: true });
-        fallbackContent = sanitizeChatMessageContent(bakedResult.text, userMessage.content);
-        fallbackLabel = `${selectedRole.name.split(' (')[0]} (${model} · Offline Engine)`;
-        bakedTrace = bakedResult.deepThinkTrace || (chainOfThoughtEnabled ? bakedNeuralEngine.runDeepThink(userMessage.content) : undefined);
-      }
+      const bakedResult = executeAgentChat(selectedRole.agentId || model, userMessage.content, { deepthink: true });
+      const fallbackContent = sanitizeChatMessageContent(bakedResult.text, userMessage.content);
+      const fallbackLabel = `${selectedRole.name.split(' (')[0]} (${model} · Face 1 Offline Anchor)`;
+      const bakedTrace = bakedResult.deepThinkTrace || (chainOfThoughtEnabled ? bakedNeuralEngine.runDeepThink(userMessage.content) : undefined);
 
       const fallbackModelMsg: ChatMessage = {
         id: `msg-${Date.now() + 1}`,
@@ -3424,6 +3450,9 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
         abortSignal: controller.signal
       });
 
+      if (result.quotaNotice?.includes('Air-Gapped mode had no local') && zeroTokenMode) {
+        setZeroTokenMode(false);
+      }
       if (result.quotaNotice || result.authRejected || result.isError) {
         setErrorMessage(result.quotaNotice || 'Agent continuation cycle reported an error.');
       }
@@ -4532,10 +4561,10 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
                 onClick={handleStepProxyWheel}
                 disabled={rotatingWheel}
                 className="px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors border bg-zinc-950 border-zinc-800 text-cyan-300 hover:border-cyan-500/40 cursor-pointer disabled:opacity-50"
-                title="Advance Proxy Loop Wheel cursor to next ready API spoke"
+                title="Rehydrate all cooled/quarantined spokes and rotate to the next ready API spoke"
               >
                 <RotateCcw className={`w-3.5 h-3.5 ${rotatingWheel ? 'animate-spin text-cyan-400' : ''}`} />
-                <span>Rotate Spoke</span>
+                <span>{wheelFeedback || 'Rotate Spoke'}</span>
               </button>
 
               <button

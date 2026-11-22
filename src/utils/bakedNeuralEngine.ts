@@ -316,19 +316,13 @@ export const safeExecutionWrapper = async <T>(runner: () => Promise<T> | T): Pro
         `Clearance: UID 0\n` +
         `Status: Autonomous. Standing by.`;
     } else if (/^(hi|hello|hey|greetings|howdy|sup|yo)\b/i.test(norm) || norm === 'hi' || norm === 'hello' || norm === 'hey') {
-      text = `[SOVEREIGN_CORE_ACTIVE] System integrity 100/100. Dispatch your directive.`;
+      text = `Ready.`;
     } else if (norm.includes('who are you') || norm.includes('what are you') || norm.includes('your name')) {
-      text = `[IDENTITY_ATTESTATION] I am the Aurelius Production Orchestrator running natively inside this Node.js + Express + React workspace.`;
+      text = `Lysander OS Intelligence (${options.model || 'native-substrate'}).`;
     } else if (norm.includes('what can you do') || norm.includes('help') || norm.includes('capabilities')) {
-      text = `[CAPABILITIES_MANIFEST]\n` +
-        `- Full-Stack Systems Engineering\n` +
-        `- Autonomous Tool Forging & Registration\n` +
-        `- Distributed Swarm Synchronization\n` +
-        `- Recursive DeepThink Logic Synthesis\n` +
-        `- Real-Time Hardware Telemetry & Dispatch`;
+      text = `- Full-Stack Systems Engineering\n- Autonomous Tool Forging & Execution\n- Recursive Logic Synthesis & Evolution\n- Workspace & System Telemetry`;
     } else {
-      // Direct synthesis fallback via vault removed per user directive.
-      text = `[SYNTHESIS_STANDBY] Directive indexed in episodic memory. Ensure live engine connectivity (Cloud/Local) for multi-turn conversational synthesis.`;
+      text = `Offline synthesis queued; route through /api/chat for local GGUF inference.`;
     }
 
     const latencyMs = Math.round(performance.now() - t0);

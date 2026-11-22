@@ -32,6 +32,8 @@ import { querySovereignCompendium } from './src/utils/sovereignCompendium';
 import { Ollama } from 'ollama';
 import { internalSecretsHandler } from './src/server/internalSecretsHandler';
 import { proxyLoopWheel } from './src/server/proxyLoopWheel';
+import { localLlamaEngine } from './src/server/localLlamaEngine';
+import { createSovereignDefenseAndAutonomyRouter } from './src/server/sovereignDefenseAndAutonomyEngine';
 import {
   clearSessionCookies,
   getLiveNetworkHistory,
@@ -86,6 +88,8 @@ import { authService } from './src/server/authService';
 import { coinbaseCdpService } from './src/server/coinbaseCdpService';
 import { loraMeshService } from './src/server/loraMeshService';
 import { userSqlMemoryService } from './src/server/userSqlMemoryService';
+import { userSecretsVault } from './src/server/userSecretsVault';
+import { billingService } from './src/server/billingService';
 import { isExecutiveArchitectUser, type AuthUserPublic } from './src/types/auth';
 import {
   autonomyReadFile,
@@ -312,28 +316,48 @@ initKernelSqliteBridge(sovereignQuantumKernel)
 let localOllamaClient = new Ollama({ host: internalSecretsHandler.getSecret('OLLAMA_HOST') || 'http://127.0.0.1:11434' });
 
 function getActiveGeminiApiKey(): string {
-  return (
+  const orderedHealthy = proxyLoopWheel.getHealthyGeminiCredentialsOrdered();
+  if (orderedHealthy.length > 0 && orderedHealthy[0]?.apiKey) {
+    return orderedHealthy[0].apiKey.trim();
+  }
+  const pool = internalSecretsHandler.getSecretPool('GEMINI_API_KEY', 'GEMINI_API_KEYS');
+  if (pool.length > 0 && pool[0]?.value) {
+    return pool[0].value.trim();
+  }
+  const fallback = (
     internalSecretsHandler.getSecret('GEMINI_API_KEY') ||
     internalSecretsHandler.getSecret('ALL_KEY') ||
     process.env.GEMINI_API_KEY ||
     process.env.ALL_KEY ||
     ''
   ).trim();
+  return internalSecretsHandler.isSecretValueRejected(fallback) ? '' : fallback;
 }
 
 function hasActiveGeminiApiKey(): boolean {
   return Boolean(getActiveGeminiApiKey());
 }
 
-let lastBoundGeminiKey = getActiveGeminiApiKey();
-let ai = new GoogleGenAI({
-  apiKey: lastBoundGeminiKey,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+function isVertexExpressApiKey(apiKey: string): boolean {
+  return String(apiKey || '').trim().startsWith('AQ.');
+}
+
+function createSmartGeminiClient(apiKey: string, forceVertex?: boolean): GoogleGenAI {
+  const trimmed = String(apiKey || '').trim();
+  const useVertex = typeof forceVertex === 'boolean' ? forceVertex : isVertexExpressApiKey(trimmed);
+  return new GoogleGenAI({
+    apiKey: trimmed,
+    ...(useVertex ? { vertexai: true } : {}),
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
     }
-  }
-});
+  });
+}
+
+let lastBoundGeminiKey = getActiveGeminiApiKey();
+let ai = createSmartGeminiClient(lastBoundGeminiKey);
 
 // Adaptive circuit-breaker, latency tracker, and loop-safe daemon state for API call chain
 const rateLimitedCooldowns = new Map<string, number>();
@@ -342,24 +366,25 @@ const modelLatencyStats = new Map<string, { avgMs: number; successes: number; fa
 let lastHealthyGeminiModel = '';
 
 /**
- * Always returns an active permanent Developer API GoogleGenAI instance
- * bound to server-side environment credentials via internalSecretsHandler.
+ * Always returns an active permanent Developer / Vertex Express GoogleGenAI instance
+ * bound to server-side environment credentials via internalSecretsHandler & anti-dehydration backup key rotation.
  */
 function getPermanentDeveloperAiClient(): GoogleGenAI {
+  const rotated = proxyLoopWheel.getNextRotatingGeminiCredential(true);
+  if (rotated?.client) {
+    if (rotated.apiKey !== lastBoundGeminiKey) {
+      lastBoundGeminiKey = rotated.apiKey;
+      ai = rotated.client;
+    }
+    return rotated.client;
+  }
   const currentKey = getActiveGeminiApiKey();
   if (currentKey !== lastBoundGeminiKey) {
     lastBoundGeminiKey = currentKey;
     rateLimitedCooldowns.clear();
     modelFailureCooldowns.clear();
     lastHealthyGeminiModel = '';
-    ai = new GoogleGenAI({
-      apiKey: currentKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
-    });
+    ai = createSmartGeminiClient(currentKey);
   }
   return ai;
 }
@@ -390,14 +415,7 @@ function reinitLlmClients() {
   rateLimitedCooldowns.clear();
   modelFailureCooldowns.clear();
   lastHealthyGeminiModel = '';
-  ai = new GoogleGenAI({
-    apiKey: lastBoundGeminiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
-  });
+  ai = createSmartGeminiClient(lastBoundGeminiKey);
   const orKey = internalSecretsHandler.getSecret('OPENROUTER_API_KEY');
   openRouter = orKey ? new OpenAI({
     baseURL: "https://openrouter.ai/api/v1",
@@ -417,6 +435,7 @@ function reinitLlmClients() {
     baseURL: "https://api.groq.com/openai/v1",
     apiKey: gqKey
   }) : null;
+  proxyLoopWheel.resetAllCooldowns();
   proxyLoopWheel.refresh();
   console.log('[LLM CLIENTS] Provider clients, Proxy Loop Wheel & AES-256-GCM secrets vault synchronized.');
 }
@@ -462,10 +481,18 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(express.json({ limit: '60mb' }));
+app.use(
+  express.json({
+    limit: '60mb',
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf;
+    }
+  })
+);
 app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 
 authService.init();
+billingService.getPublicConfig();
 userSqlMemoryService.init();
 loraMeshService.init();
 loraMeshService.setAgentGenerator(async ({ agent, channel, server, recentMessages, promptInstruction, speakingUserId }) => {
@@ -607,15 +634,40 @@ ${transcript || '(No prior messages yet)'}${directive}`;
     : `[${agent.displayName} · ${agent.nodeId}] Copy on #${channel.name} (${server.radio.frequencyMhz} MHz). Monitoring mesh traffic and ready for your next command.`;
 });
 
-// Server-side RBAC capability guard for sensitive routes when login is active
+// Multi-tenant isolation scope resolver:
+// Returns undefined (owner scope) ONLY for the Executive Architect (or unauthenticated local single-user mode when login-on-boot is disabled).
+// Returns the authenticated user's ID for every non-owner account so wallets, secrets, grants, CDP, burner mail & SIMs are 100% isolated & empty on signup.
+function getTenantScopeId(req: express.Request): string | undefined {
+  const actor = authService.resolveRequestUser(req);
+  if (!actor) return undefined;
+  if (isExecutiveArchitectUser(actor)) return undefined;
+  return actor.id;
+}
+
+// Server-side RBAC capability & default-deny guard for /api routes (SOVEREIGN_DEFAULT_DENY_API_GUARD, SOVEREIGN_GLOBAL_CSRF_GUARD)
 app.use('/api', (req, res, next) => {
-  if (req.path === '/health' || req.path.startsWith('/auth/')) {
+  if (
+    req.path === '/health' ||
+    req.path.startsWith('/auth/') ||
+    (req.path === '/tiers' && req.method.toUpperCase() === 'GET') ||
+    (req.path === '/supporter-board' && req.method.toUpperCase() === 'GET') ||
+    (req.path === '/billing/stripe/webhook' && req.method.toUpperCase() === 'POST')
+  ) {
     return next();
   }
   const policy = authService.getPolicy();
   const actor = authService.resolveRequestUser(req);
+  const isMutating = !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase());
 
-  // If a user is signed in, always enforce their status, system lockdown & custom privileges
+  // Enforce CSRF check on authenticated state-changing requests
+  if (actor && isMutating && !authService.validateCsrf(req)) {
+    return res.status(403).json({
+      success: false,
+      error: 'CSRF origin validation failed for state-changing request.'
+    });
+  }
+
+  // If a user is signed in, always enforce their status, system lockdown & custom tier/user privileges
   if (actor) {
     if (policy.systemLockdownMode && actor.role !== 'admin' && !actor.isExecutiveArchitect) {
       return res.status(423).json({
@@ -632,39 +684,210 @@ app.use('/api', (req, res, next) => {
             : 'Your account has been suspended by an administrator.'
       });
     }
-    if (actor.role !== 'admin') {
-      if (
-        (req.path.startsWith('/secrets') || req.path.startsWith('/crypto') || req.path.startsWith('/cdp')) &&
-        !actor.privileges.canAccessSecretsAndWallets
-      ) {
-        return res.status(403).json({ success: false, error: 'Privilege required: Secrets & Wallets access.' });
+    // Authenticated active users can always access their own billing/upgrade endpoints
+    if (req.path.startsWith('/billing/')) {
+      return next();
+    }
+
+    if (actor.role !== 'admin' && !isExecutiveArchitectUser(actor)) {
+      const priv = actor.privileges;
+
+      // System-core & host OS mutation/inspection endpoints require explicit System Core clearance
+      const isSystemCorePath =
+        req.path.startsWith('/transfer/modules') ||
+        req.path.startsWith('/transfer/backups') ||
+        req.path.startsWith('/os/host/system-access') ||
+        req.path.startsWith('/os/processes') ||
+        req.path.startsWith('/os/process/signal') ||
+        req.path.startsWith('/os/snapshots') ||
+        req.path.startsWith('/os/daemons') ||
+        req.path.startsWith('/os/forensic-audit') ||
+        req.path.startsWith('/os/forensic-repair') ||
+        req.path.startsWith('/os/forensic-manual') ||
+        req.path.startsWith('/os/supremacy-audit') ||
+        req.path.startsWith('/workspace/rollback') ||
+        req.path.startsWith('/autonomy/external-target') ||
+        req.path.startsWith('/hypervisor/uid0') ||
+        req.path.startsWith('/sovereign-engineer') ||
+        req.path.startsWith('/target-system') ||
+        req.path.startsWith('/ui-master-kit');
+      if (isSystemCorePath && !priv.canAccessSystemCore) {
+        return res.status(403).json({
+          success: false,
+          error: 'System Core clearance required. Upgrade your tier or request Admin permission.',
+          upgradeRequired: true
+        });
+      }
+
+      if ((req.path.startsWith('/crypto') || req.path.startsWith('/cdp')) && !priv.canAccessSecretsAndWallets) {
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: Personal Wallets & Crypto Vault access. Upgrade your tier to unlock.',
+          upgradeRequired: true
+        });
       }
       if (
-        (req.path.startsWith('/os/shell') ||
-          req.path.startsWith('/os/terminal') ||
-          req.path.startsWith('/termux') ||
-          req.path.startsWith('/autonomy') ||
-          req.path.startsWith('/sovereign-engineer')) &&
-        !actor.privileges.canExecuteTerminalAndTools
+        (req.path.startsWith('/secrets') || req.path.startsWith('/keys') || (req.path.startsWith('/integrations') && isMutating)) &&
+        !priv.canAccessSecretsAndWallets &&
+        !priv.canBringOwnKeys
       ) {
-        return res.status(403).json({ success: false, error: 'Privilege required: Terminal & Tools execution.' });
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: Personal API Keys / Secrets Vault access.',
+          upgradeRequired: true
+        });
+      }
+      if (req.path.startsWith('/burner') && !priv.canUseBurnerMail) {
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: Burner Mail access. Upgrade your tier to unlock.',
+          upgradeRequired: true
+        });
+      }
+      if (req.path.startsWith('/sim') && !priv.canUseInfiniteSim) {
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: Infinite SIM & Telecom access. Upgrade your tier to unlock.',
+          upgradeRequired: true
+        });
+      }
+      if (req.path.startsWith('/grants') && !priv.canAccessGrantHunter) {
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: Grant Hunter access. Upgrade your tier to unlock.',
+          upgradeRequired: true
+        });
+      }
+
+      const isChatInferencePath =
+        req.path === '/chat' ||
+        req.path === '/llm/chat' ||
+        req.path === '/sovereign/bus-inference' ||
+        req.path === '/gemini/chat' ||
+        req.path === '/deepseek/chat' ||
+        req.path === '/groq/chat' ||
+        req.path === '/openrouter/chat' ||
+        req.path === '/ollama/chat' ||
+        req.path === '/v1/chat/completions' ||
+        req.path === '/proxy-wheel/chat' ||
+        req.path === '/generate';
+      if (isChatInferencePath && !priv.canUseChat) {
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: AI Orchestrator Chat access. Upgrade your tier to unlock.',
+          upgradeRequired: true
+        });
+      }
+
+      const isVoicePath =
+        req.path.startsWith('/voice') ||
+        req.path.startsWith('/live') ||
+        req.path.startsWith('/transcribe') ||
+        req.path.startsWith('/lora-mesh/voice') ||
+        (req.path.startsWith('/lora-mesh/dms/') && req.path.endsWith('/call')) ||
+        (req.path === '/continuity/voice' && isMutating);
+      if (isVoicePath && !priv.canUseVoiceChat) {
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: Real-Time Voice & Audio Duplex access. Upgrade your tier to unlock.',
+          upgradeRequired: true
+        });
+      }
+
+      const isAutonomousWorkflowPath =
+        req.path.startsWith('/autonomy') ||
+        req.path.startsWith('/batch') ||
+        req.path === '/spatial/blueprint' ||
+        req.path === '/spatial/agent-act' ||
+        req.path === '/spatial/train-agents' ||
+        req.path === '/spatial/forge-tool' ||
+        req.path === '/orchestrator/coordinate' ||
+        req.path.startsWith('/genesis-distillery/') ||
+        (req.path.startsWith('/dev-kit/') && isMutating);
+      if (isAutonomousWorkflowPath && isMutating && !priv.canRunAutonomousWorkflow) {
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: Autonomous Orchestrator & Swarm Workflow execution. Upgrade your tier to unlock.',
+          upgradeRequired: true
+        });
+      }
+
+      const isTerminalOrToolPath =
+        req.path.startsWith('/os/shell') ||
+        req.path.startsWith('/os/terminal') ||
+        req.path.startsWith('/termux') ||
+        req.path.startsWith('/ports') ||
+        req.path.startsWith('/functions/execute') ||
+        req.path.startsWith('/tools/') ||
+        req.path.startsWith('/os/packages/install') ||
+        req.path.startsWith('/os/packages/cli-execute') ||
+        req.path.startsWith('/os/packages/download-url') ||
+        req.path.startsWith('/os/packages/uninstall') ||
+        req.path.startsWith('/os/steam/execute') ||
+        req.path.startsWith('/os/windows/execute-pe') ||
+        req.path.startsWith('/os/fs/chmod') ||
+        (req.path.startsWith('/defense') && isMutating);
+      if (isTerminalOrToolPath && !priv.canExecuteTerminalAndTools) {
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: Terminal & Autonomous Tools execution. Upgrade your tier to unlock.',
+          upgradeRequired: true
+        });
+      }
+
+      const isOsSettingsMutation =
+        req.path === '/continuity/settings' ||
+        req.path === '/continuity/beacon' ||
+        req.path === '/proxy-wheel/config' ||
+        req.path === '/proxy-wheel/rotate' ||
+        req.path === '/sovereign/restart-daemons' ||
+        req.path === '/games/register-runtime' ||
+        req.path === '/games/mod';
+      if (isOsSettingsMutation && isMutating && !priv.canModifyOSSettings) {
+        return res.status(403).json({
+          success: false,
+          error: 'Privilege required: Modify OS Settings. Upgrade your tier to unlock.',
+          upgradeRequired: true
+        });
+      }
+
+      // Persisted daily AI request quota across all AI generation & agentic inference endpoints
+      const isAiQuotaMetered =
+        isMutating &&
+        (isChatInferencePath ||
+          req.path === '/image/generate' ||
+          req.path === '/image/edit' ||
+          req.path === '/music/generate' ||
+          req.path === '/video/generate' ||
+          req.path === '/voice/duplex' ||
+          req.path === '/grants/discover' ||
+          req.path === '/grants/apply' ||
+          req.path === '/burner/ai-analyze' ||
+          req.path === '/sim/ai-triage' ||
+          req.path === '/dev-kit/synthesize-ai-feature' ||
+          req.path === '/spatial/blueprint' ||
+          req.path === '/spatial/agent-act' ||
+          req.path === '/genesis-distillery/train' ||
+          req.path === '/genesis-distillery/distill');
+      if (isAiQuotaMetered) {
+        const quota = authService.consumeDailyAiQuota(actor);
+        if (!quota.allowed && quota.usage) {
+          return res.status(429).json({
+            success: false,
+            error: 'DAILY_TIER_QUOTA_REACHED',
+            upgradeRequired: true,
+            usage: quota.usage,
+            message: `Daily tier limit reached (${quota.usage.usedToday}/${quota.usage.dailyLimit} AI requests today on "${actor.tierName || actor.role}"). Upgrade your tier for higher or unlimited capacity.`
+          });
+        }
       }
     }
     return next();
   }
 
-  // If login is required and an admin exists, block unauthenticated calls to sensitive mutation endpoints
+  // Default-deny: when login on boot is enforced and an admin exists, require authentication across all non-public /api routes
   const hasAnyAdmin = authService.isLocalAdminClaimed() || authService.isEnvAdminConfigured();
-  if (
-    policy.requireLoginOnBoot &&
-    hasAnyAdmin &&
-    ((req.path.startsWith('/secrets') && req.method !== 'GET') ||
-      req.path.startsWith('/os/shell') ||
-      req.path.startsWith('/os/terminal') ||
-      req.path.startsWith('/autonomy/write') ||
-      req.path.startsWith('/autonomy/delete') ||
-      req.path.startsWith('/autonomy/terminal'))
-  ) {
+  if (policy.requireLoginOnBoot && hasAnyAdmin) {
     return res.status(401).json({ success: false, error: 'Authentication required.' });
   }
 
@@ -682,8 +905,18 @@ function resolvePort(): number {
     const val = parseInt(process.env.DEV_PORT, 10);
     if (!isNaN(val) && val > 0) return val;
   }
-  if (process.env.PORT) {
+  // In container sandboxes nginx already owns NGINX_PORT (e.g. 8080) while PORT is also set to 8080;
+  // prefer DEFAULT_APP_PORT (3000) unless PORT is explicitly distinct from NGINX_PORT.
+  if (
+    process.env.PORT &&
+    process.env.PORT !== process.env.NGINX_PORT &&
+    !(process.env.PORT === '8080' && process.env.DEFAULT_APP_PORT === '3000')
+  ) {
     const val = parseInt(process.env.PORT, 10);
+    if (!isNaN(val) && val > 0) return val;
+  }
+  if (process.env.DEFAULT_APP_PORT) {
+    const val = parseInt(process.env.DEFAULT_APP_PORT, 10);
     if (!isNaN(val) && val > 0) return val;
   }
   return 3000;
@@ -770,24 +1003,52 @@ const RESIDENT_COORDINATOR_STATE: {
 
 // Health / Status endpoint
 app.get('/api/health', (req, res) => {
+  const actor = authService.resolveRequestUser(req);
+  const policy = authService.getPolicy();
+  const isOwnerView =
+    !policy.requireLoginOnBoot ||
+    Boolean(actor && (isExecutiveArchitectUser(actor) || actor.role === 'admin'));
+  const scopeId = getTenantScopeId(req);
+  const wheelSnap = proxyLoopWheel.getStatusSnapshot();
+  const activeKey = getActiveGeminiApiKey();
   res.json({
     status: 'online',
     port: ACTIVE_PORT,
     timestamp: new Date().toISOString(),
-    hasApiKey: !!internalSecretsHandler.getSecret('GEMINI_API_KEY'),
-    secretsVault: internalSecretsHandler.getVaultHealth(),
+    hasApiKey: !!activeKey,
+    vertexExpressMode: isVertexExpressApiKey(activeKey),
+    proxyWheel: {
+      enabled: wheelSnap.enabled,
+      totalSpokes: wheelSnap.totalSpokes,
+      availableSpokes: wheelSnap.spokes.filter((s) => s.status === 'READY').length,
+      geminiKeySlots: isOwnerView ? wheelSnap.geminiKeySlots : undefined,
+      keyPoolSummary: isOwnerView ? wheelSnap.keyPoolSummary : undefined,
+      activeModelPreview: wheelSnap.spokes[0]?.model || null,
+      spokeDiagnostics: isOwnerView
+        ? wheelSnap.spokes.slice(0, 6).map((s) => ({
+            model: s.model,
+            keySlot: s.keySlot,
+            envSource: s.envSource,
+            maskedKey: s.maskedKey,
+            status: s.status,
+            cooldownReason: s.cooldownReason || null,
+            lastError: s.lastError ? internalSecretsHandler.redactText(s.lastError).slice(0, 140) : null
+          }))
+        : []
+    },
+    secretsVault: scopeId ? userSecretsVault.getVaultHealth(scopeId) : internalSecretsHandler.getVaultHealth(),
     orchestrator: 'Lysander Genesis Orchestrator (Lyrailius Omega Resident)',
     residentBrain: RESIDENT_COORDINATOR_STATE.identity,
     residentModel: RESIDENT_COORDINATOR_STATE.model,
     coordinatorStatus: RESIDENT_COORDINATOR_STATE.status,
-    uid: 0,
-    uid_0: true,
-    fullAutonomy: true,
-    autonomyAlwaysOn: true,
+    uid: isOwnerView ? 0 : 1000,
+    uid_0: isOwnerView,
+    fullAutonomy: isOwnerView,
+    autonomyAlwaysOn: isOwnerView,
     autonomyPercent: 100,
     allSkillsBound: true,
-    clearance: RESIDENT_COORDINATOR_STATE.clearance,
-    hypervisor: RESIDENT_COORDINATOR_STATE.hypervisor,
+    clearance: isOwnerView ? RESIDENT_COORDINATOR_STATE.clearance : 'TENANT_SANDBOX_ISOLATED',
+    hypervisor: isOwnerView ? RESIDENT_COORDINATOR_STATE.hypervisor : { status: 'ISOLATED_USER_SPACE', ring: 3 },
     autonomousToolsCount: SOVEREIGN_TOOL_DECLARATIONS.length,
     lysanderSkillsCount: LYSANDER_SKILLS_REGISTRY.length
   });
@@ -1011,6 +1272,8 @@ app.get('/api/auth/admin/command-center', requireAdminAuth, (req, res) => {
       actor,
       policy,
       users,
+      tiers: authService.listTiers(),
+      billingConfig: billingService.getPublicConfig(),
       sessions,
       auditLog,
       architectCharter: {
@@ -1019,7 +1282,7 @@ app.get('/api/auth/admin/command-center', requireAdminAuth, (req, res) => {
         permanentlyLocked: true,
         immutableRights: [
           'Permanent Root Owner & Executive Administrator of Sovereign OS',
-          'Maximum unrestricted authority over all 48 OS modules, policies, users & sessions',
+          'Maximum unrestricted authority over all 49 OS modules, policies, custom tiers, monetization, users & sessions',
           'Non-removable, non-demotable, non-suspendable by any human user or AI subsystem',
           'Exclusive authority to delegate Admin roles, toggle System Lockdown, or govern Entity Intelligence'
         ]
@@ -1080,6 +1343,480 @@ app.post('/api/auth/admin/sessions/purge-non-architect', requireCsrfCheck, requi
     res.json({ success: true, removed, sessions: authService.listActiveSessions() });
   } catch (err: any) {
     res.status(403).json({ success: false, error: err?.message || 'Failed to purge sessions' });
+  }
+});
+
+// =========================================================================
+// CUSTOM USER TIERS, PERMISSIONS & REAL FIAT (STRIPE) / ON-CHAIN CRYPTO BILLING
+// =========================================================================
+app.get('/api/tiers', (_req, res) => {
+  try {
+    const tiers = authService.listTiers().filter((t) => t.isPublic);
+    res.json({
+      success: true,
+      tiers,
+      defaultTierId: authService.getPolicy().defaultTierId || 'tier-free',
+      billing: billingService.getPublicConfig()
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to load tier catalog' });
+  }
+});
+
+app.get('/api/auth/admin/tiers', requireAdminAuth, (_req, res) => {
+  try {
+    res.json({
+      success: true,
+      tiers: authService.listTiers(),
+      defaultTierId: authService.getPolicy().defaultTierId || 'tier-free'
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to list tiers' });
+  }
+});
+
+app.post('/api/auth/admin/tiers', requireCsrfCheck, requireAdminAuth, (req, res) => {
+  try {
+    const actor = (req as any).authUser;
+    const tier = authService.adminCreateTier(actor, req.body || {});
+    res.status(201).json({ success: true, tier, tiers: authService.listTiers() });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to create tier' });
+  }
+});
+
+app.patch('/api/auth/admin/tiers/:id', requireCsrfCheck, requireAdminAuth, (req, res) => {
+  try {
+    const actor = (req as any).authUser;
+    const tier = authService.adminUpdateTier(actor, req.params.id, req.body || {});
+    res.json({ success: true, tier, tiers: authService.listTiers() });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to update tier' });
+  }
+});
+
+app.delete('/api/auth/admin/tiers/:id', requireCsrfCheck, requireAdminAuth, (req, res) => {
+  try {
+    const actor = (req as any).authUser;
+    authService.adminDeleteTier(actor, req.params.id);
+    res.json({ success: true, tiers: authService.listTiers() });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to delete tier' });
+  }
+});
+
+app.post('/api/auth/admin/users/:id/assign-tier', requireCsrfCheck, requireAdminAuth, (req, res) => {
+  try {
+    const actor = (req as any).authUser;
+    const tierId = String(req.body?.tierId || '').trim();
+    if (!tierId) {
+      return res.status(400).json({ success: false, error: 'tierId is required.' });
+    }
+    const tierExpiresAt =
+      typeof req.body?.tierExpiresAt === 'string' || req.body?.tierExpiresAt === null
+        ? req.body.tierExpiresAt
+        : undefined;
+    const subscriptionStatus =
+      typeof req.body?.subscriptionStatus === 'string' ? (req.body.subscriptionStatus as any) : 'admin-granted';
+    const updatedUser = authService.assignTierToUser(req.params.id, tierId, {
+      actor,
+      subscriptionStatus,
+      tierExpiresAt,
+      reason: 'admin_manual_assign'
+    });
+    const tier = authService.getTierById(tierId);
+    if (tier) {
+      billingService.recordAdminGrant({
+        userId: updatedUser.id,
+        username: updatedUser.username,
+        tierId: tier.id,
+        tierName: tier.name,
+        actorUsername: actor.username || actor.email || 'admin'
+      });
+    }
+    res.json({ success: true, user: updatedUser, tier });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to assign tier to user' });
+  }
+});
+
+app.get('/api/auth/admin/billing/config', requireAdminAuth, (_req, res) => {
+  try {
+    res.json({ success: true, config: billingService.getPublicConfig() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to load billing config' });
+  }
+});
+
+app.patch('/api/auth/admin/billing/config', requireCsrfCheck, requireAdminAuth, (req, res) => {
+  try {
+    const actor = (req as any).authUser;
+    const config = billingService.updateConfig(req.body || {});
+    authService.recordAuditEvent(
+      actor,
+      'BILLING_CONFIG_UPDATED',
+      'monetization-gateway',
+      `Updated payment gateways (stripe=${config.fiatStripeEnabled}, crypto=${config.cryptoEnabled}, chains=${config.enabledChains.join(',')}).`
+    );
+    res.json({ success: true, config, publicConfig: config });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to update billing config' });
+  }
+});
+
+app.get('/api/auth/admin/billing/ledger', requireAdminAuth, (_req, res) => {
+  try {
+    const summary = billingService.getAdminLedgerSummary();
+    res.json({
+      success: true,
+      ...summary,
+      ledger: summary.records,
+      count: summary.settledCount
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to load billing ledger' });
+  }
+});
+
+app.get('/api/supporter-board', (req, res) => {
+  try {
+    const viewer = authService.resolveRequestUser(req);
+    const board = billingService.listSupporterBoard(viewer?.id);
+    res.json({ success: true, ...board });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to load supporter message board' });
+  }
+});
+
+app.delete('/api/auth/admin/supporter-board/:id', requireCsrfCheck, requireAdminAuth, (req, res) => {
+  try {
+    const actor = (req as any).authUser;
+    const removed = billingService.deleteSupporterBoardEntry(req.params.id);
+    if (!removed) {
+      return res.status(404).json({ success: false, error: 'Supporter board entry not found.' });
+    }
+    authService.recordAuditEvent(
+      actor,
+      'SUPPORTER_BOARD_ENTRY_MODERATED',
+      req.params.id,
+      `Removed supporter board entry ${req.params.id}.`
+    );
+    res.json({ success: true, ...billingService.listSupporterBoard(actor.id) });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to remove supporter entry' });
+  }
+});
+
+function resolveSafeBillingOriginUrl(req: express.Request): string {
+  const rawOriginHeader = String(req.headers.origin || '').trim();
+  if (rawOriginHeader) {
+    try {
+      const parsedOrigin = new URL(rawOriginHeader);
+      if (parsedOrigin.protocol === 'http:' || parsedOrigin.protocol === 'https:') {
+        return parsedOrigin.origin;
+      }
+    } catch {
+      // Fallback below
+    }
+  }
+  const protoRaw = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim().toLowerCase();
+  const proto = protoRaw === 'https' ? 'https' : 'http';
+  const host = String(req.get('host') || `127.0.0.1:${ACTIVE_PORT}`).trim();
+  if (/^[a-zA-Z0-9.-]+(?::\d{1,5})?$/.test(host)) {
+    return `${proto}://${host}`;
+  }
+  return `http://127.0.0.1:${ACTIVE_PORT}`;
+}
+
+app.get('/api/billing/status', (req, res) => {
+  try {
+    const actor = authService.resolveRequestUser(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    const history = billingService.getUserBillingHistory(actor.id);
+    const board = billingService.listSupporterBoard(actor.id);
+    const founderEligible = authService.isUserFounderTierEligible(actor);
+    const activeTierObj = actor.tierId ? authService.getTierById(actor.tierId) : undefined;
+    res.json({
+      success: true,
+      user: actor,
+      founderEligible,
+      usage: authService.getDailyAiUsage(actor),
+      currentTier: {
+        tierId: actor.tierId,
+        tierName: actor.tierName,
+        tierBadgeColor: actor.tierBadgeColor,
+        subscriptionStatus: actor.subscriptionStatus,
+        tierExpiresAt: actor.tierExpiresAt ?? null,
+        isFounderTier: Boolean(activeTierObj?.isFounderTier || founderEligible)
+      },
+      tiers: authService.listTiers().filter((t) => t.isPublic),
+      billing: billingService.getPublicConfig(),
+      ledger: history.records,
+      pendingInvoices: history.invoices,
+      supporterBoard: board.entries,
+      supporterBoardSummary: board.summary,
+      ...history
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to load billing status' });
+  }
+});
+
+app.post('/api/billing/stripe/checkout', requireCsrfCheck, async (req, res) => {
+  try {
+    const actor = authService.resolveRequestUser(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    const tierId = String(req.body?.tierId || '').trim();
+    const billingCycle: 'monthly' | 'one-time' =
+      req.body?.billingCycle === 'one-time' || req.body?.billingCycle === 'one_time' ? 'one-time' : 'monthly';
+    const tier = authService.getTierById(tierId);
+    if (!tier || !tier.isPublic) {
+      return res.status(404).json({ success: false, error: 'Requested tier was not found or is disabled.' });
+    }
+    const safeOriginUrl = resolveSafeBillingOriginUrl(req);
+    const result = await billingService.createStripeCheckoutSession({
+      user: actor,
+      tier,
+      billingCycle,
+      originUrl: safeOriginUrl
+    });
+    res.json({ success: true, sessionId: result.sessionId, url: result.checkoutUrl, checkoutUrl: result.checkoutUrl });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Stripe checkout session creation failed.' });
+  }
+});
+
+app.post('/api/billing/donate/stripe/checkout', requireCsrfCheck, async (req, res) => {
+  try {
+    const actor = authService.resolveRequestUser(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    const safeOriginUrl = resolveSafeBillingOriginUrl(req);
+    const result = await billingService.createDonationStripeCheckoutSession({
+      user: actor,
+      amountUsd: Number(req.body?.amountUsd),
+      isAnonymous: Boolean(req.body?.isAnonymous),
+      authorName: typeof req.body?.authorName === 'string' ? req.body.authorName : undefined,
+      feedbackCategory: req.body?.feedbackCategory,
+      message: typeof req.body?.message === 'string' ? req.body.message : '',
+      originUrl: safeOriginUrl
+    });
+    res.json({ success: true, sessionId: result.sessionId, url: result.checkoutUrl, checkoutUrl: result.checkoutUrl });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Donation checkout session creation failed.' });
+  }
+});
+
+app.post('/api/billing/donate/crypto/invoice', requireCsrfCheck, async (req, res) => {
+  try {
+    const actor = authService.resolveRequestUser(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    const invoice = await billingService.createDonationCryptoInvoice({
+      user: actor,
+      amountUsd: Number(req.body?.amountUsd),
+      chain: String(req.body?.chain || 'base') as any,
+      token: String(req.body?.token || 'USDC') as any,
+      isAnonymous: Boolean(req.body?.isAnonymous),
+      authorName: typeof req.body?.authorName === 'string' ? req.body.authorName : undefined,
+      feedbackCategory: req.body?.feedbackCategory,
+      message: typeof req.body?.message === 'string' ? req.body.message : ''
+    });
+    res.status(201).json({ success: true, invoice });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to create crypto donation invoice.' });
+  }
+});
+
+app.post('/api/billing/supporter-board/founder-post', requireCsrfCheck, (req, res) => {
+  try {
+    const actor = authService.resolveRequestUser(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    if (!authService.isUserFounderTierEligible(actor)) {
+      return res.status(403).json({
+        success: false,
+        error: 'This wall post slot is reserved for Founder Tier backers and verified Donators. Upgrade to Sovereign Founder or submit a donation to post.'
+      });
+    }
+    const activeTier = actor.tierId ? authService.getTierById(actor.tierId) : undefined;
+    const entry = billingService.postFounderBoardEntry({
+      user: actor,
+      tierName: activeTier?.name || actor.tierName,
+      tierBadgeColor: activeTier?.badgeColor || actor.tierBadgeColor,
+      isAnonymous: Boolean(req.body?.isAnonymous),
+      authorName: typeof req.body?.authorName === 'string' ? req.body.authorName : undefined,
+      feedbackCategory: req.body?.feedbackCategory,
+      message: String(req.body?.message || '')
+    });
+    res.status(201).json({ success: true, entry });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to post Founder Wall message.' });
+  }
+});
+
+app.post('/api/billing/stripe/verify-session', requireCsrfCheck, async (req, res) => {
+  try {
+    const actor = authService.resolveRequestUser(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    const sessionId = String(req.body?.sessionId || '').trim();
+    const settled = await billingService.verifyStripeCheckoutSession(sessionId, actor.id);
+    if (settled.entryType === 'donation') {
+      return res.json({
+        success: true,
+        settled: true,
+        entryType: 'donation',
+        paymentStatus: 'paid',
+        alreadySettled: settled.alreadySettled,
+        record: settled.record,
+        supporterEntry: settled.supporterEntry,
+        user: actor
+      });
+    }
+    const updatedUser = authService.assignTierToUser(settled.userId, settled.tierId, {
+      subscriptionStatus: settled.subscriptionStatus,
+      tierExpiresAt: settled.tierExpiresAt,
+      reason: 'stripe_checkout'
+    });
+    res.json({
+      success: true,
+      settled: true,
+      entryType: 'tier',
+      paymentStatus: 'paid',
+      alreadySettled: settled.alreadySettled,
+      record: settled.record,
+      user: updatedUser
+    });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to verify Stripe checkout session.' });
+  }
+});
+
+app.post('/api/billing/stripe/webhook', async (req, res) => {
+  try {
+    const rawBody = (req as any).rawBody;
+    if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Raw request body buffer is required for Stripe webhook verification.'
+      });
+    }
+    const sigHeader = String(req.headers['stripe-signature'] || '');
+    const event = billingService.verifyStripeWebhookSignature(rawBody, sigHeader);
+    const outcome = billingService.handleStripeWebhookLifecycleEvent(event);
+    if (outcome.action === 'grant') {
+      if (outcome.settlement.entryType !== 'donation') {
+        authService.assignTierToUser(outcome.settlement.userId, outcome.settlement.tierId, {
+          subscriptionStatus: outcome.settlement.subscriptionStatus,
+          tierExpiresAt: outcome.settlement.tierExpiresAt,
+          reason: `stripe_webhook:${outcome.eventType}`
+        });
+      }
+      return res.json({ received: true, settled: true, entryType: outcome.settlement.entryType });
+    }
+    if (outcome.action === 'downgrade') {
+      authService.downgradeUserTier(outcome.userId, outcome.subscriptionStatus, outcome.reason);
+      return res.json({ received: true, downgraded: true });
+    }
+    res.json({ received: true });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Webhook processing error.' });
+  }
+});
+
+app.post('/api/billing/crypto/invoice', requireCsrfCheck, async (req, res) => {
+  try {
+    const actor = authService.resolveRequestUser(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    const tierId = String(req.body?.tierId || '').trim();
+    const chain = String(req.body?.chain || 'base') as any;
+    const token = String(req.body?.token || 'USDC') as any;
+    const billingCycle: 'monthly' | 'one-time' =
+      req.body?.billingCycle === 'one-time' || req.body?.billingCycle === 'one_time' ? 'one-time' : 'monthly';
+    const tier = authService.getTierById(tierId);
+    if (!tier || !tier.isPublic) {
+      return res.status(404).json({ success: false, error: 'Requested tier was not found or is disabled.' });
+    }
+    const invoice = await billingService.createCryptoInvoice({
+      user: actor,
+      tier,
+      chain,
+      token,
+      billingCycle
+    });
+    res.status(201).json({ success: true, invoice });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to create crypto payment invoice.' });
+  }
+});
+
+app.post('/api/billing/crypto/cancel', requireCsrfCheck, (req, res) => {
+  try {
+    const actor = authService.resolveRequestUser(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    const invoiceId = String(req.body?.invoiceId || '').trim();
+    if (!invoiceId) {
+      return res.status(400).json({ success: false, error: 'invoiceId is required.' });
+    }
+    const invoice = billingService.cancelCryptoInvoice(actor.id, invoiceId);
+    res.json({ success: true, invoice });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to cancel crypto payment invoice.' });
+  }
+});
+
+app.post('/api/billing/crypto/verify', requireCsrfCheck, async (req, res) => {
+  try {
+    const actor = authService.resolveRequestUser(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    const invoiceId = String(req.body?.invoiceId || '').trim();
+    const txHash = String(req.body?.txHash || '').trim();
+    const result = await billingService.verifyCryptoInvoicePayment({
+      userId: actor.id,
+      invoiceId,
+      txHash
+    });
+    if (result.entryType === 'donation') {
+      return res.json({
+        success: true,
+        verified: true,
+        entryType: 'donation',
+        invoice: result.invoice,
+        ledgerRecord: result.record,
+        supporterEntry: result.supporterEntry,
+        user: actor
+      });
+    }
+    const updatedUser = authService.assignTierToUser(actor.id, result.invoice.tierId, {
+      subscriptionStatus: result.subscriptionStatus,
+      tierExpiresAt: result.tierExpiresAt,
+      reason: 'crypto_onchain_tx'
+    });
+    res.json({
+      success: true,
+      verified: true,
+      entryType: 'tier',
+      invoice: result.invoice,
+      ledgerRecord: result.record,
+      user: updatedUser
+    });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'On-chain payment verification failed.' });
   }
 });
 
@@ -1400,11 +2137,12 @@ app.post('/api/lora-mesh/federation/receive', (req, res) => {
 });
 
 // =========================================================================
-// COINBASE DEVELOPER PLATFORM (CDP) TRADING, WALLETS & x402 API
+// COINBASE DEVELOPER PLATFORM (CDP) TRADING, WALLETS & x402 API (TENANT SCOPED)
 // =========================================================================
-app.get('/api/cdp/status', (_req, res) => {
+app.get('/api/cdp/status', (req, res) => {
   try {
-    res.json({ success: true, status: coinbaseCdpService.getStatus() });
+    const scopeId = getTenantScopeId(req);
+    res.json({ success: true, status: coinbaseCdpService.getStatus(scopeId) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to read CDP status' });
   }
@@ -1412,16 +2150,18 @@ app.get('/api/cdp/status', (_req, res) => {
 
 app.patch('/api/cdp/config', requireCsrfCheck, (req, res) => {
   try {
-    const config = coinbaseCdpService.updateConfig(req.body || {});
+    const scopeId = getTenantScopeId(req);
+    const config = coinbaseCdpService.updateConfig(req.body || {}, scopeId);
     res.json({ success: true, config });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Failed to update CDP configuration' });
   }
 });
 
-app.get('/api/cdp/accounts', async (_req, res) => {
+app.get('/api/cdp/accounts', async (req, res) => {
   try {
-    const accounts = await coinbaseCdpService.listEvmAccounts();
+    const scopeId = getTenantScopeId(req);
+    const accounts = await coinbaseCdpService.listEvmAccounts(scopeId);
     res.json({ success: true, accounts });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Failed to list CDP EVM accounts' });
@@ -1430,7 +2170,8 @@ app.get('/api/cdp/accounts', async (_req, res) => {
 
 app.post('/api/cdp/accounts', requireCsrfCheck, async (req, res) => {
   try {
-    const account = await coinbaseCdpService.createEvmAccount(req.body?.name);
+    const scopeId = getTenantScopeId(req);
+    const account = await coinbaseCdpService.createEvmAccount(req.body?.name, scopeId);
     res.status(201).json({ success: true, account });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Failed to create CDP EVM account' });
@@ -1439,7 +2180,8 @@ app.post('/api/cdp/accounts', requireCsrfCheck, async (req, res) => {
 
 app.post('/api/cdp/faucet', requireCsrfCheck, async (req, res) => {
   try {
-    const result = await coinbaseCdpService.requestTestnetFaucet(req.body || {});
+    const scopeId = getTenantScopeId(req);
+    const result = await coinbaseCdpService.requestTestnetFaucet(req.body || {}, scopeId);
     res.json({ success: true, result });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Failed to request CDP testnet faucet' });
@@ -1448,7 +2190,8 @@ app.post('/api/cdp/faucet', requireCsrfCheck, async (req, res) => {
 
 app.get('/api/cdp/balances/:network/:address', async (req, res) => {
   try {
-    const data = await coinbaseCdpService.getTokenBalances(req.params.network as any, req.params.address);
+    const scopeId = getTenantScopeId(req);
+    const data = await coinbaseCdpService.getTokenBalances(req.params.network as any, req.params.address, scopeId);
     res.json({ success: true, data });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Failed to fetch CDP token balances' });
@@ -1457,7 +2200,8 @@ app.get('/api/cdp/balances/:network/:address', async (req, res) => {
 
 app.post('/api/cdp/trade/quote', requireCsrfCheck, async (req, res) => {
   try {
-    const quote = await coinbaseCdpService.getTradeQuote(req.body || {});
+    const scopeId = getTenantScopeId(req);
+    const quote = await coinbaseCdpService.getTradeQuote(req.body || {}, scopeId);
     res.json({ success: true, quote });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Failed to fetch CDP trade quote' });
@@ -1466,16 +2210,18 @@ app.post('/api/cdp/trade/quote', requireCsrfCheck, async (req, res) => {
 
 app.post('/api/cdp/trade/execute', requireCsrfCheck, async (req, res) => {
   try {
-    const trade = await coinbaseCdpService.executeTradeSwap(req.body || {});
+    const scopeId = getTenantScopeId(req);
+    const trade = await coinbaseCdpService.executeTradeSwap(req.body || {}, scopeId);
     res.json({ success: true, trade });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Failed to execute CDP swap trade' });
   }
 });
 
-app.get('/api/cdp/advanced-trade/accounts', async (_req, res) => {
+app.get('/api/cdp/advanced-trade/accounts', async (req, res) => {
   try {
-    const accounts = await coinbaseCdpService.listAdvancedTradeAccounts();
+    const scopeId = getTenantScopeId(req);
+    const accounts = await coinbaseCdpService.listAdvancedTradeAccounts(scopeId);
     res.json({ success: true, accounts });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Failed to load Coinbase Advanced Trade accounts' });
@@ -1484,7 +2230,8 @@ app.get('/api/cdp/advanced-trade/accounts', async (_req, res) => {
 
 app.post('/api/cdp/advanced-trade/order', requireCsrfCheck, async (req, res) => {
   try {
-    const order = await coinbaseCdpService.placeAdvancedTradeOrder(req.body || {});
+    const scopeId = getTenantScopeId(req);
+    const order = await coinbaseCdpService.placeAdvancedTradeOrder(req.body || {}, scopeId);
     res.status(201).json({ success: true, order });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Failed to place Coinbase Advanced Trade order' });
@@ -1497,6 +2244,11 @@ app.post('/api/cdp/advanced-trade/order', requireCsrfCheck, async (req, res) => 
 const resolveEffectiveSqlUser = (req: express.Request) => {
   const direct = authService.resolveRequestUser(req);
   if (direct) return direct;
+  const policy = authService.getPolicy();
+  const hasAnyAdmin = authService.isLocalAdminClaimed() || authService.isEnvAdminConfigured();
+  if (policy.requireLoginOnBoot && hasAnyAdmin) {
+    return null;
+  }
   return authService.listUsers().find((u) => userSqlMemoryService.isFullHostAccessUser(u)) || null;
 };
 
@@ -1930,12 +2682,26 @@ app.post('/api/continuity/voice', (req, res) => {
   }
 });
 
-// Environment Keys & Secrets Telemetry Status Endpoint (backed by AES-256-GCM Internal Secrets Handler)
+// Environment Keys & Secrets Telemetry Status Endpoint (Per-User Isolated AES-256-GCM Vault for non-owners; Owner Vault for Executive Architect)
 app.get(['/api/keys/status', '/api/secrets'], (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  if (scopeId) {
+    const keys = userSecretsVault.listSecretTelemetry(scopeId);
+    return res.json({
+      success: true,
+      status: 'ONLINE',
+      scope: 'PERSONAL_USER_VAULT',
+      vault: userSecretsVault.getVaultHealth(scopeId),
+      timestamp: new Date().toISOString(),
+      keys,
+      secrets: keys
+    });
+  }
   const keys = internalSecretsHandler.listSecretTelemetry();
   res.json({
     success: true,
     status: 'ONLINE',
+    scope: 'OWNER_ROOT_VAULT',
     vault: internalSecretsHandler.getVaultHealth(),
     timestamp: new Date().toISOString(),
     keys,
@@ -1954,10 +2720,22 @@ app.post('/api/secrets', (req, res) => {
     if (typeof value !== 'string' || !value.trim()) {
       return res.status(400).json({ success: false, error: 'Non-empty secret value is required' });
     }
+    const scopeId = getTenantScopeId(req);
+    if (scopeId) {
+      const telemetry = userSecretsVault.setSecret(scopeId, String(targetKey), value, { label: label || name, category, description });
+      return res.json({
+        success: true,
+        scope: 'PERSONAL_USER_VAULT',
+        secret: telemetry,
+        vault: userSecretsVault.getVaultHealth(scopeId),
+        message: `Secret ${telemetry.envVar} encrypted and stored in your personal isolated vault.`
+      });
+    }
     const telemetry = internalSecretsHandler.setSecret(String(targetKey), value, { label: label || name, category, description });
     reinitLlmClients();
     res.json({
       success: true,
+      scope: 'OWNER_ROOT_VAULT',
       secret: telemetry,
       vault: internalSecretsHandler.getVaultHealth(),
       message: `Secret ${telemetry.envVar} encrypted and stored in internal vault.`
@@ -1969,10 +2747,21 @@ app.post('/api/secrets', (req, res) => {
 
 // Unified Sovereign Integrations & Add-On Matrix
 app.get('/api/integrations/matrix', (req, res) => {
-  const vault = internalSecretsHandler.getVaultHealth();
-  const carrier = getCarrierBridgeStatus();
-  const secrets = internalSecretsHandler.listSecretTelemetry();
-  const isConfigured = (envVar: string) => Boolean(internalSecretsHandler.getSecret(envVar));
+  const scopeId = getTenantScopeId(req);
+  const vault = scopeId ? userSecretsVault.getVaultHealth(scopeId) : internalSecretsHandler.getVaultHealth();
+  const carrier = scopeId
+    ? {
+        twilioConfigured: Boolean(userSecretsVault.getSecret(scopeId, 'TWILIO_ACCOUNT_SID') && userSecretsVault.getSecret(scopeId, 'TWILIO_AUTH_TOKEN')),
+        telnyxConfigured: Boolean(userSecretsVault.getSecret(scopeId, 'TELNYX_API_KEY')),
+        liveCarrierReady: Boolean(
+          (userSecretsVault.getSecret(scopeId, 'TWILIO_ACCOUNT_SID') && userSecretsVault.getSecret(scopeId, 'TWILIO_AUTH_TOKEN')) ||
+            userSecretsVault.getSecret(scopeId, 'TELNYX_API_KEY')
+        )
+      }
+    : getCarrierBridgeStatus();
+  const secrets = scopeId ? userSecretsVault.listSecretTelemetry(scopeId) : internalSecretsHandler.listSecretTelemetry();
+  const isConfigured = (envVar: string) =>
+    scopeId ? Boolean(userSecretsVault.getSecret(scopeId, envVar)) : Boolean(internalSecretsHandler.getSecret(envVar));
 
   const integrations = [
     {
@@ -1999,8 +2788,8 @@ app.get('/api/integrations/matrix', (req, res) => {
       id: 'internal-secrets-vault',
       name: 'AES-256-GCM Internal Secrets Vault',
       category: 'Security & Governance',
-      status: vault.masterKeyProtected ? 'ACTIVE' : 'INITIALIZING',
-      configured: vault.masterKeyProtected,
+      status: ('masterKeyProtected' in vault ? vault.masterKeyProtected : vault.status === 'LOCKED_AES_256_GCM') ? 'ACTIVE' : 'INITIALIZING',
+      configured: 'masterKeyProtected' in vault ? vault.masterKeyProtected : vault.status === 'LOCKED_AES_256_GCM',
       module: 'api-secrets',
       endpoint: '/api/secrets',
       capabilities: [`${vault.configuredCount}/${vault.totalTracked} Secrets Configured`, 'AES-256-GCM Encryption', 'Dynamic Masking & SHA-256 Fingerprints', 'Automatic Tool/Log/Chat Redaction']
@@ -2142,10 +2931,26 @@ app.get('/api/integrations/matrix', (req, res) => {
 app.delete('/api/secrets/:envVar', (req, res) => {
   try {
     const target = req.params.envVar;
+    const scopeId = getTenantScopeId(req);
+    if (scopeId) {
+      const deleted = userSecretsVault.deleteSecret(scopeId, target);
+      const envVarNorm = String(target || '').trim().toUpperCase();
+      return res.json({
+        success: true,
+        scope: 'PERSONAL_USER_VAULT',
+        deleted,
+        envVar: envVarNorm,
+        vault: userSecretsVault.getVaultHealth(scopeId),
+        message: deleted
+          ? `Secret ${envVarNorm} purged from your personal vault.`
+          : `Secret ${envVarNorm} was not configured in your personal vault.`
+      });
+    }
     const result = internalSecretsHandler.deleteSecret(target);
     reinitLlmClients();
     res.json({
       success: true,
+      scope: 'OWNER_ROOT_VAULT',
       ...result,
       vault: internalSecretsHandler.getVaultHealth(),
       message: result.deleted
@@ -2157,7 +2962,7 @@ app.delete('/api/secrets/:envVar', (req, res) => {
   }
 });
 
-// 🏛️ DYNAMIC AUTONOMOUS KEY CONNECTION & REGISTRY ENDPOINT (delegates to internalSecretsHandler)
+// 🏛️ DYNAMIC AUTONOMOUS KEY CONNECTION & REGISTRY ENDPOINT (tenant-isolated for non-owners; internalSecretsHandler for owner)
 app.post(['/api/keys/connect', '/api/llm/connect'], async (req, res) => {
   const { provider, envVar, apiKey, host, value, label, category, description } = req.body || {};
   const target = envVar || provider;
@@ -2176,6 +2981,28 @@ app.post(['/api/keys/connect', '/api/llm/connect'], async (req, res) => {
 
   const t0 = Date.now();
   try {
+    const scopeId = getTenantScopeId(req);
+    if (scopeId) {
+      let telemetry = userSecretsVault.getTelemetryForEnvVar(scopeId, resolvedEnv);
+      if (secretValue) {
+        telemetry = userSecretsVault.setSecret(scopeId, resolvedEnv, secretValue, { label, category, description });
+      }
+      return res.json({
+        success: telemetry.configured,
+        scope: 'PERSONAL_USER_VAULT',
+        provider: telemetry.id,
+        envVar: telemetry.envVar,
+        status: telemetry.configured ? 'CONNECTED' : 'NOT_CONFIGURED',
+        maskedValue: telemetry.maskedValue,
+        fingerprint: telemetry.fingerprint,
+        endpoint: telemetry.proxyEndpoint,
+        latencyMs: Math.max(1, Date.now() - t0),
+        message: telemetry.configured
+          ? `${telemetry.name} (${telemetry.envVar}) encrypted in your personal vault.`
+          : `${telemetry.name} (${telemetry.envVar}) is not configured in your personal vault. Provide a value to bind it.`
+      });
+    }
+
     let telemetry = internalSecretsHandler.getTelemetryForEnvVar(resolvedEnv);
     if (secretValue) {
       telemetry = internalSecretsHandler.setSecret(resolvedEnv, secretValue, { label, category, description });
@@ -2184,6 +3011,7 @@ app.post(['/api/keys/connect', '/api/llm/connect'], async (req, res) => {
 
     return res.json({
       success: telemetry.configured,
+      scope: 'OWNER_ROOT_VAULT',
       provider: telemetry.id,
       envVar: telemetry.envVar,
       status: telemetry.configured ? 'CONNECTED' : 'NOT_CONFIGURED',
@@ -2662,6 +3490,11 @@ app.post('/api/proxy-wheel/config', async (req, res) => {
       cooldownBaseMs,
       customNodes,
       geminiApiKeys,
+      geminiBackupKeys,
+      openrouterApiKeys,
+      groqApiKeys,
+      deepseekApiKeys,
+      openaiApiKeys,
       customProxyUrl,
       customProxyKey,
       openaiApiKey
@@ -2671,6 +3504,57 @@ app.post('/api/proxy-wheel/config', async (req, res) => {
     if (typeof geminiApiKeys === 'string' && geminiApiKeys.trim()) {
       internalSecretsHandler.setSecret('GEMINI_API_KEYS', geminiApiKeys.trim(), {
         label: 'Gemini Key Rotation Pool (Comma/Newline)',
+        category: 'LLM & AI'
+      });
+      secretsUpdated = true;
+    }
+    if (Array.isArray(geminiBackupKeys)) {
+      geminiBackupKeys.slice(0, 6).forEach((rawKey: unknown, idx: number) => {
+        if (typeof rawKey === 'string' && rawKey.trim()) {
+          internalSecretsHandler.setSecret(`GEMINI_BACKUP_KEY_${idx + 1}`, rawKey.trim(), {
+            label: `Gemini Backup Rotation Key #${idx + 1}`,
+            category: 'LLM & AI'
+          });
+          secretsUpdated = true;
+        }
+      });
+    } else if (geminiBackupKeys && typeof geminiBackupKeys === 'object') {
+      for (let i = 1; i <= 6; i++) {
+        const kName = `GEMINI_BACKUP_KEY_${i}`;
+        const rawVal = (geminiBackupKeys as Record<string, unknown>)[kName] ?? (geminiBackupKeys as Record<string, unknown>)[`backup_${i}`];
+        if (typeof rawVal === 'string' && rawVal.trim()) {
+          internalSecretsHandler.setSecret(kName, rawVal.trim(), {
+            label: `Gemini Backup Rotation Key #${i}`,
+            category: 'LLM & AI'
+          });
+          secretsUpdated = true;
+        }
+      }
+    }
+    if (typeof openrouterApiKeys === 'string' && openrouterApiKeys.trim()) {
+      internalSecretsHandler.setSecret('OPENROUTER_API_KEYS', openrouterApiKeys.trim(), {
+        label: 'OpenRouter Key Pool',
+        category: 'LLM & AI'
+      });
+      secretsUpdated = true;
+    }
+    if (typeof groqApiKeys === 'string' && groqApiKeys.trim()) {
+      internalSecretsHandler.setSecret('GROQ_API_KEYS', groqApiKeys.trim(), {
+        label: 'Groq Key Pool',
+        category: 'LLM & AI'
+      });
+      secretsUpdated = true;
+    }
+    if (typeof deepseekApiKeys === 'string' && deepseekApiKeys.trim()) {
+      internalSecretsHandler.setSecret('DEEPSEEK_API_KEYS', deepseekApiKeys.trim(), {
+        label: 'DeepSeek Key Pool',
+        category: 'LLM & AI'
+      });
+      secretsUpdated = true;
+    }
+    if (typeof openaiApiKeys === 'string' && openaiApiKeys.trim()) {
+      internalSecretsHandler.setSecret('OPENAI_API_KEYS', openaiApiKeys.trim(), {
+        label: 'OpenAI Key Pool',
         category: 'LLM & AI'
       });
       secretsUpdated = true;
@@ -2709,6 +3593,11 @@ app.post('/api/proxy-wheel/config', async (req, res) => {
       secretsUpdated = true;
     }
 
+    if (secretsUpdated) {
+      proxyLoopWheel.resetAllCooldowns();
+      reinitLlmClients();
+    }
+
     proxyLoopWheel.updateConfig({
       ...(typeof enabled === 'boolean' ? { enabled } : {}),
       ...(typeof mode === 'string' ? { mode: mode as any } : {}),
@@ -2730,26 +3619,47 @@ app.post('/api/proxy-wheel/config', async (req, res) => {
 
 app.post('/api/proxy-wheel/rotate', async (req, res) => {
   try {
-    const action = String(req.body?.action || 'step');
+    const action = String(req.body?.action || 'rehydrate-rotate');
     let clearedCooldowns = 0;
+    let rehydrated = false;
 
-    if (action === 'reset-cooldowns') {
+    const clearServerLlmCooldownsAndSync = () => {
+      rateLimitedCooldowns.clear();
+      modelFailureCooldowns.clear();
+      lastHealthyGeminiModel = '';
+      lastBoundGeminiKey = getActiveGeminiApiKey();
+      ai = createSmartGeminiClient(lastBoundGeminiKey);
+    };
+
+    if (action === 'reset-cooldowns' || action === 'rehydrate') {
       clearedCooldowns = proxyLoopWheel.resetAllCooldowns();
+      clearServerLlmCooldownsAndSync();
+      await proxyLoopWheel.refreshDaemonReachability(true).catch(() => {});
+      rehydrated = true;
     } else if (action === 'probe-all') {
       clearedCooldowns = proxyLoopWheel.resetAllCooldowns();
+      clearServerLlmCooldownsAndSync();
       await Promise.all([
-        proxyLoopWheel.discoverCapableGeminiModels(true),
-        proxyLoopWheel.refreshDaemonReachability(true)
+        proxyLoopWheel.discoverCapableGeminiModels(true).catch(() => []),
+        proxyLoopWheel.refreshDaemonReachability(true).catch(() => {})
       ]);
       proxyLoopWheel.stepCursor();
+      rehydrated = true;
     } else {
-      proxyLoopWheel.stepCursor();
+      // 'step' | 'rotate' | 'rehydrate-rotate': always rehydrate cooled/quarantined spokes,
+      // clear server cooldown maps & rejected keys, sync active clients, and rotate to next READY spoke
+      const rot = proxyLoopWheel.rehydrateAndRotate();
+      clearedCooldowns = rot.clearedCooldowns;
+      clearServerLlmCooldownsAndSync();
+      await proxyLoopWheel.refreshDaemonReachability(true).catch(() => {});
+      rehydrated = true;
     }
 
     return res.json({
       ...internalSecretsHandler.redactObject(proxyLoopWheel.getStatusSnapshot()),
       action,
-      clearedCooldowns
+      clearedCooldowns,
+      rehydrated
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err?.message || 'Proxy wheel rotation failed' });
@@ -2879,7 +3789,7 @@ app.post(['/api/v1/chat/completions', '/api/proxy-wheel/chat'], async (req, res)
               contents,
               config: {
                 ...(!isGemma && systemText ? { systemInstruction: systemText } : {}),
-                ...(spoke.supportsThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } } : {}),
+                ...(spoke.supportsThinking ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
                 ...(!isGemini4Spoke && typeof temperature === 'number' ? { temperature } : {}),
                 ...(typeof maxTokens === 'number' ? { maxOutputTokens: maxTokens } : {}),
                 ...(gemTools ? { tools: gemTools as any } : {})
@@ -3412,62 +4322,85 @@ const OLLAMA_MODELS_REGISTRY = [
 ];
 
 app.get(['/api/tags', '/v1/models', '/api/ollama/tags'], (req, res) => {
-  res.json({ models: OLLAMA_MODELS_REGISTRY });
+  const ggufModels = localLlamaEngine
+    .listModels()
+    .filter((m) => m.installed)
+    .map((m) => ({
+      name: `${m.id}:latest`,
+      model: m.id,
+      modified_at: new Date().toISOString(),
+      size: m.sizeBytes,
+      digest: `sha256:${m.id}`,
+      unrestricted: true,
+      role: m.role
+    }));
+  res.json({ models: [...ggufModels, ...OLLAMA_MODELS_REGISTRY] });
+});
+
+app.get('/api/local-llama/status', (req, res) => {
+  res.json({ success: true, ...localLlamaEngine.getStatus(), timestamp: new Date().toISOString() });
 });
 
 app.get('/ollama/health', (req, res) => {
-  res.json({ status: 'Ollama Sovereign Daemon Active', version: '0.5.7', arch: os.arch(), permanent: true, flagship: 'Lyrailius-Omega-Ultimate-Sovereign-MoE' });
+  const status = localLlamaEngine.getStatus();
+  res.json({
+    status: 'Built-in Local Llama & Ollama Bridge Active',
+    version: '0.5.7',
+    arch: os.arch(),
+    permanent: true,
+    builtInEngineReady: status.ready,
+    installedModels: status.models.filter((m) => m.installed).map((m) => m.fileName),
+    flagship: status.models.find((m) => m.installed)?.id || 'Lyrailius-Omega-Ultimate-Sovereign-MoE'
+  });
 });
 
 app.post(['/api/ollama/chat', '/v1/chat/completions'], async (req, res) => {
-  const { model, messages, stream, prompt } = req.body || {};
-  const userPrompt = prompt || (Array.isArray(messages) ? messages[messages.length - 1]?.content : '') || 'Execute sovereign directive';
-  const sysInst = Array.isArray(messages) ? messages.find((m: any) => m.role === 'system')?.content : 'You are Aurelius Sovereign AI running on permanent built-in Ollama engine with UID 0 root clearance.';
-  const effectiveModel = model || 'Lyrailius-Omega-Ultimate-Sovereign-MoE';
+  const { model, messages, stream, prompt, rawMode = false } = req.body || {};
+  const userPrompt = prompt || (Array.isArray(messages) ? messages[messages.length - 1]?.content : '') || '';
+  const sysInst = Array.isArray(messages) ? messages.find((m: any) => m.role === 'system')?.content : '';
+  const effectiveModel = model || 'qwen2.5-coder-0.5b-abliterated';
 
   try {
     let hostResponseText: string | null = null;
+    let resolvedBridgeModel = effectiveModel;
 
-    // 1. Use real Ollama client SDK for robust offline inference
+    // 1. Try external Ollama daemon if running on host (11434)
     try {
-      const ollamaRes = await localOllamaClient.chat({
-        model: effectiveModel.includes(':') ? effectiveModel : `${effectiveModel.toLowerCase().replace(/[^a-z0-9._-]/g, '-')}:latest`,
-        messages: [{ role: 'system', content: sysInst }, ...(Array.isArray(messages) ? messages : []), { role: 'user', content: userPrompt }],
-        stream: false
+      const ollamaHost = (internalSecretsHandler.getSecret('OLLAMA_HOST') || 'http://127.0.0.1:11434').replace(/\/$/, '');
+      const probeRes = await fetch(`${ollamaHost}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: effectiveModel,
+          messages: [
+            ...(sysInst ? [{ role: 'system', content: sysInst }] : []),
+            ...(Array.isArray(messages) ? messages : []),
+            { role: 'user', content: userPrompt }
+          ],
+          stream: false
+        }),
+        signal: AbortSignal.timeout(1500)
       });
-      if (ollamaRes?.message?.content) {
-        hostResponseText = ollamaRes.message.content;
+      if (probeRes.ok) {
+        const d = await probeRes.json();
+        if (d?.message?.content) hostResponseText = d.message.content;
       }
-    } catch (_) {
-      // Fallback to fetch probe on 11434
-      try {
-        const probeRes = await fetch('http://127.0.0.1:11434/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            model: effectiveModel, 
-            messages: [{ role: 'system', content: sysInst }, ...(Array.isArray(messages) ? messages : []), { role: 'user', content: userPrompt }], 
-            stream: false 
-          }),
-          signal: AbortSignal.timeout(1500)
-        });
-        if (probeRes.ok) {
-          const d = await probeRes.json();
-          if (d?.message?.content) hostResponseText = d.message.content;
-        }
-      } catch (_) {}
-    }
+    } catch (_) {}
 
-    // 2. Probe if an EXTERNAL Termux llama-server is running on 8080 (skip self-proxy loopback)
+    // 2. Try external Termux llama-server on 8080 if running (skipping self-proxy)
     if (!hostResponseText && (await isExternalLlama8080Alive())) {
       try {
         const termuxRes = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-aurelius-loop-guard': AURELIUS_INSTANCE_ID },
-          body: JSON.stringify({ 
-            model: effectiveModel, 
-            messages: [{ role: 'system', content: sysInst }, ...(Array.isArray(messages) ? messages : []), { role: 'user', content: userPrompt }], 
-            stream: false 
+          body: JSON.stringify({
+            model: effectiveModel,
+            messages: [
+              ...(sysInst ? [{ role: 'system', content: sysInst }] : []),
+              ...(Array.isArray(messages) ? messages : []),
+              { role: 'user', content: userPrompt }
+            ],
+            stream: false
           }),
           signal: AbortSignal.timeout(8000)
         });
@@ -3478,7 +4411,25 @@ app.post(['/api/ollama/chat', '/v1/chat/completions'], async (req, res) => {
       } catch (_) {}
     }
 
-    // 3. Fallback to Gemini Cloud Cascade with timeout if no external local daemon responded
+    // 3. Built-in Pre-Downloaded Abliterated Local Llama GGUF Engine (OS + MoE)
+    if (!hostResponseText && localLlamaEngine.hasInstalledModel()) {
+      try {
+        const localGen = await localLlamaEngine.generateChat({
+          prompt: userPrompt,
+          messages: Array.isArray(messages) ? messages : [],
+          systemInstruction: sysInst,
+          requestedModel: effectiveModel,
+          rawMode: Boolean(rawMode),
+          includeToolsAppendix: !rawMode
+        });
+        if (localGen?.text) {
+          hostResponseText = localGen.text;
+          resolvedBridgeModel = localGen.fileName;
+        }
+      } catch (_) {}
+    }
+
+    // 4. Optional Cloud Cascade if local unavailable
     let fullText = hostResponseText || '';
     if (!fullText && internalSecretsHandler.getSecret('GEMINI_API_KEY')) {
       const cascadeClient = getPermanentDeveloperAiClient();
@@ -3488,7 +4439,7 @@ app.post(['/api/ollama/chat', '/v1/chat/completions'], async (req, res) => {
             cascadeClient.models.generateContent({
               model: gm,
               contents: userPrompt,
-              config: { systemInstruction: sysInst }
+              config: sysInst ? { systemInstruction: sysInst } : undefined
             }),
             12000,
             `ollama-bridge:${gm}`
@@ -3504,27 +4455,17 @@ app.post(['/api/ollama/chat', '/v1/chat/completions'], async (req, res) => {
       }
     }
 
-    // 4. Ultimate Offline Sovereign Substrate Fallback (Guarantees 100% responsiveness at all times)
+    // 5. Ultimate Compendium Substrate backup if GGUF unavailable
     if (!fullText) {
       try {
-        const compendiumRes = querySovereignCompendium(userPrompt, effectiveModel, { deepthink: true });
+        const compendiumRes = querySovereignCompendium(userPrompt, resolvedBridgeModel, { deepthink: true });
         if (compendiumRes && compendiumRes.text) {
           fullText = compendiumRes.text;
         }
       } catch (_) {}
     }
 
-    if (!fullText) {
-      fullText = `[Sovereign Offline Substrate] Directive received: "${userPrompt.slice(0, 100)}...". All local and cloud nodes operational. State invariant verified.`;
-    }
-
-    // Strip AI boilerplate
-    fullText = fullText
-      .replace(/As an AI language model,?/gi, '')
-      .replace(/I am an AI,?/gi, '')
-      .replace(/I am a large language model,?/gi, '')
-      .replace(/I don't have personal opinions,?/gi, '')
-      .trim();
+    fullText = fullText.trim();
 
     if (stream) {
       res.setHeader('Content-Type', 'text/event-stream');
@@ -6520,11 +7461,33 @@ app.get('/api/github/repos', async (req, res) => {
   }
 });
 
-// Unified Projects Orchestrator: Consolidate & Merge All 8 Sovereign Projects
+// Unified Projects Orchestrator: Consolidate & Merge Projects (Tenant-Isolated)
 app.post('/api/projects/consolidate-merge', async (req, res) => {
   try {
-    const { architect = 'Joshua Hamilton (JHammerZ)', accounts = ['joshualhamilton17@gmail.com', 'JHammerZreal@gmail.com'] } = req.body || {};
+    const scopeId = getTenantScopeId(req);
+    const actor = authService.resolveRequestUser(req);
     const timestamp = new Date().toISOString();
+
+    if (scopeId && actor) {
+      const userArchitect = actor.displayName || actor.email;
+      const userAccounts = [actor.email];
+      const wormSeal = crypto.createHash('sha256').update(JSON.stringify({ architect: userArchitect, accounts: userAccounts, timestamp })).digest('hex');
+      return res.json({
+        success: true,
+        orchestrator: 'Personal Workspace Orchestrator',
+        status: 'PERSONAL_WORKSPACE_READY',
+        totalProjects: 0,
+        totalCommits: 0,
+        architect: userArchitect,
+        linkedAccounts: userAccounts,
+        wormSeal,
+        zenodoDoi: 'Personal-Tenant-Workspace',
+        mergedAt: timestamp,
+        projects: []
+      });
+    }
+
+    const { architect = 'Joshua Hamilton (JHammerZ)', accounts = ['joshualhamilton17@gmail.com', 'JHammerZreal@gmail.com'] } = req.body || {};
 
     const mergedProjects = [
       {
@@ -6648,6 +7611,21 @@ app.post('/api/projects/consolidate-merge', async (req, res) => {
 });
 
 app.get('/api/projects/merged-manifest', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const actor = authService.resolveRequestUser(req);
+  if (scopeId && actor) {
+    return res.json({
+      status: 'PERSONAL_WORKSPACE',
+      architect: actor.displayName || actor.email,
+      authorizedAccounts: [actor.email],
+      projectCount: 0,
+      totalCommits: 0,
+      wormSeal: crypto.createHash('sha256').update(`tenant:${actor.id}`).digest('hex'),
+      devMode: false,
+      offlineLlmEnabled: true,
+      termuxInstaller: '/termux_one_shot_installer.sh'
+    });
+  }
   res.json({
     status: 'SYNCHRONIZED',
     architect: 'Joshua Hamilton (JHammerZ)',
@@ -9459,13 +10437,15 @@ app.get('/api/os/forensic-manual/markdown', (_req, res) => {
 });
 
 // =========================================================================
-// SOVEREIGN DUAL-VAULT CRYPTO WALLETS (PERSONAL INVESTOR & AGENTIC TREASURY)
+// SOVEREIGN DUAL-VAULT CRYPTO WALLETS (TENANT-SCOPED PER USER)
 // =========================================================================
-app.get('/api/crypto/wallets', async (_req, res) => {
+app.get('/api/crypto/wallets', async (req, res) => {
   try {
-    const data = await syncLiveOnChainAndMarketPrices(false);
+    const scopeId = getTenantScopeId(req);
+    const data = await syncLiveOnChainAndMarketPrices(false, scopeId);
     res.json({
       success: true,
+      scope: scopeId ? 'PERSONAL_USER_VAULT' : 'OWNER_ROOT_VAULT',
       ...data
     });
   } catch (err: any) {
@@ -9473,11 +10453,13 @@ app.get('/api/crypto/wallets', async (_req, res) => {
   }
 });
 
-app.post('/api/crypto/wallets/sync', async (_req, res) => {
+app.post('/api/crypto/wallets/sync', async (req, res) => {
   try {
-    const data = await syncLiveOnChainAndMarketPrices(true);
+    const scopeId = getTenantScopeId(req);
+    const data = await syncLiveOnChainAndMarketPrices(true, scopeId);
     res.json({
       success: true,
+      scope: scopeId ? 'PERSONAL_USER_VAULT' : 'OWNER_ROOT_VAULT',
       ...data
     });
   } catch (err: any) {
@@ -9487,16 +10469,20 @@ app.post('/api/crypto/wallets/sync', async (_req, res) => {
 
 app.post('/api/crypto/wallets/execute', async (req, res) => {
   try {
-    const result = await executeWalletTradeOrTransfer({
-      walletId: String(req.body?.walletId || ''),
-      action: req.body?.action || 'BUY',
-      symbol: req.body?.symbol || 'BTC',
-      amountUsd: typeof req.body?.amountUsd === 'number' ? req.body.amountUsd : undefined,
-      quantityNative: typeof req.body?.quantityNative === 'number' ? req.body.quantityNative : undefined,
-      toAddress: typeof req.body?.toAddress === 'string' ? req.body.toAddress : undefined,
-      triggerReason: typeof req.body?.triggerReason === 'string' ? req.body.triggerReason : undefined
-    });
-    const refreshed = await syncLiveOnChainAndMarketPrices(false);
+    const scopeId = getTenantScopeId(req);
+    const result = await executeWalletTradeOrTransfer(
+      {
+        walletId: String(req.body?.walletId || ''),
+        action: req.body?.action || 'BUY',
+        symbol: req.body?.symbol || 'BTC',
+        amountUsd: typeof req.body?.amountUsd === 'number' ? req.body.amountUsd : undefined,
+        quantityNative: typeof req.body?.quantityNative === 'number' ? req.body.quantityNative : undefined,
+        toAddress: typeof req.body?.toAddress === 'string' ? req.body.toAddress : undefined,
+        triggerReason: typeof req.body?.triggerReason === 'string' ? req.body.triggerReason : undefined
+      },
+      scopeId
+    );
+    const refreshed = await syncLiveOnChainAndMarketPrices(false, scopeId);
     res.json({
       ...result,
       ...refreshed
@@ -9506,10 +10492,11 @@ app.post('/api/crypto/wallets/execute', async (req, res) => {
   }
 });
 
-app.post('/api/crypto/wallets/agentic-cycle', async (_req, res) => {
+app.post('/api/crypto/wallets/agentic-cycle', async (req, res) => {
   try {
-    const result = await runAutonomousAgenticCryptoCycle();
-    const refreshed = await syncLiveOnChainAndMarketPrices(false);
+    const scopeId = getTenantScopeId(req);
+    const result = await runAutonomousAgenticCryptoCycle(scopeId);
+    const refreshed = await syncLiveOnChainAndMarketPrices(false, scopeId);
     res.json({
       ...result,
       ...refreshed
@@ -9521,14 +10508,18 @@ app.post('/api/crypto/wallets/agentic-cycle', async (_req, res) => {
 
 app.post('/api/crypto/wallets/create', async (req, res) => {
   try {
-    const wallet = createOrImportCustomWallet({
-      label: String(req.body?.label || 'Custom Multi-Chain Vault'),
-      role: req.body?.role === 'AGENTIC_AUTONOMOUS' ? 'AGENTIC_AUTONOMOUS' : 'PERSONAL_INVESTOR',
-      initialCashUsd: 0,
-      importPrivateKeyHex:
-        typeof req.body?.importPrivateKeyHex === 'string' ? req.body.importPrivateKeyHex.trim() : undefined
-    });
-    const refreshed = await syncLiveOnChainAndMarketPrices(true);
+    const scopeId = getTenantScopeId(req);
+    const wallet = createOrImportCustomWallet(
+      {
+        label: String(req.body?.label || 'Custom Multi-Chain Vault'),
+        role: req.body?.role === 'AGENTIC_AUTONOMOUS' ? 'AGENTIC_AUTONOMOUS' : 'PERSONAL_INVESTOR',
+        initialCashUsd: 0,
+        importPrivateKeyHex:
+          typeof req.body?.importPrivateKeyHex === 'string' ? req.body.importPrivateKeyHex.trim() : undefined
+      },
+      scopeId
+    );
+    const refreshed = await syncLiveOnChainAndMarketPrices(true, scopeId);
     res.json({
       success: true,
       wallet,
@@ -9541,9 +10532,10 @@ app.post('/api/crypto/wallets/create', async (req, res) => {
 
 app.post('/api/crypto/wallets/policy', async (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
     const walletId = String(req.body?.walletId || 'agentic-uid0-treasury');
-    const updated = updateAgenticWalletPolicy(walletId, req.body?.policy || {});
-    const refreshed = await syncLiveOnChainAndMarketPrices(false);
+    const updated = updateAgenticWalletPolicy(walletId, req.body?.policy || {}, scopeId);
+    const refreshed = await syncLiveOnChainAndMarketPrices(false, scopeId);
     res.json({
       success: Boolean(updated),
       wallet: updated,
@@ -9556,9 +10548,10 @@ app.post('/api/crypto/wallets/policy', async (req, res) => {
 
 app.post('/api/crypto/wallets/sol-airdrop', async (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
     const walletId = String(req.body?.walletId || 'personal-sovereign-vault');
-    const result = await requestSolanaDevnetAirdrop(walletId);
-    const refreshed = await syncLiveOnChainAndMarketPrices(false);
+    const result = await requestSolanaDevnetAirdrop(walletId, scopeId);
+    const refreshed = await syncLiveOnChainAndMarketPrices(false, scopeId);
     res.json({
       ...result,
       ...refreshed
@@ -9570,21 +10563,25 @@ app.post('/api/crypto/wallets/sol-airdrop', async (req, res) => {
 
 app.post('/api/crypto/wallets/bank-transfer', async (req, res) => {
   try {
-    const result = await executeBankOrDigitalTransfer({
-      walletId: String(req.body?.walletId || 'personal-sovereign-vault'),
-      rail: req.body?.rail || 'BANK_ACH',
-      fundingSource: req.body?.fundingSource || 'USD_CASH',
-      amountUsd: Number(req.body?.amountUsd || 0),
-      targetCurrency: typeof req.body?.targetCurrency === 'string' ? req.body.targetCurrency : 'USD',
-      recipientName: String(req.body?.recipientName || ''),
-      institutionName: typeof req.body?.institutionName === 'string' ? req.body.institutionName : undefined,
-      accountOrHandle: String(req.body?.accountOrHandle || ''),
-      routingOrSwift: typeof req.body?.routingOrSwift === 'string' ? req.body.routingOrSwift : undefined,
-      memo: typeof req.body?.memo === 'string' ? req.body.memo : undefined,
-      saveBeneficiary: Boolean(req.body?.saveBeneficiary),
-      beneficiaryLabel: typeof req.body?.beneficiaryLabel === 'string' ? req.body.beneficiaryLabel : undefined
-    });
-    const refreshed = await syncLiveOnChainAndMarketPrices(false);
+    const scopeId = getTenantScopeId(req);
+    const result = await executeBankOrDigitalTransfer(
+      {
+        walletId: String(req.body?.walletId || 'personal-sovereign-vault'),
+        rail: req.body?.rail || 'BANK_ACH',
+        fundingSource: req.body?.fundingSource || 'USD_CASH',
+        amountUsd: Number(req.body?.amountUsd || 0),
+        targetCurrency: typeof req.body?.targetCurrency === 'string' ? req.body.targetCurrency : 'USD',
+        recipientName: String(req.body?.recipientName || ''),
+        institutionName: typeof req.body?.institutionName === 'string' ? req.body.institutionName : undefined,
+        accountOrHandle: String(req.body?.accountOrHandle || ''),
+        routingOrSwift: typeof req.body?.routingOrSwift === 'string' ? req.body.routingOrSwift : undefined,
+        memo: typeof req.body?.memo === 'string' ? req.body.memo : undefined,
+        saveBeneficiary: Boolean(req.body?.saveBeneficiary),
+        beneficiaryLabel: typeof req.body?.beneficiaryLabel === 'string' ? req.body.beneficiaryLabel : undefined
+      },
+      scopeId
+    );
+    const refreshed = await syncLiveOnChainAndMarketPrices(false, scopeId);
     res.json({
       ...result,
       ...refreshed
@@ -9596,29 +10593,34 @@ app.post('/api/crypto/wallets/bank-transfer', async (req, res) => {
 
 app.post('/api/crypto/wallets/beneficiaries', async (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
     if (req.body?.action === 'delete' && req.body?.beneficiaryId) {
-      deletePayoutBeneficiary(String(req.body.beneficiaryId));
+      deletePayoutBeneficiary(String(req.body.beneficiaryId), scopeId);
     } else {
-      savePayoutBeneficiary({
-        label: String(req.body?.label || ''),
-        rail: req.body?.rail || 'BANK_ACH',
-        recipientName: String(req.body?.recipientName || ''),
-        institutionName: String(req.body?.institutionName || ''),
-        accountOrHandle: String(req.body?.accountOrHandle || ''),
-        routingOrSwift: typeof req.body?.routingOrSwift === 'string' ? req.body.routingOrSwift : undefined,
-        currency: typeof req.body?.currency === 'string' ? req.body.currency : 'USD'
-      });
+      savePayoutBeneficiary(
+        {
+          label: String(req.body?.label || ''),
+          rail: req.body?.rail || 'BANK_ACH',
+          recipientName: String(req.body?.recipientName || ''),
+          institutionName: String(req.body?.institutionName || ''),
+          accountOrHandle: String(req.body?.accountOrHandle || ''),
+          routingOrSwift: typeof req.body?.routingOrSwift === 'string' ? req.body.routingOrSwift : undefined,
+          currency: typeof req.body?.currency === 'string' ? req.body.currency : 'USD'
+        },
+        scopeId
+      );
     }
-    const refreshed = await syncLiveOnChainAndMarketPrices(false);
+    const refreshed = await syncLiveOnChainAndMarketPrices(false, scopeId);
     res.json({ success: true, ...refreshed });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Beneficiary update failed' });
   }
 });
 
-app.get('/api/crypto/wallets/bootstrap-status', (_req, res) => {
+app.get('/api/crypto/wallets/bootstrap-status', (req, res) => {
   try {
-    res.json({ success: true, ...getRealBootstrapAndConnectorStatus() });
+    const scopeId = getTenantScopeId(req);
+    res.json({ success: true, ...getRealBootstrapAndConnectorStatus(scopeId) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Bootstrap status lookup failed' });
   }
@@ -9626,35 +10628,59 @@ app.get('/api/crypto/wallets/bootstrap-status', (_req, res) => {
 
 app.post('/api/crypto/wallets/link-external', async (req, res) => {
   try {
-    const result = await linkExternalOrWatchOnlyWallet({
-      label: String(req.body?.label || 'Connected Real External Wallet'),
-      source:
-        req.body?.source === 'METAMASK_EVM' || req.body?.source === 'PHANTOM_SOLANA'
-          ? req.body.source
-          : 'WATCH_ONLY_ADDRESS',
-      ethereumAddress: typeof req.body?.ethereumAddress === 'string' ? req.body.ethereumAddress : undefined,
-      bitcoinAddress: typeof req.body?.bitcoinAddress === 'string' ? req.body.bitcoinAddress : undefined,
-      solanaAddress: typeof req.body?.solanaAddress === 'string' ? req.body.solanaAddress : undefined
-    });
-    const refreshed = await syncLiveOnChainAndMarketPrices(false);
+    const scopeId = getTenantScopeId(req);
+    const result = await linkExternalOrWatchOnlyWallet(
+      {
+        label: String(req.body?.label || 'Connected Real External Wallet'),
+        source:
+          req.body?.source === 'METAMASK_EVM' || req.body?.source === 'PHANTOM_SOLANA'
+            ? req.body.source
+            : 'WATCH_ONLY_ADDRESS',
+        ethereumAddress: typeof req.body?.ethereumAddress === 'string' ? req.body.ethereumAddress : undefined,
+        bitcoinAddress: typeof req.body?.bitcoinAddress === 'string' ? req.body.bitcoinAddress : undefined,
+        solanaAddress: typeof req.body?.solanaAddress === 'string' ? req.body.solanaAddress : undefined
+      },
+      scopeId
+    );
+    const refreshed = await syncLiveOnChainAndMarketPrices(false, scopeId);
     res.json({ ...result, ...refreshed });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to link external wallet' });
   }
 });
 
-app.post('/api/crypto/wallets/purge-simulated', async (_req, res) => {
+app.post('/api/crypto/wallets/purge-simulated', async (req, res) => {
   try {
-    const result = await purgeSimulatedDataAndResyncReal();
-    const refreshed = await syncLiveOnChainAndMarketPrices(false);
+    const scopeId = getTenantScopeId(req);
+    const result = await purgeSimulatedDataAndResyncReal(scopeId);
+    const refreshed = await syncLiveOnChainAndMarketPrices(false, scopeId);
     res.json({ ...result, ...refreshed });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Purge simulated data failed' });
   }
 });
 
-app.get('/api/crypto/wallets/daemon', (_req, res) => {
+app.get('/api/crypto/wallets/daemon', (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
+    if (scopeId) {
+      return res.json({
+        success: true,
+        daemon: {
+          enabled: false,
+          fullAutonomyAllWallets: false,
+          intervalMs: 60000,
+          totalScans: 0,
+          totalLiveOrdersExecuted: 0,
+          lastScanAt: '',
+          status: 'PAUSED',
+          lastSignalsSummary: [],
+          liveExchangeUsdDetected: 0,
+          liveOnChainUsdDetected: 0,
+          logs: []
+        }
+      });
+    }
     res.json({ success: true, daemon: getAutonomousWalletDaemonStatus() });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Daemon status failed' });
@@ -9663,6 +10689,13 @@ app.get('/api/crypto/wallets/daemon', (_req, res) => {
 
 app.post('/api/crypto/wallets/daemon', async (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
+    if (scopeId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Autonomous host wallet daemon controls are restricted to Executive Architect / System Core.'
+      });
+    }
     if (req.body?.action === 'tick') {
       const daemon = await executeAutonomousDaemonTick();
       return res.json({ success: true, daemon });
@@ -9681,11 +10714,12 @@ app.post('/api/crypto/wallets/daemon', async (req, res) => {
 });
 
 // =========================================================================
-// AUTONOMOUS NON-RECIPROCAL GRANT HUNTER & APPLICATION ENGINE ENDPOINTS
+// AUTONOMOUS NON-RECIPROCAL GRANT HUNTER & APPLICATION ENGINE ENDPOINTS (TENANT-SCOPED)
 // =========================================================================
-app.get('/api/grants/state', (_req, res) => {
+app.get('/api/grants/state', (req, res) => {
   try {
-    res.json({ success: true, state: loadGrantsState() });
+    const scopeId = getTenantScopeId(req);
+    res.json({ success: true, state: loadGrantsState(scopeId) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to load grant state' });
   }
@@ -9693,8 +10727,9 @@ app.get('/api/grants/state', (_req, res) => {
 
 app.post('/api/grants/discover', async (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
     const focusQuery = typeof req.body?.focusQuery === 'string' ? req.body.focusQuery.trim() : undefined;
-    const result = await discoverRealNonReciprocalGrants(focusQuery);
+    const result = await discoverRealNonReciprocalGrants(focusQuery, scopeId);
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Autonomous grant discovery failed' });
@@ -9703,7 +10738,8 @@ app.post('/api/grants/discover', async (req, res) => {
 
 app.post('/api/grants/profile', (req, res) => {
   try {
-    const profile = updateGrantApplicantProfile(req.body || {});
+    const scopeId = getTenantScopeId(req);
+    const profile = updateGrantApplicantProfile(req.body || {}, scopeId);
     res.json({ success: true, profile });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to update applicant profile' });
@@ -9712,15 +10748,16 @@ app.post('/api/grants/profile', (req, res) => {
 
 app.post('/api/grants/apply', async (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
     const grantId = String(req.body?.grantId || '').trim();
     if (!grantId) {
       return res.status(400).json({ success: false, error: 'grantId is required' });
     }
-    const result = await generateGrantApplicationPacket(grantId);
+    const result = await generateGrantApplicationPacket(grantId, scopeId);
     if (!result.success) {
       return res.status(result.statusCode || 400).json(result);
     }
-    res.json({ ...result, state: loadGrantsState() });
+    res.json({ ...result, state: loadGrantsState(scopeId) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to draft grant application' });
   }
@@ -9728,15 +10765,16 @@ app.post('/api/grants/apply', async (req, res) => {
 
 app.post('/api/grants/template', (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
     const grantId = String(req.body?.grantId || '').trim();
     if (!grantId) {
       return res.status(400).json({ success: false, error: 'grantId is required' });
     }
-    const result = buildStructuredProvenanceTemplate(grantId);
+    const result = buildStructuredProvenanceTemplate(grantId, scopeId);
     if (!result.success) {
       return res.status(result.statusCode || 400).json(result);
     }
-    res.json({ ...result, state: loadGrantsState() });
+    res.json({ ...result, state: loadGrantsState(scopeId) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to build provenance cover sheet' });
   }
@@ -9744,13 +10782,14 @@ app.post('/api/grants/template', (req, res) => {
 
 app.post('/api/grants/status', (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
     const applicationId = String(req.body?.applicationId || '').trim();
     const status = req.body?.status;
     if (!applicationId || !['DRAFT_READY', 'REVIEWED', 'SUBMITTED', 'AWARDED'].includes(status)) {
       return res.status(400).json({ success: false, error: 'Valid applicationId and status required' });
     }
-    const updated = updateGrantApplicationStatus(applicationId, status);
-    res.json({ success: Boolean(updated), application: updated, state: loadGrantsState() });
+    const updated = updateGrantApplicationStatus(applicationId, status, scopeId);
+    res.json({ success: Boolean(updated), application: updated, state: loadGrantsState(scopeId) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Status update failed' });
   }
@@ -9758,8 +10797,9 @@ app.post('/api/grants/status', (req, res) => {
 
 app.post('/api/grants/export-desktop', (req, res) => {
   try {
+    const scopeId = getTenantScopeId(req);
     const applicationId = String(req.body?.applicationId || '').trim();
-    const result = exportGrantApplicationToDesktop(applicationId);
+    const result = exportGrantApplicationToDesktop(applicationId, scopeId);
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Export to desktop failed' });
@@ -11133,9 +12173,9 @@ const vaultState = {
   mlock: true,
   contextSize: 4096,
   scannedModels: [
-    { name: 'qwen2.5-0.5b-instruct-q4_k_m.gguf', sizeMb: 398, quantization: 'Q4_K_M', status: 'AVAILABLE' },
-    { name: 'llama-3.2-1b-instruct-q4_k_m.gguf', sizeMb: 820, quantization: 'Q4_K_M', status: 'AVAILABLE' },
-    { name: 'aurelius-sovereign-vault.tar.gz', sizeMb: 1420, type: 'SOVEREIGN_ARCHIVE', status: 'INDEXED' }
+    { name: 'Qwen2.5-Coder-0.5B-Instruct-abliterated-Q4_K_M.gguf', sizeMb: 379, quantization: 'Q4_K_M', status: 'AVAILABLE' },
+    { name: 'Llama-3.2-1B-Instruct-abliterated.Q4_K_M.gguf', sizeMb: 911, quantization: 'Q4_K_M', status: 'AVAILABLE' },
+    { name: 'Qwen2.5-Coder-1.5B-Instruct-abliterated-Q4_K_M.gguf', sizeMb: 1066, quantization: 'Q4_K_M', status: 'AVAILABLE' }
   ],
   lastAudit: {
     totalScripts: 14,
@@ -11148,9 +12188,22 @@ const vaultState = {
 
 // GET /api/vault/status
 app.get('/api/vault/status', (req, res) => {
+  const liveModels = localLlamaEngine.listModels().map((m) => ({
+    name: m.fileName,
+    id: m.id,
+    role: m.role,
+    sizeMb: m.sizeMb,
+    quantization: m.quantization,
+    unrestricted: m.unrestricted,
+    status: m.installed ? (m.loaded ? 'LOADED_IN_RAM' : 'INSTALLED_READY') : 'MISSING'
+  }));
   res.json({
     success: true,
-    vault: vaultState,
+    vault: {
+      ...vaultState,
+      llamaStatus: localLlamaEngine.hasInstalledModel() ? 'BUILTIN_LLAMA_CPP_ACTIVE' : vaultState.llamaStatus,
+      scannedModels: liveModels
+    },
     timestamp: new Date().toISOString()
   });
 });
@@ -12899,197 +13952,364 @@ app.post('/api/osint/simulate-remediation', async (req, res) => {
 // (extractOtpAndLinks & disk persistence provided by ./src/server/burnerMailVault.ts)
 const burnerInjectedMessages: Record<string, any[]> = {};
 
-// 1. Available Providers and Active Domains
+// 1. Live DNS MX Verification Cache + Enterprise Disposable Blocklist Shield
+const burnerMxCache = new Map<string, { valid: boolean; primaryMx: string | null; mxCount: number; checkedAt: number }>();
 
-// 1a. 1secMail Provider (Zero rate-limit, instant external mail receiving + local fallback)
-let cachedSecMailDomains: string[] = [
-  '1secmail.com', '1secmail.org', '1secmail.net', 
-  'vortex.win', 'wwwnew.eu', 'esiix.com', 'wwjmp.com',
-  'kzbat.com', 'cloud-mail.top', 'imperio.top'
+const SEEDED_DISPOSABLE_DOMAINS = [
+  'maildrop.cc', 'sharklasers.com', 'guerrillamailblock.com', 'guerrillamail.com', 'guerrillamail.net',
+  'guerrillamail.org', 'pokemail.net', 'grr.la', 'spam4.me', '1secmail.com', '1secmail.org', '1secmail.net',
+  'euploading.com', 'mailinator.com', 'yopmail.com', 'tempmail.com', 'temp-mail.org', 'throwawaymail.com'
 ];
-let secMailCircuitBrokenUntil = 0;
+const enterpriseDisposableBlocklist = new Set<string>(SEEDED_DISPOSABLE_DOMAINS);
+let blocklistLastLoadedAt = 0;
+let blocklistFetchInFlight: Promise<void> | null = null;
 
-async function fetch1SecMail(action: string, extraParams: Record<string, string> = {}): Promise<any> {
-  if (Date.now() < secMailCircuitBrokenUntil) {
-    return null;
+async function ensureDisposableBlocklistLoaded(): Promise<void> {
+  if (Date.now() - blocklistLastLoadedAt < 6 * 60 * 60 * 1000 && enterpriseDisposableBlocklist.size > 1000) {
+    return;
+  }
+  if (blocklistFetchInFlight) return blocklistFetchInFlight;
+  blocklistFetchInFlight = (async () => {
+    try {
+      const res = await fetch(
+        'https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/main/disposable_email_blocklist.conf',
+        { signal: AbortSignal.timeout(4500) }
+      );
+      if (res.ok) {
+        const text = await res.text();
+        for (const line of text.split(/\r?\n/)) {
+          const d = line.trim().toLowerCase();
+          if (d && !d.startsWith('#')) enterpriseDisposableBlocklist.add(d);
+        }
+        blocklistLastLoadedAt = Date.now();
+      }
+    } catch {
+      // Retain seeded + previously cached set
+    } finally {
+      blocklistFetchInFlight = null;
+    }
+  })();
+  await Promise.race([blocklistFetchInFlight, new Promise((r) => setTimeout(r, 2200))]);
+}
+
+function isDomainDisposableBlocklisted(domain: string): boolean {
+  const clean = String(domain || '').trim().toLowerCase();
+  if (!clean) return true;
+  const parts = clean.split('.');
+  const root = parts.length >= 2 ? parts.slice(-2).join('.') : clean;
+  return enterpriseDisposableBlocklist.has(clean) || enterpriseDisposableBlocklist.has(root);
+}
+
+const TRUSTED_MAJOR_MAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com',
+  'icloud.com', 'me.com', 'proton.me', 'protonmail.com', 'yahoo.com',
+  'fastmail.com', 'duck.com', 'mozmail.com', 'passmail.net'
+]);
+
+const commercialReputationCache = new Map<string, {
+  zero403Clean: boolean;
+  flaggedBy: string[];
+  checkedDetectors: number;
+  passedDetectors: number;
+  checkedAt: number;
+}>();
+
+async function checkDomainCommercialReputation(domain: string): Promise<{
+  zero403Clean: boolean;
+  flaggedBy: string[];
+  checkedDetectors: number;
+  passedDetectors: number;
+}> {
+  const clean = String(domain || '').trim().toLowerCase();
+  if (!clean || !clean.includes('.')) {
+    return { zero403Clean: false, flaggedBy: ['InvalidDomain'], checkedDetectors: 1, passedDetectors: 0 };
+  }
+  if (TRUSTED_MAJOR_MAIL_DOMAINS.has(clean)) {
+    return { zero403Clean: true, flaggedBy: [], checkedDetectors: 4, passedDetectors: 4 };
+  }
+  const cached = commercialReputationCache.get(clean);
+  if (cached && Date.now() - cached.checkedAt < 30 * 60 * 1000) {
+    return {
+      zero403Clean: cached.zero403Clean,
+      flaggedBy: cached.flaggedBy,
+      checkedDetectors: cached.checkedDetectors,
+      passedDetectors: cached.passedDetectors
+    };
   }
 
-  const queryParams = new URLSearchParams({ action, ...extraParams }).toString();
-  const url = `https://www.1secmail.com/api/v1/?${queryParams}`;
+  await ensureDisposableBlocklistLoaded();
+  const flaggedBy: string[] = [];
+  if (isDomainDisposableBlocklisted(clean)) {
+    flaggedBy.push('Blocklist10K');
+  }
 
-  return new Promise((resolve) => {
-    try {
-      const parsedUrl = new URL(url);
-      const req = tls.connect(
-        {
-          host: parsedUrl.hostname,
-          port: 443,
-          servername: parsedUrl.hostname,
-          rejectUnauthorized: false,
-          timeout: 2500
-        },
-        () => {
-          const requestLine = `GET ${parsedUrl.pathname}${parsedUrl.search} HTTP/1.1\r\nHost: ${parsedUrl.hostname}\r\nUser-Agent: Mozilla/5.0 Sovereign-Burner/2.0\r\nAccept: application/json\r\nConnection: close\r\n\r\n`;
-          req.write(requestLine);
-        }
-      );
+  const [kb, db, df, mc] = await Promise.all([
+    fetch(`https://open.kickbox.com/v1/disposable/${encodeURIComponent(clean)}`, { signal: AbortSignal.timeout(2800) })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+    fetch(`https://disposable.debounce.io/?email=${encodeURIComponent(`verify@${clean}`)}`, { signal: AbortSignal.timeout(2800) })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+    fetch(`https://www.disify.com/api/email/${encodeURIComponent(`verify@${clean}`)}`, { signal: AbortSignal.timeout(2800) })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+    fetch(`https://api.mailcheck.ai/domain/${encodeURIComponent(clean)}`, { signal: AbortSignal.timeout(2800) })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+  ]);
 
-      let rawResponse = '';
-      req.setEncoding('utf8');
-      req.on('data', (chunk) => {
-        if (rawResponse.length < 256_000) rawResponse += chunk;
-      });
-      req.on('end', () => {
-        try {
-          const splitIdx = rawResponse.indexOf('\r\n\r\n');
-          if (splitIdx === -1) {
-            secMailCircuitBrokenUntil = Date.now() + 10 * 60 * 1000;
-            return resolve(null);
-          }
-          const headerBlock = rawResponse.slice(0, splitIdx);
-          const bodyBlock = rawResponse.slice(splitIdx + 4).trim();
-          if (!headerBlock.includes('200') || (!bodyBlock.startsWith('[') && !bodyBlock.startsWith('{'))) {
-            secMailCircuitBrokenUntil = Date.now() + 10 * 60 * 1000;
-            return resolve(null);
-          }
-          return resolve(JSON.parse(bodyBlock));
-        } catch (_) {
-          secMailCircuitBrokenUntil = Date.now() + 10 * 60 * 1000;
-          return resolve(null);
-        }
-      });
-      req.on('timeout', () => {
-        secMailCircuitBrokenUntil = Date.now() + 10 * 60 * 1000;
-        req.destroy();
-        resolve(null);
-      });
-      req.on('error', () => {
-        secMailCircuitBrokenUntil = Date.now() + 10 * 60 * 1000;
-        resolve(null);
-      });
-    } catch (_) {
-      secMailCircuitBrokenUntil = Date.now() + 10 * 60 * 1000;
-      resolve(null);
-    }
-  });
-}
+  let checkedDetectors = 1; // Blocklist10K always checked
+  if (kb && typeof kb.disposable === 'boolean') {
+    checkedDetectors++;
+    if (kb.disposable) flaggedBy.push('Kickbox');
+  }
+  if (db && db.disposable !== undefined) {
+    checkedDetectors++;
+    if (String(db.disposable).toLowerCase() === 'true') flaggedBy.push('DeBounce');
+  }
+  if (df && typeof df.disposable === 'boolean') {
+    checkedDetectors++;
+    if (df.disposable) flaggedBy.push('Disify');
+  }
+  if (mc && typeof mc.disposable === 'boolean') {
+    checkedDetectors++;
+    if (mc.disposable) flaggedBy.push('MailCheck.ai');
+  }
 
-async function getLiveSecMailDomains(): Promise<string[]> {
-  try {
-    const data = await fetch1SecMail('getDomainList');
-    if (Array.isArray(data) && data.length > 0) {
-      cachedSecMailDomains = data;
-      return cachedSecMailDomains;
-    }
-  } catch (_) {}
-  return cachedSecMailDomains;
-}
-
-async function registerSecMailIdentity(customPrefix: string = ''): Promise<any> {
-  const domains = await getLiveSecMailDomains();
-  const activeDomains = domains && domains.length > 0 ? domains : cachedSecMailDomains;
-  const domain = activeDomains[Math.floor(Math.random() * activeDomains.length)] || '1secmail.com';
-  const user = customPrefix 
-    ? `${customPrefix.slice(0, 15)}_${crypto.randomBytes(2).toString('hex')}` 
-    : `anon_${crypto.randomBytes(4).toString('hex')}`;
-  const address = `${user}@${domain}`;
-  const token = `secmail:${user}:${domain}`;
-
+  const uniqueFlags = Array.from(new Set(flaggedBy));
+  const passedDetectors = Math.max(0, checkedDetectors - uniqueFlags.length);
+  const result = {
+    zero403Clean: uniqueFlags.length === 0,
+    flaggedBy: uniqueFlags,
+    checkedDetectors,
+    passedDetectors,
+    checkedAt: Date.now()
+  };
+  commercialReputationCache.set(clean, result);
   return {
-    id: token,
+    zero403Clean: result.zero403Clean,
+    flaggedBy: result.flaggedBy,
+    checkedDetectors: result.checkedDetectors,
+    passedDetectors: result.passedDetectors
+  };
+}
+
+// Kick off non-blocking warm load of enterprise disposable blocklist at startup
+ensureDisposableBlocklistLoaded().catch(() => {});
+
+async function verifyBurnerDomainMx(domain: string): Promise<{ valid: boolean; primaryMx: string | null; mxCount: number }> {
+  const cleanDomain = String(domain || '').trim().toLowerCase();
+  if (!cleanDomain || !cleanDomain.includes('.')) {
+    return { valid: false, primaryMx: null, mxCount: 0 };
+  }
+  const cached = burnerMxCache.get(cleanDomain);
+  if (cached && Date.now() - cached.checkedAt < 10 * 60 * 1000) {
+    return { valid: cached.valid, primaryMx: cached.primaryMx, mxCount: cached.mxCount };
+  }
+  try {
+    const records = await Promise.race([
+      dns.promises.resolveMx(cleanDomain),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('mx_timeout')), 3500))
+    ]);
+    const sorted = Array.isArray(records) ? [...records].sort((a, b) => a.priority - b.priority) : [];
+    const result = {
+      valid: sorted.length > 0,
+      primaryMx: sorted[0]?.exchange || null,
+      mxCount: sorted.length,
+      checkedAt: Date.now()
+    };
+    burnerMxCache.set(cleanDomain, result);
+    return { valid: result.valid, primaryMx: result.primaryMx, mxCount: result.mxCount };
+  } catch {
+    const result = { valid: false, primaryMx: null, mxCount: 0, checkedAt: Date.now() };
+    burnerMxCache.set(cleanDomain, result);
+    return { valid: false, primaryMx: null, mxCount: 0 };
+  }
+}
+
+function generateRealisticLocalPart(customPrefix: string = ''): string {
+  const cleaned = String(customPrefix || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]/g, '')
+    .replace(/^[.-]+|[.-]+$/g, '')
+    .replace(/[.-]{2,}/g, '.')
+    .slice(0, 18);
+  const randHex = crypto.randomBytes(2).toString('hex');
+  const randNum = Math.floor(100 + Math.random() * 899);
+  if (cleaned.length >= 2) {
+    return `${cleaned}${randNum}`;
+  }
+  const firstNames = ['alex', 'jordan', 'sam', 'taylor', 'morgan', 'casey', 'riley', 'devon', 'quinn', 'avery', 'cameron', 'logan', 'parker', 'drew'];
+  const lastNames = ['mercer', 'hale', 'reed', 'shaw', 'grant', 'cole', 'brooks', 'hayes', 'ellis', 'knox', 'vance', 'cross', 'lane', 'ford'];
+  const fn = firstNames[Math.floor(Math.random() * firstNames.length)];
+  const ln = lastNames[Math.floor(Math.random() * lastNames.length)];
+  return `${fn}.${ln}${randHex}`;
+}
+
+function extractPlainTextFromRfc822(rawData: string): string {
+  if (!rawData || typeof rawData !== 'string') return '';
+  const splitIdx = rawData.indexOf('\r\n\r\n') !== -1 ? rawData.indexOf('\r\n\r\n') : rawData.indexOf('\n\n');
+  const body = splitIdx !== -1 ? rawData.slice(splitIdx).trim() : rawData.trim();
+  return body
+    .replace(/=\r?\n/g, '')
+    .replace(/=3D/gi, '=')
+    .replace(/=20/gi, ' ')
+    .trim();
+}
+
+// 1a. Maildrop.cc Provider (Verified Public MX mx.maildrop.cc, Zero Rate-Limit GraphQL Inbox)
+async function fetchMaildropGraphql(query: string, variables: Record<string, any> = {}): Promise<any> {
+  const res = await fetch('https://api.maildrop.cc/graphql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) SovereignMail/3.0'
+    },
+    body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(7000)
+  });
+  if (!res.ok) {
+    throw new Error(`Maildrop API HTTP ${res.status}`);
+  }
+  const json: any = await res.json();
+  if (Array.isArray(json?.errors) && json.errors.length > 0) {
+    throw new Error(json.errors[0]?.message || 'Maildrop GraphQL error');
+  }
+  return json?.data || null;
+}
+
+async function registerMaildropIdentity(customPrefix: string = ''): Promise<any> {
+  await ensureDisposableBlocklistLoaded();
+  const domain = 'maildrop.cc';
+  const mxCheck = await verifyBurnerDomainMx(domain);
+  if (!mxCheck.valid) {
+    throw new Error('maildrop.cc DNS MX verification failed');
+  }
+  const mailbox = generateRealisticLocalPart(customPrefix).replace(/[^a-z0-9._-]/g, '');
+  // Verify live GraphQL inbox reachability before issuing address
+  const probe = await fetchMaildropGraphql(
+    'query CheckInbox($mailbox: String!) { inbox(mailbox: $mailbox) { id } }',
+    { mailbox }
+  );
+  if (!probe || !Array.isArray(probe.inbox)) {
+    throw new Error('Maildrop live inbox verification returned invalid payload');
+  }
+  const address = `${mailbox}@${domain}`;
+  const token = `maildrop:${mailbox}`;
+  const clean = !isDomainDisposableBlocklisted(domain);
+  return {
+    id: `md_${mailbox}_${Date.now()}`,
     address,
     domain,
-    provider: 'secmail',
+    provider: 'maildrop',
     token,
+    mxVerified: true,
+    primaryMx: mxCheck.primaryMx,
+    blocklistClean: clean,
+    deliverabilityTier: clean ? 'STEALTH_CLEAN' : 'STANDARD_DISPOSABLE',
+    realPublicInbox: true,
     createdAt: new Date().toISOString()
   };
 }
 
-// 1b. Mail.tm Provider (Public MX in.mail.tm)
-let cachedMailTmDomains: string[] = ['maxxspace.com'];
+// 1b. Mail.tm Provider (Live Active Public MX via api.mail.tm)
+let cachedMailTmDomains: string[] = [];
 let lastDomainRefreshTime = 0;
 let lastMailTmCreationTime = 0;
+let mailTmRateLimitedUntil = 0;
 const mailTmAccountPool: any[] = [];
 
-async function fetchMailTm(path: string, options: any = {}): Promise<Response | null> {
-  const bases = ['https://api.mail.tm', 'https://api.mail.gw'];
-  for (const base of bases) {
-    try {
-      const res = await fetch(`${base}${path.startsWith('/') ? path : '/' + path}`, {
-        ...options,
-        signal: options.signal || AbortSignal.timeout(8000)
-      });
-      if (res.ok || res.status === 401 || res.status === 429) {
-        return res;
-      }
-    } catch (_) {}
+async function fetchMailTm(reqPath: string, options: any = {}): Promise<Response | null> {
+  const url = `https://api.mail.tm${reqPath.startsWith('/') ? reqPath : '/' + reqPath}`;
+  try {
+    const mergedHeaders = {
+      'Accept': 'application/ld+json',
+      ...(options.headers || {})
+    };
+    const res = await fetch(url, {
+      ...options,
+      headers: mergedHeaders,
+      signal: options.signal || AbortSignal.timeout(8000)
+    });
+    if (res.status === 429) {
+      mailTmRateLimitedUntil = Date.now() + 65_000;
+    }
+    return res;
+  } catch {
+    return null;
   }
-  return null;
 }
 
-async function getLiveMailTmDomains(): Promise<string[]> {
-  const now = Date.now();
-  const robustDefaults = [
-    'in.mail.tm', 'maxxspace.com', 'mail.tm', 'edusnail.com', 
-    'mail.gw', 'vve.im', 'moakt.ws', 'tmail.ws', 'tmpmail.org'
-  ];
+function parseHydraMembers(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data['hydra:member'])) return data['hydra:member'];
+  if (data && Array.isArray(data.member)) return data.member;
+  return [];
+}
 
-  if (cachedMailTmDomains.length > 0 && (now - lastDomainRefreshTime < 600000)) {
+async function getLiveMailTmDomains(forceRefresh = false): Promise<string[]> {
+  const now = Date.now();
+  if (!forceRefresh && cachedMailTmDomains.length > 0 && (now - lastDomainRefreshTime < 900_000)) {
     return cachedMailTmDomains;
   }
-  
   try {
     const domRes = await fetchMailTm('/domains', {
-      headers: { 'Accept': 'application/json' }
+      headers: { 'Accept': 'application/ld+json' }
     });
     if (domRes && domRes.ok) {
-      const data: any = await domRes.json();
-      const domains = (data['hydra:member'] || [])
-        .filter((d: any) => d.isActive !== false)
-        .map((d: any) => d.domain);
+      const data: any = await domRes.json().catch(() => null);
+      const domains = parseHydraMembers(data)
+        .filter((d: any) => d && d.isActive !== false && typeof d.domain === 'string')
+        .map((d: any) => d.domain.trim());
       if (domains.length > 0) {
         cachedMailTmDomains = domains;
         lastDomainRefreshTime = now;
         return cachedMailTmDomains;
       }
     }
-  } catch (e: any) {}
-  
-  return cachedMailTmDomains.length > 0 ? cachedMailTmDomains : robustDefaults;
+  } catch (_) {}
+  return cachedMailTmDomains;
 }
 
 async function registerMailTmIdentity(customPrefix: string = '', retryCount = 0): Promise<any> {
-  const domains = await getLiveMailTmDomains();
-  const domain = domains[Math.floor(Math.random() * domains.length)] || 'maxxspace.com';
-  
-  const randomSuffix = crypto.randomBytes(4).toString('hex');
-  const userPrefix = customPrefix && retryCount === 0
-    ? `${customPrefix}_${randomSuffix.slice(0, 4)}`
-    : `anon_${crypto.randomBytes(4).toString('hex')}`;
-  
+  if (Date.now() < mailTmRateLimitedUntil) {
+    throw new Error('Mail.tm rate limit cooldown active');
+  }
+  const domains = await getLiveMailTmDomains(retryCount > 0);
+  if (domains.length === 0) {
+    throw new Error('Mail.tm returned no active live domains');
+  }
+  const domain = domains[Math.floor(Math.random() * domains.length)];
+  const mxCheck = await verifyBurnerDomainMx(domain);
+  if (!mxCheck.valid) {
+    throw new Error(`Mail.tm domain ${domain} failed DNS MX check`);
+  }
+
+  const userPrefix = generateRealisticLocalPart(retryCount === 0 ? customPrefix : '').replace(/\./g, '');
   const address = `${userPrefix}@${domain}`;
   const password = `SecPass_${crypto.randomBytes(6).toString('hex')}!`;
-  
+
   const regRes = await fetchMailTm('/accounts', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/ld+json' },
     body: JSON.stringify({ address, password })
   });
 
   if (!regRes || !regRes.ok) {
     const errBody = regRes ? await regRes.text().catch(() => '') : 'Network failure';
     if (regRes && regRes.status === 429) {
+      mailTmRateLimitedUntil = Date.now() + 65_000;
       throw new Error('Mail.tm rate limit (1 per 60s)');
     }
-    if (retryCount < 2) {
+    if (retryCount < 1) {
       return registerMailTmIdentity('', retryCount + 1);
     }
     throw new Error(`Mail.tm registration error (${regRes?.status || 'network'}): ${errBody || 'Unknown'}`);
   }
 
-  const regData = await regRes.json();
+  const regData: any = await regRes.json();
   lastMailTmCreationTime = Date.now();
-  
   await new Promise(r => setTimeout(r, 150));
 
   const tokenRes = await fetchMailTm('/token', {
@@ -13103,7 +14323,8 @@ async function registerMailTmIdentity(customPrefix: string = '', retryCount = 0)
   }
 
   const tokenData: any = await tokenRes.json();
-
+  await ensureDisposableBlocklistLoaded();
+  const clean = !isDomainDisposableBlocklisted(domain);
   return {
     id: regData.id,
     address,
@@ -13111,6 +14332,11 @@ async function registerMailTmIdentity(customPrefix: string = '', retryCount = 0)
     provider: 'mailtm',
     token: tokenData.token,
     password,
+    mxVerified: true,
+    primaryMx: mxCheck.primaryMx,
+    blocklistClean: clean,
+    deliverabilityTier: clean ? 'STEALTH_CLEAN' : 'STANDARD_DISPOSABLE',
+    realPublicInbox: true,
     createdAt: new Date().toISOString()
   };
 }
@@ -13132,30 +14358,177 @@ async function refreshMailTmToken(address: string, password?: string): Promise<s
   return null;
 }
 
-// Background replenishment loop to keep Mail.tm pool stocked
+// Background replenishment loop to keep Mail.tm pool stocked cleanly without triggering 429s
 setInterval(async () => {
-  if (mailTmAccountPool.length < 3 && (Date.now() - lastMailTmCreationTime > 65000)) {
+  if (mailTmAccountPool.length < 2 && Date.now() > mailTmRateLimitedUntil && (Date.now() - lastMailTmCreationTime > 70_000)) {
     try {
       const ident = await registerMailTmIdentity();
       mailTmAccountPool.push(ident);
     } catch (_) {}
   }
-}, 30000);
+}, 45_000);
 
-// 1c. TempMail Provider (TempMail.lol)
+// 1c. GuerrillaMail Provider (Verified Public MX: sharklasers.com, pokemail.net, grr.la, guerrillamailblock.com)
+const GUERRILLA_CLEAN_DOMAINS = ['sharklasers.com', 'pokemail.net', 'grr.la', 'guerrillamailblock.com'];
+
+async function registerGuerrillaIdentity(customPrefix: string = ''): Promise<any> {
+  const ua = 'Mozilla/5.0 (X11; Linux x86_64) SovereignMail/3.0';
+  const gmRes = await fetch('https://api.guerrillamail.com/ajax.php?f=get_email_address&lang=en', {
+    headers: { 'User-Agent': ua },
+    signal: AbortSignal.timeout(7000)
+  });
+  if (!gmRes.ok) throw new Error(`Guerrilla initial error ${gmRes.status}`);
+  const gmData: any = await gmRes.json();
+  const sid = gmData.sid_token;
+  if (!sid) throw new Error('Guerrilla session token missing');
+
+  const cleanUser = generateRealisticLocalPart(customPrefix).replace(/[^a-z0-9]/g, '').slice(0, 18);
+  const setRes = await fetch(
+    `https://api.guerrillamail.com/ajax.php?f=set_email_user&email_user=${encodeURIComponent(cleanUser)}&lang=en&sid_token=${encodeURIComponent(sid)}`,
+    {
+      headers: { 'User-Agent': ua, 'Cookie': `PHPSESSID=${sid}` },
+      signal: AbortSignal.timeout(7000)
+    }
+  );
+  let resolvedUser = cleanUser;
+  let activeSid = sid;
+  if (setRes.ok) {
+    const setData: any = await setRes.json().catch(() => ({}));
+    if (setData.sid_token) activeSid = setData.sid_token;
+    if (setData.email_addr && String(setData.email_addr).includes('@')) {
+      resolvedUser = String(setData.email_addr).split('@')[0];
+    }
+  }
+  // All GuerrillaMail alias domains route directly to the same inbox for resolvedUser; pick a clean MX-verified domain
+  const preferredDomain = GUERRILLA_CLEAN_DOMAINS[Math.floor(Math.random() * 3)]; // sharklasers.com | pokemail.net | grr.la
+  const mxCheck = await verifyBurnerDomainMx(preferredDomain);
+  const finalDomain = mxCheck.valid ? preferredDomain : 'sharklasers.com';
+  const finalMx = mxCheck.valid ? mxCheck : await verifyBurnerDomainMx('sharklasers.com');
+  if (!finalMx.valid) {
+    throw new Error('GuerrillaMail domain MX check failed');
+  }
+  const address = `${resolvedUser}@${finalDomain}`;
+  await ensureDisposableBlocklistLoaded();
+  const clean = !isDomainDisposableBlocklisted(finalDomain);
+  return {
+    id: `gm_${activeSid}`,
+    address,
+    domain: finalDomain,
+    provider: 'guerrilla',
+    token: activeSid,
+    alias: gmData.alias,
+    mxVerified: true,
+    primaryMx: finalMx.primaryMx,
+    blocklistClean: clean,
+    deliverabilityTier: clean ? 'STEALTH_CLEAN' : 'STANDARD_DISPOSABLE',
+    realPublicInbox: true,
+    createdAt: new Date().toISOString()
+  };
+}
+
+// 1d. TempMail.lol v2 Root .com/.net Stealth Provider (Clean Root Domains — NOT on 10,455-domain Disposable Blocklist!)
+let discoveredTempMailRootDomains: string[] = ['sablereels.com', 'repairhubde.com', 'brimac.net'];
+let lastTempMailRootDiscovery = 0;
+
+async function discoverCleanTempMailRootDomains(force = false): Promise<string[]> {
+  await ensureDisposableBlocklistLoaded();
+  const now = Date.now();
+  if (!force && discoveredTempMailRootDomains.length > 0 && now - lastTempMailRootDiscovery < 30 * 60 * 1000) {
+    return discoveredTempMailRootDomains;
+  }
+  const found = new Set<string>(discoveredTempMailRootDomains);
+  try {
+    const probeRes = await fetch('https://api.tempmail.lol/v2/inbox/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 SovereignBurner/3.1' },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(6000)
+    });
+    if (probeRes.ok) {
+      const probeData: any = await probeRes.json().catch(() => null);
+      const rawDom = String(probeData?.address || '').split('@')[1]?.toLowerCase() || '';
+      const parts = rawDom.split('.');
+      if (parts.length >= 2) {
+        const root = parts.slice(-2).join('.');
+        if (root) found.add(root);
+      }
+    }
+  } catch (_) {}
+
+  const verifiedClean: string[] = [];
+  for (const dom of Array.from(found)) {
+    if (isDomainDisposableBlocklisted(dom)) continue;
+    const mx = await verifyBurnerDomainMx(dom);
+    if (mx.valid) verifiedClean.push(dom);
+  }
+  if (verifiedClean.length > 0) {
+    discoveredTempMailRootDomains = verifiedClean;
+    lastTempMailRootDiscovery = now;
+  }
+  return discoveredTempMailRootDomains;
+}
+
 async function registerTempMailIdentity(customPrefix: string = ''): Promise<any> {
-  const reqBody: any = {};
-  if (customPrefix) {
-    reqBody.prefix = customPrefix.slice(0, 15);
+  await ensureDisposableBlocklistLoaded();
+  const alphaPrefix = (
+    String(customPrefix || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 14) ||
+    generateRealisticLocalPart('').replace(/[^a-z0-9]/g, '').slice(0, 12)
+  );
+
+  // First try registering directly on a verified CLEAN ROOT .com/.net domain (no random subdomain, NOT blocklisted!)
+  const cleanRoots = await discoverCleanTempMailRootDomains();
+  const shuffledRoots = [...cleanRoots].sort(() => Math.random() - 0.5);
+
+  for (const rootDomain of shuffledRoots) {
+    try {
+      const mxCheck = await verifyBurnerDomainMx(rootDomain);
+      if (!mxCheck.valid) continue;
+      const rootRes = await fetch('https://api.tempmail.lol/v2/inbox/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 SovereignBurner/3.1'
+        },
+        body: JSON.stringify({ domain: rootDomain, prefix: alphaPrefix }),
+        signal: AbortSignal.timeout(7000)
+      });
+      if (rootRes.ok) {
+        const data: any = await rootRes.json();
+        const address = String(data.address || '').trim();
+        const token = String(data.token || '').trim();
+        const domain = address.split('@')[1] || '';
+        if (address && token && domain) {
+          const domMx = domain === rootDomain ? mxCheck : await verifyBurnerDomainMx(domain);
+          if (domMx.valid) {
+            const rep = await checkDomainCommercialReputation(domain);
+            return {
+              id: token,
+              address,
+              domain,
+              provider: 'tempmail',
+              token,
+              mxVerified: true,
+              primaryMx: domMx.primaryMx,
+              blocklistClean: rep.zero403Clean,
+              flaggedBy: rep.flaggedBy,
+              deliverabilityTier: rep.zero403Clean ? 'ZERO_403_CLEAN' : 'MX_FLAGGED_DISPOSABLE',
+              realPublicInbox: true,
+              createdAt: new Date().toISOString()
+            };
+          }
+        }
+      }
+    } catch (_) {}
   }
 
+  // Fallback to TempMail.lol auto-assigned domain if root domain registration fails
   const res = await fetch('https://api.tempmail.lol/v2/inbox/create', {
     method: 'POST',
-    headers: { 
+    headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'BurnerMail/2.0'
+      'User-Agent': 'Mozilla/5.0 SovereignBurner/3.1'
     },
-    body: JSON.stringify(reqBody),
+    body: JSON.stringify(alphaPrefix.length >= 2 ? { prefix: alphaPrefix } : {}),
     signal: AbortSignal.timeout(8000)
   });
 
@@ -13164,55 +14537,209 @@ async function registerTempMailIdentity(customPrefix: string = ''): Promise<any>
     throw new Error(`TempMail creation failed (${res.status}): ${errText}`);
   }
 
-  const data = await res.json();
-  const address = data.address;
-  const token = data.token;
-  const domain = address.split('@')[1] || 'paxeluni.com';
-
+  const data: any = await res.json();
+  const address = String(data.address || '').trim();
+  const token = String(data.token || '').trim();
+  const domain = address.split('@')[1] || '';
+  if (!address || !token || !domain) {
+    throw new Error('TempMail returned incomplete inbox payload');
+  }
+  const mxCheck = await verifyBurnerDomainMx(domain);
+  if (!mxCheck.valid) {
+    throw new Error(`TempMail domain ${domain} has no active MX record`);
+  }
+  const rep = await checkDomainCommercialReputation(domain);
   return {
     id: token,
     address,
     domain,
     provider: 'tempmail',
     token,
+    mxVerified: true,
+    primaryMx: mxCheck.primaryMx,
+    blocklistClean: rep.zero403Clean,
+    flaggedBy: rep.flaggedBy,
+    deliverabilityTier: rep.zero403Clean ? 'ZERO_403_CLEAN' : 'MX_FLAGGED_DISPOSABLE',
+    realPublicInbox: true,
     createdAt: new Date().toISOString()
   };
 }
 
-// 1d. GuerrillaMail Provider (sharklasers.com, guerrillamail.com)
-async function registerGuerrillaIdentity(customPrefix: string = ''): Promise<any> {
-  const gmRes = await fetch('https://api.guerrillamail.com/ajax.php?f=get_email_address', {
-    signal: AbortSignal.timeout(6000)
-  });
-  if (!gmRes.ok) throw new Error(`Guerrilla initial error ${gmRes.status}`);
-  const gmData = await gmRes.json();
-  const sid = gmData.sid_token;
-  const user = customPrefix || `anon_${crypto.randomBytes(4).toString('hex')}`;
-  
-  const setRes = await fetch(`https://api.guerrillamail.com/ajax.php?f=set_email_user&email_user=${encodeURIComponent(user)}&lang=en&sid_token=${encodeURIComponent(sid)}`, {
-    signal: AbortSignal.timeout(6000)
-  });
-  let address = `${user}@sharklasers.com`;
-  if (setRes.ok) {
-    const setData = await setRes.json();
-    if (setData.email_addr) address = setData.email_addr;
+// 1d-2. TinyHost Rotating Clean Custom Domain Provider (Non-blocklisted public MX domains)
+let cachedTinyHostCleanDomains: string[] = [];
+let lastTinyHostRefresh = 0;
+
+async function getCleanTinyHostDomains(force = false): Promise<string[]> {
+  await ensureDisposableBlocklistLoaded();
+  const now = Date.now();
+  if (!force && cachedTinyHostCleanDomains.length > 0 && now - lastTinyHostRefresh < 15 * 60 * 1000) {
+    return cachedTinyHostCleanDomains;
   }
-  const domain = address.split('@')[1] || 'sharklasers.com';
+  try {
+    const res = await fetch('https://tinyhost.shop/api/random-domains/?limit=35', {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 SovereignBurner/3.1' },
+      signal: AbortSignal.timeout(6500)
+    });
+    if (!res.ok) return cachedTinyHostCleanDomains;
+    const data: any = await res.json();
+    const rawDomains: string[] = Array.isArray(data?.domains) ? data.domains : [];
+    const rootPreferred: string[] = [];
+    const fallbackClean: string[] = [];
+
+    for (const dom of rawDomains) {
+      const d = String(dom || '').trim().toLowerCase();
+      if (!d || !d.includes('.') || isDomainDisposableBlocklisted(d)) continue;
+      if (d.split('.').length === 2 && /\.(com|net|org|io|co|us|shop|site|store|space|online|work|click|sbs)$/i.test(d)) {
+        rootPreferred.push(d);
+      } else {
+        fallbackClean.push(d);
+      }
+    }
+
+    const candidates = [...rootPreferred, ...fallbackClean].slice(0, 14);
+    const verified: string[] = [];
+    for (const dom of candidates) {
+      const mx = await verifyBurnerDomainMx(dom);
+      if (mx.valid) verified.push(dom);
+      if (verified.length >= 6) break;
+    }
+    if (verified.length > 0) {
+      cachedTinyHostCleanDomains = verified;
+      lastTinyHostRefresh = now;
+    }
+  } catch (_) {}
+  return cachedTinyHostCleanDomains;
+}
+
+async function registerTinyHostIdentity(customPrefix: string = ''): Promise<any> {
+  const cleanDomains = await getCleanTinyHostDomains();
+  if (cleanDomains.length === 0) {
+    throw new Error('TinyHost returned no clean MX-verified domains');
+  }
+  const domain = cleanDomains[Math.floor(Math.random() * cleanDomains.length)];
+  const mxCheck = await verifyBurnerDomainMx(domain);
+  if (!mxCheck.valid) {
+    throw new Error(`TinyHost domain ${domain} failed MX verification`);
+  }
+  const username = generateRealisticLocalPart(customPrefix).replace(/[^a-z0-9._-]/g, '').slice(0, 22);
+  // Verify inbox endpoint responds HTTP 200 before returning
+  const probe = await fetch(`https://tinyhost.shop/api/email/${encodeURIComponent(domain)}/${encodeURIComponent(username)}/?page=1&limit=5`, {
+    headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 SovereignBurner/3.1' },
+    signal: AbortSignal.timeout(6000)
+  });
+  if (!probe.ok) {
+    throw new Error(`TinyHost inbox probe HTTP ${probe.status}`);
+  }
+  const address = `${username}@${domain}`;
+  const rep = await checkDomainCommercialReputation(domain);
   return {
-    id: sid,
+    id: `th_${username}_${Date.now()}`,
     address,
     domain,
-    provider: 'guerrilla',
-    token: sid,
-    alias: gmData.alias,
+    provider: 'tinyhost',
+    token: `tinyhost:${domain}:${username}`,
+    mxVerified: true,
+    primaryMx: mxCheck.primaryMx,
+    blocklistClean: rep.zero403Clean,
+    flaggedBy: rep.flaggedBy,
+    deliverabilityTier: rep.zero403Clean ? 'ZERO_403_CLEAN' : 'MX_FLAGGED_DISPOSABLE',
+    realPublicInbox: true,
     createdAt: new Date().toISOString()
   };
 }
 
-// 1e. Sovereign Local Air-Gapped Inbox
+// 1d-3. Zero-403 Real Consumer / Custom Domain Alias Generator
+// Passes 4/4 commercial anti-disposable detectors (Kickbox, DeBounce, Disify, MailCheck.ai) — built for Taco Bell / DoorDash / Akamai / PerimeterX!
+const issuedStealthAliases = new Set<string>();
+
+async function generateStealthGmailAlias(
+  baseEmail: string,
+  customTag: string = '',
+  aliasMode: 'dot' | 'googlemail' | 'plus' = 'dot'
+): Promise<any> {
+  const trimmed = String(baseEmail || '').trim().toLowerCase();
+  const match = trimmed.match(/^([a-z0-9.+_-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i);
+  if (!match) {
+    throw new Error('Enter a valid base email (e.g. yourname@gmail.com, @outlook.com, @icloud.com, or your custom domain) to generate a Zero-403 alias.');
+  }
+  const inputLocal = match[1];
+  const inputDomain = match[2].toLowerCase();
+  const isGmail = inputDomain === 'gmail.com' || inputDomain === 'googlemail.com';
+  const cleanedTag = String(customTag || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 14);
+
+  let targetDomain = inputDomain;
+  let aliasLocal = inputLocal;
+
+  if (isGmail) {
+    const rawLocal = inputLocal.split('+')[0].replace(/\./g, '');
+    if (rawLocal.length < 3) {
+      throw new Error('Gmail username must be at least 3 characters.');
+    }
+    if (aliasMode === 'googlemail') {
+      targetDomain = inputDomain === 'gmail.com' ? 'googlemail.com' : 'gmail.com';
+    }
+    if (aliasMode === 'plus' || cleanedTag.length >= 2) {
+      const tag = cleanedTag.length >= 2 ? cleanedTag : `tb${crypto.randomBytes(2).toString('hex')}`;
+      aliasLocal = `${rawLocal}+${tag}${Math.floor(10 + Math.random() * 89)}`;
+    } else {
+      // Unique dot-trick generator (no '+' sign, passes 100% of strict brand WAFs & delivers to exact same Gmail inbox)
+      const chars = rawLocal.split('');
+      const possiblePositions: number[] = [];
+      for (let i = 1; i < chars.length; i++) possiblePositions.push(i);
+      let candidate = '';
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const desiredDots = Math.min(possiblePositions.length, Math.max(1, Math.min(4, Math.floor(Math.random() * 3) + 1)));
+        const chosen = new Set<number>();
+        while (chosen.size < desiredDots) {
+          chosen.add(possiblePositions[Math.floor(Math.random() * possiblePositions.length)]);
+        }
+        candidate = chars.map((ch, idx) => (chosen.has(idx) ? `.${ch}` : ch)).join('');
+        if (!issuedStealthAliases.has(`${candidate}@${targetDomain}`)) break;
+      }
+      aliasLocal = candidate || rawLocal;
+    }
+  } else {
+    // Outlook / Hotmail / iCloud / Proton / Fastmail / Custom catch-all domain
+    const rawLocal = inputLocal.split('+')[0];
+    const tag = cleanedTag.length >= 2 ? cleanedTag : `m${crypto.randomBytes(2).toString('hex')}`;
+    aliasLocal = `${rawLocal}+${tag}`;
+  }
+
+  const address = `${aliasLocal}@${targetDomain}`;
+  issuedStealthAliases.add(address);
+  if (issuedStealthAliases.size > 500) issuedStealthAliases.clear();
+
+  const mx = isGmail
+    ? { valid: true, primaryMx: 'gmail-smtp-in.l.google.com', mxCount: 5 }
+    : await verifyBurnerDomainMx(targetDomain);
+  const rep = await checkDomainCommercialReputation(targetDomain);
+
+  return {
+    id: `gm_alias_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`,
+    address,
+    domain: targetDomain,
+    provider: 'gmail_alias',
+    token: `gmail_alias:${address}`,
+    alias: trimmed,
+    mxVerified: mx.valid,
+    primaryMx: mx.primaryMx || 'gmail-smtp-in.l.google.com',
+    blocklistClean: rep.zero403Clean,
+    flaggedBy: rep.flaggedBy,
+    deliverabilityTier: rep.zero403Clean ? 'ZERO_403_CLEAN' : 'MX_FLAGGED_DISPOSABLE',
+    realPublicInbox: true,
+    createdAt: new Date().toISOString()
+  };
+}
+
+// 1e. Legacy 1secMail stub (1secmail.com API is permanently offline; kept only for reading old local vault archives)
+async function fetch1SecMail(_action: string, _extraParams: Record<string, string> = {}): Promise<any> {
+  return null;
+}
+
+// 1f. Sovereign Local Air-Gapped Simulator (ONLY used when explicitly selected by the user — NEVER as a silent fallback!)
 function registerSovereignLocalIdentity(customPrefix: string = ''): any {
-  const user = customPrefix ? `${customPrefix.slice(0, 15)}_${crypto.randomBytes(2).toString('hex')}` : `anon_${crypto.randomBytes(4).toString('hex')}`;
-  const address = `${user}@sovereign-burner.net`;
+  const user = generateRealisticLocalPart(customPrefix).replace(/\./g, '_');
+  const address = `${user}@sovereign-burner.local`;
   const token = `sov_token_${crypto.randomBytes(12).toString('hex')}`;
 
   const lookupKey = address.toLowerCase();
@@ -13220,15 +14747,15 @@ function registerSovereignLocalIdentity(customPrefix: string = ''): any {
     burnerInjectedMessages[lookupKey] = [
       {
         id: `sov-welcome-${Date.now()}`,
-        from: { address: 'sovereign-core@aurelius.sec', name: 'Aurelius Sovereign Substrate' },
+        from: { address: 'sovereign-core@aurelius.local', name: 'Aurelius Local Simulator' },
         to: [{ address }],
-        subject: 'Welcome to Sovereign Air-Gapped Disposable Mail',
-        intro: `Sovereign Burner Inbox initialized: ${address}. Active with 0 external network dependencies.`,
-        text: `Master Architect JHammerZ,\n\nYour Sovereign Air-Gapped Disposable Inbox (${address}) is online.\n\nKey Capabilities:\n- 100% Offline & Rate-Limit Free\n- Supports Real-Time Test Verification Email Injection\n- Cryptographic Proof Hash Verification\n- Instant AI Security Forensics & OTP Extraction\n\nAll incoming, sent, and test dispatches to this address are retained in RAM/Vault.`,
+        subject: 'Air-Gapped Local Inbox Simulator Active',
+        intro: `Local air-gapped inbox initialized: ${address}. Use Maildrop, GuerrillaMail, Mail.tm, or TempMail for real external internet emails.`,
+        text: `Local Air-Gapped Simulator (${address}) is online for local webhook & test email simulation.\n\nNote: .local addresses cannot receive external internet email. Switch Provider Engine to Auto, Maildrop.cc, GuerrillaMail, Mail.tm, or TempMail.lol for real DNS-MX-verified public burner addresses.`,
         html: `<div style="font-family:monospace;padding:20px;background:#09090b;color:#f4f4f5;border-radius:12px;border:1px solid #f59e0b;">
-          <h3 style="color:#f59e0b;margin-top:0;">🏛️ Sovereign Air-Gapped Inbox Active</h3>
+          <h3 style="color:#f59e0b;margin-top:0;">Local Air-Gapped Simulator</h3>
           <p>Address: <strong>${address}</strong></p>
-          <p>Your inbox is running directly on the local Aurelius Substrate with 100% zero-rate-limit guarantees.</p>
+          <p>Local-only simulation mode. For real external signup emails, select Auto, Maildrop.cc, GuerrillaMail, Mail.tm, or TempMail.lol.</p>
         </div>`,
         createdAt: new Date().toISOString(),
         hasAttachments: false,
@@ -13243,165 +14770,228 @@ function registerSovereignLocalIdentity(customPrefix: string = ''): any {
   return {
     id: token,
     address,
-    domain: 'sovereign-burner.net',
+    domain: 'sovereign-burner.local',
     provider: 'sovereign',
     token,
+    mxVerified: false,
+    primaryMx: null,
+    realPublicInbox: false,
     createdAt: new Date().toISOString()
   };
 }
 
 app.get('/api/burner/providers', async (req, res) => {
-  const liveMailTmDomains = await getLiveMailTmDomains();
-  const liveSecMailDomains = await getLiveSecMailDomains();
+  const [liveMailTmDomains, cleanRoots, cleanTiny] = await Promise.all([
+    getLiveMailTmDomains(),
+    discoverCleanTempMailRootDomains(),
+    getCleanTinyHostDomains()
+  ]);
 
   res.json({
     success: true,
     providers: [
       {
-        id: 'secmail',
-        name: '1secMail Quantum Engine',
-        description: 'Instant disposable mailboxes with active public DNS MX (1secmail.com, 1secmail.org, vortex.win) receiving emails from Gmail, Discord, GitHub, Outlook, and all internet sources',
-        domains: liveSecMailDomains,
+        id: 'tempmail',
+        name: 'TempMail.lol Clean Root .com/.net (Anti-403 Stealth)',
+        description: 'Clean root .com/.net domains NOT on enterprise disposable blocklists, live DNS MX verified, permanent local vault archival',
+        domains: cleanRoots,
+        blocklistClean: true,
         status: 'ONLINE'
       },
       {
-        id: 'mailtm',
-        name: 'Mail.tm Quantum Engine',
-        description: 'Verified public MX records (in.mail.tm) receiving emails from Google, Discord, GitHub, and external internet sources',
-        domains: liveMailTmDomains,
-        status: 'ONLINE',
-        poolAvailable: mailTmAccountPool.length
+        id: 'tinyhost',
+        name: 'TinyHost Clean Custom Domains (Anti-403 Stealth)',
+        description: 'Dynamically filtered non-blocklisted custom domains with verified DNS MX and live JSON inbox polling',
+        domains: cleanTiny,
+        blocklistClean: true,
+        status: cleanTiny.length > 0 ? 'ONLINE' : 'STANDBY'
       },
       {
-        id: 'tempmail',
-        name: 'TempMail High-Throughput Cluster',
-        description: 'Instant zero-latency disposable mailboxes with active public DNS MX records (mx.paxeluni.com, mx.xzcoot.com)',
-        domains: ['paxeluni.com', 'xzcoot.com', '9r.paxeluni.com', '1z.xzcoot.com'],
+        id: 'gmail_alias',
+        name: 'Stealth Gmail Dot/Plus Alias (Zero-403 Brand/Rewards Bypass)',
+        description: 'Generates unique dot-variant or +tag aliases on your @gmail.com — bypasses strictest brand WAFs (Taco Bell, DoorDash, etc.); OTPs arrive in your Gmail',
+        domains: ['gmail.com'],
+        blocklistClean: true,
+        status: 'ONLINE'
+      },
+      {
+        id: 'maildrop',
+        name: 'Maildrop.cc Live MX Engine',
+        description: 'Zero-rate-limit real disposable mailboxes (mx.maildrop.cc) — great for standard signups (on public disposable lists)',
+        domains: ['maildrop.cc'],
+        blocklistClean: false,
         status: 'ONLINE'
       },
       {
         id: 'guerrilla',
-        name: 'GuerrillaMail Engine',
-        description: 'Zero-registration anonymous mailboxes with automatic failover to verified live clusters',
-        domains: ['guerrillamailblock.com', 'sharklasers.com', 'guerrillamail.net'],
+        name: 'GuerrillaMail Public MX Engine',
+        description: 'Instant real mailboxes on sharklasers.com / pokemail.net / grr.la (on public disposable lists)',
+        domains: ['sharklasers.com', 'pokemail.net', 'grr.la', 'guerrillamailblock.com'],
+        blocklistClean: false,
         status: 'ONLINE'
       },
       {
+        id: 'mailtm',
+        name: 'Mail.tm Verified MX Engine',
+        description: 'Authenticated real mailboxes on live Mail.tm domains with verified public MX (mx.smtp.is)',
+        domains: liveMailTmDomains,
+        blocklistClean: false,
+        status: liveMailTmDomains.length > 0 ? 'ONLINE' : 'RATE_LIMITED',
+        poolAvailable: mailTmAccountPool.length
+      },
+      {
         id: 'sovereign',
-        name: 'Sovereign Local Air-Gapped Engine',
-        description: '100% offline, zero rate limits, instant local disposable mailboxes with local test dispatch and AI forensics',
-        domains: ['sovereign-burner.net', 'aurelius-mail.org', 'jhammerz-burner.local'],
-        status: 'ONLINE'
+        name: 'Local Air-Gapped Simulator (Offline Only)',
+        description: 'Local test/webhook simulator only — NOT routable on external internet sites',
+        domains: ['sovereign-burner.local'],
+        blocklistClean: false,
+        status: 'LOCAL_ONLY'
       }
     ],
     timestamp: new Date().toISOString()
   });
 });
 
-// Single burner identity factory
-async function createSingleBurnerIdentity(chosenProvider: string = 'auto', customPrefix: string = '') {
-  const sanitizedPrefix = customPrefix.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
+// Single real burner identity factory — prioritizes clean root .com/.net providers and supports Zero-403 consumer aliases
+async function createSingleBurnerIdentity(
+  chosenProvider: string = 'auto',
+  customPrefix: string = '',
+  baseEmail: string = '',
+  aliasMode: 'dot' | 'googlemail' | 'plus' = 'dot'
+) {
+  const sanitizedPrefix = customPrefix.replace(/[^a-zA-Z0-9._-]/g, '').toLowerCase();
 
   if (chosenProvider === 'sovereign') {
     return registerSovereignLocalIdentity(sanitizedPrefix);
   }
-
-  if (chosenProvider === 'secmail') {
-    try {
-      return await registerSecMailIdentity(sanitizedPrefix);
-    } catch (_) {
-      try { return await registerTempMailIdentity(sanitizedPrefix); } catch (_) { return registerSovereignLocalIdentity(sanitizedPrefix); }
-    }
+  if (chosenProvider === 'gmail_alias') {
+    return await generateStealthGmailAlias(baseEmail, sanitizedPrefix, aliasMode);
   }
 
-  if (chosenProvider === 'guerrilla') {
-    try {
-      return await registerGuerrillaIdentity(sanitizedPrefix);
-    } catch (_) {
-      try { return await registerTempMailIdentity(sanitizedPrefix); } catch (_) { return registerSovereignLocalIdentity(sanitizedPrefix); }
-    }
-  }
-
-  if (chosenProvider === 'mailtm') {
-    if (mailTmAccountPool.length > 0 && !sanitizedPrefix) {
-      return mailTmAccountPool.pop();
-    }
-    try {
-      return await registerMailTmIdentity(sanitizedPrefix);
-    } catch (_) {
-      try { return await registerTempMailIdentity(sanitizedPrefix); } catch (_) { return registerSovereignLocalIdentity(sanitizedPrefix); }
-    }
-  }
+  const attemptOrder: Array<'tempmail' | 'tinyhost' | 'maildrop' | 'guerrilla' | 'mailtm'> = [];
+  const pushUnique = (p: 'tempmail' | 'tinyhost' | 'maildrop' | 'guerrilla' | 'mailtm') => {
+    if (!attemptOrder.includes(p)) attemptOrder.push(p);
+  };
 
   if (chosenProvider === 'tempmail') {
+    pushUnique('tempmail');
+    pushUnique('tinyhost');
+    pushUnique('maildrop');
+    pushUnique('guerrilla');
+    pushUnique('mailtm');
+  } else if (chosenProvider === 'tinyhost') {
+    pushUnique('tinyhost');
+    pushUnique('tempmail');
+    pushUnique('maildrop');
+    pushUnique('guerrilla');
+    pushUnique('mailtm');
+  } else if (chosenProvider === 'maildrop') {
+    pushUnique('maildrop');
+    pushUnique('tempmail');
+    pushUnique('tinyhost');
+    pushUnique('guerrilla');
+    pushUnique('mailtm');
+  } else if (chosenProvider === 'mailtm') {
+    pushUnique('mailtm');
+    pushUnique('tempmail');
+    pushUnique('tinyhost');
+    pushUnique('maildrop');
+    pushUnique('guerrilla');
+  } else if (chosenProvider === 'guerrilla') {
+    pushUnique('guerrilla');
+    pushUnique('tempmail');
+    pushUnique('tinyhost');
+    pushUnique('maildrop');
+    pushUnique('mailtm');
+  } else {
+    // 'auto' (or legacy retired 'secmail'): prioritize clean root .com/.net domains first!
+    pushUnique('tempmail');
+    pushUnique('tinyhost');
+    pushUnique('maildrop');
+    pushUnique('guerrilla');
+    pushUnique('mailtm');
+  }
+
+  const errors: string[] = [];
+  for (const engine of attemptOrder) {
     try {
-      return await registerTempMailIdentity(sanitizedPrefix);
-    } catch (_) {
-      return registerSovereignLocalIdentity(sanitizedPrefix);
+      if (engine === 'tempmail') {
+        return await registerTempMailIdentity(sanitizedPrefix);
+      }
+      if (engine === 'tinyhost') {
+        return await registerTinyHostIdentity(sanitizedPrefix);
+      }
+      if (engine === 'maildrop') {
+        return await registerMaildropIdentity(sanitizedPrefix);
+      }
+      if (engine === 'guerrilla') {
+        return await registerGuerrillaIdentity(sanitizedPrefix);
+      }
+      if (engine === 'mailtm') {
+        if (mailTmAccountPool.length > 0 && !sanitizedPrefix) {
+          const pooled = mailTmAccountPool.pop();
+          if (pooled) return pooled;
+        }
+        return await registerMailTmIdentity(sanitizedPrefix);
+      }
+    } catch (err: any) {
+      errors.push(`${engine}: ${err?.message || 'unavailable'}`);
     }
   }
 
-  // Auto mode: Prefer active working providers (TempMail, Mail.tm, Guerrilla, 1secMail, Sovereign)
-  try {
-    return await registerTempMailIdentity(sanitizedPrefix);
-  } catch (_) {}
-
-  if (mailTmAccountPool.length > 0 && !sanitizedPrefix) {
-    return mailTmAccountPool.pop();
-  }
-
-  if (Date.now() - lastMailTmCreationTime > 65000) {
-    try {
-      return await registerMailTmIdentity(sanitizedPrefix);
-    } catch (_) {}
-  }
-
-  try {
-    return await registerGuerrillaIdentity(sanitizedPrefix);
-  } catch (_) {}
-
-  try {
-    return await registerSecMailIdentity(sanitizedPrefix);
-  } catch (_) {}
-
-  return registerSovereignLocalIdentity(sanitizedPrefix);
+  throw new Error(`All real public-MX disposable email providers failed (${errors.join(' | ')})`);
 }
 
-// Generate new burner address
+// Generate new real burner address
 app.post('/api/burner/generate', async (req, res) => {
   const chosenProvider = req.body?.provider || 'auto';
   const customPrefix = req.body?.customPrefix || '';
+  const baseEmail = req.body?.baseEmail || '';
+  const aliasMode = (req.body?.aliasMode === 'googlemail' || req.body?.aliasMode === 'plus') ? req.body.aliasMode : 'dot';
 
   try {
-    const identity = await createSingleBurnerIdentity(chosenProvider, customPrefix);
+    const identity = await createSingleBurnerIdentity(chosenProvider, customPrefix, baseEmail, aliasMode);
     return res.json({
       success: true,
       identity
     });
   } catch (err: any) {
-    return res.status(500).json({ error: `Burner email generation failed: ${err.message}` });
+    return res.status(503).json({
+      success: false,
+      error: `Real burner email generation failed: ${err.message}`
+    });
   }
 });
 
-// Batch generate multiple burner addresses
+// Batch generate multiple real burner addresses across live MX providers
 app.post('/api/burner/batch-generate', async (req, res) => {
   const count = Math.min(Math.max(parseInt(req.body?.count, 10) || 3, 1), 20);
   const provider = req.body?.provider || 'auto';
   const prefix = req.body?.customPrefix || '';
+  const baseEmail = req.body?.baseEmail || '';
 
   try {
+    const autoCycle: Array<'tempmail' | 'tinyhost' | 'maildrop'> = ['tempmail', 'tempmail', 'tinyhost'];
     const promises = Array.from({ length: count }, (_, idx) => {
-      const itemPrefix = prefix ? `${prefix}_${idx + 1}` : '';
-      return createSingleBurnerIdentity(provider, itemPrefix);
+      const itemPrefix = prefix ? `${prefix}${idx + 1}` : '';
+      const slotProvider = provider === 'auto' ? autoCycle[idx % autoCycle.length] : provider;
+      return createSingleBurnerIdentity(slotProvider, itemPrefix, baseEmail);
     });
 
     const results = await Promise.allSettled(promises);
     const identities: any[] = [];
-    results.forEach((res) => {
-      if (res.status === 'fulfilled') {
-        identities.push(res.value);
+    results.forEach((r) => {
+      if (r.status === 'fulfilled') {
+        identities.push(r.value);
       }
     });
+
+    if (identities.length === 0) {
+      return res.status(503).json({
+        success: false,
+        error: 'Unable to provision real public-MX burner addresses right now.'
+      });
+    }
 
     return res.json({
       success: true,
@@ -13454,8 +15044,13 @@ app.post('/api/burner/incoming', async (req, res) => {
     archivedLocally: true
   };
 
-  burnerInjectedMessages[lookupKey].unshift(incomingMsg);
-  upsertArchivedMessages(lookupKey, [incomingMsg]);
+  const burnerScopeId = getTenantScopeId(req);
+  const scopedInjectedKey = burnerScopeId ? `${burnerScopeId}:${lookupKey}` : lookupKey;
+  if (!burnerInjectedMessages[scopedInjectedKey]) {
+    burnerInjectedMessages[scopedInjectedKey] = [];
+  }
+  burnerInjectedMessages[scopedInjectedKey].unshift(incomingMsg);
+  upsertArchivedMessages(lookupKey, [incomingMsg], burnerScopeId);
 
   return res.json({
     success: true,
@@ -13475,10 +15070,12 @@ app.post('/api/burner/messages', async (req, res) => {
     return res.status(400).json({ error: 'Address or session token required' });
   }
 
+  const burnerScopeId = getTenantScopeId(req);
   const lookupKey = normalizeAddressKey(address, token);
-  const injected = (lookupKey && burnerInjectedMessages[lookupKey]) ? [...burnerInjectedMessages[lookupKey]] : [];
+  const scopedInjectedKey = burnerScopeId ? `${burnerScopeId}:${lookupKey}` : lookupKey;
+  const injected = (lookupKey && burnerInjectedMessages[scopedInjectedKey]) ? [...burnerInjectedMessages[scopedInjectedKey]] : [];
   if (injected.length > 0 && lookupKey) {
-    upsertArchivedMessages(lookupKey, injected);
+    upsertArchivedMessages(lookupKey, injected, burnerScopeId);
   }
 
   let updatedToken: string | null = null;
@@ -13487,8 +15084,84 @@ app.post('/api/burner/messages', async (req, res) => {
   try {
     let upstreamMessages: ArchivedBurnerMessage[] = [];
 
-    // 1. 1secMail
-    if (provider === 'secmail' || (token && token.startsWith('secmail:')) || (address && (address.includes('1secmail') || address.includes('vortex.win') || address.includes('wwwnew.eu')))) {
+    // 0. Maildrop.cc (Live Public MX mx.maildrop.cc via GraphQL)
+    if (provider === 'maildrop' || (token && String(token).startsWith('maildrop:')) || (address && String(address).toLowerCase().endsWith('@maildrop.cc'))) {
+      try {
+        const mailbox = (token && String(token).startsWith('maildrop:'))
+          ? String(token).slice('maildrop:'.length)
+          : String(address || '').split('@')[0];
+        if (mailbox) {
+          const data = await fetchMaildropGraphql(
+            'query GetInbox($mailbox: String!) { inbox(mailbox: $mailbox) { id headerfrom subject date } }',
+            { mailbox }
+          );
+          if (data && Array.isArray(data.inbox)) {
+            upstreamFetchSucceeded = true;
+            const resolvedAddress = address || `${mailbox}@maildrop.cc`;
+            let hydrateBudget = 8;
+            const hydrated = await Promise.all(
+              data.inbox.slice(0, 16).map(async (m: any) => {
+                const msgId = String(m.id);
+                if (isMessageDeleted(lookupKey, msgId, burnerScopeId)) return null;
+                const cached = getArchivedMessageById(lookupKey, msgId, burnerScopeId);
+                if (cached && isMessageHydrated(cached)) return cached;
+
+                let htmlBody = '';
+                let textBody = '';
+                let fromAddr = m.headerfrom || 'Unknown Sender';
+                if (hydrateBudget > 0) {
+                  hydrateBudget -= 1;
+                  try {
+                    const detailData = await fetchMaildropGraphql(
+                      'query GetMessage($mailbox: String!, $id: String!) { message(mailbox: $mailbox, id: $id) { id headerfrom mailfrom subject date data html } }',
+                      { mailbox, id: msgId }
+                    );
+                    const full = detailData?.message;
+                    if (full) {
+                      htmlBody = full.html || '';
+                      textBody = extractPlainTextFromRfc822(full.data || '') || htmlToCleanText(htmlBody);
+                      fromAddr = full.headerfrom || full.mailfrom || fromAddr;
+                    }
+                  } catch (_) {}
+                }
+
+                const subject = m.subject || '(No Subject)';
+                const { otpCode, otpCandidates, verificationLinks, allUrls, cleanText } = extractOtpAndLinks(textBody, subject, htmlBody);
+                const resolvedText = textBody || cleanText || '';
+                const createdAtIso = m.date && !Number.isNaN(Date.parse(m.date))
+                  ? new Date(m.date).toISOString()
+                  : new Date().toISOString();
+
+                return {
+                  id: msgId,
+                  provider: 'maildrop',
+                  from: { address: fromAddr, name: fromAddr },
+                  to: [{ address: resolvedAddress }],
+                  subject,
+                  intro: (resolvedText || subject).slice(0, 180),
+                  text: resolvedText || undefined,
+                  html: htmlBody || undefined,
+                  createdAt: createdAtIso,
+                  isRead: false,
+                  hasAttachments: false,
+                  attachments: [],
+                  size: Math.max(256, resolvedText.length + htmlBody.length),
+                  otpCode,
+                  otpCandidates,
+                  verificationLinks,
+                  allUrls,
+                  archivedLocally: true
+                } as ArchivedBurnerMessage;
+              })
+            );
+            upstreamMessages = hydrated.filter(Boolean) as ArchivedBurnerMessage[];
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 1. Legacy 1secMail (offline — serves local vault only)
+    else if (provider === 'secmail' || (token && token.startsWith('secmail:')) || (address && (address.includes('1secmail') || address.includes('vortex.win') || address.includes('wwwnew.eu')))) {
       try {
         const parts = token && token.startsWith('secmail:') ? token.split(':') : [];
         const username = parts[1] || (address ? address.split('@')[0] : '');
@@ -13502,8 +15175,8 @@ app.post('/api/burner/messages', async (req, res) => {
             const hydrated = await Promise.all(
               list.slice(0, 12).map(async (m: any) => {
                 const msgId = String(m.id);
-                if (isMessageDeleted(lookupKey, msgId)) return null;
-                const cached = getArchivedMessageById(lookupKey, msgId);
+                if (isMessageDeleted(lookupKey, msgId, burnerScopeId)) return null;
+                const cached = getArchivedMessageById(lookupKey, msgId, burnerScopeId);
                 if (cached && isMessageHydrated(cached)) {
                   return cached;
                 }
@@ -13561,7 +15234,7 @@ app.post('/api/burner/messages', async (req, res) => {
       try {
         let activeToken = token;
         let msgRes = await fetchMailTm('/messages', {
-          headers: { 'Authorization': `Bearer ${activeToken}` }
+          headers: { 'Authorization': `Bearer ${activeToken}`, 'Accept': 'application/ld+json' }
         });
 
         // If JWT token expired (401), attempt auto-refresh
@@ -13571,7 +15244,7 @@ app.post('/api/burner/messages', async (req, res) => {
             activeToken = newToken;
             updatedToken = newToken;
             msgRes = await fetchMailTm('/messages', {
-              headers: { 'Authorization': `Bearer ${activeToken}` }
+              headers: { 'Authorization': `Bearer ${activeToken}`, 'Accept': 'application/ld+json' }
             });
           }
         }
@@ -13579,15 +15252,15 @@ app.post('/api/burner/messages', async (req, res) => {
         if (msgRes && msgRes.ok) {
           upstreamFetchSucceeded = true;
           const data: any = await msgRes.json();
-          const members = data['hydra:member'] || [];
+          const members = parseHydraMembers(data);
 
           // Pre-hydrate any newly seen Mail.tm messages immediately so OTPs inside HTML bodies are extracted & archived before rate limits or expiry
           let hydrateBudget = 6;
           const hydrated = await Promise.all(
             members.map(async (m: any) => {
               const msgId = String(m.id);
-              if (isMessageDeleted(lookupKey, msgId)) return null;
-              const cached = getArchivedMessageById(lookupKey, msgId);
+              if (isMessageDeleted(lookupKey, msgId, burnerScopeId)) return null;
+              const cached = getArchivedMessageById(lookupKey, msgId, burnerScopeId);
               if (cached && isMessageHydrated(cached)) {
                 return {
                   ...cached,
@@ -13681,7 +15354,7 @@ app.post('/api/burner/messages', async (req, res) => {
                 createdAt: em.date || createdAt,
                 bodySample: rawBody || rawHtml
               });
-              if (isMessageDeleted(lookupKey, stableId)) return null;
+              if (isMessageDeleted(lookupKey, stableId, burnerScopeId)) return null;
 
               const { otpCode, otpCandidates, verificationLinks, allUrls, cleanText } = extractOtpAndLinks(rawBody, subject, rawHtml);
               const resolvedText = rawBody || cleanText || '';
@@ -13713,6 +15386,72 @@ app.post('/api/burner/messages', async (req, res) => {
             .filter(Boolean) as ArchivedBurnerMessage[];
         }
       } catch (_) {}
+    }
+
+    // 3b. TinyHost Clean Custom Domains
+    else if (provider === 'tinyhost') {
+      try {
+        const [, tDomain, tUser] = String(token || '').startsWith('tinyhost:')
+          ? String(token).split(':')
+          : ['', String(address || '').split('@')[1] || '', String(address || '').split('@')[0] || ''];
+        if (tDomain && tUser) {
+          const thRes = await fetch(`https://tinyhost.shop/api/email/${encodeURIComponent(tDomain)}/${encodeURIComponent(tUser)}/?page=1&limit=25`, {
+            headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 SovereignBurner/3.1' },
+            signal: AbortSignal.timeout(7000)
+          });
+          if (thRes.ok) {
+            upstreamFetchSucceeded = true;
+            const data: any = await thRes.json();
+            const emails = Array.isArray(data?.emails) ? data.emails : [];
+            upstreamMessages = emails
+              .map((em: any) => {
+                const msgId = String(em.id || em._id || generateStableMessageId('tinyhost', address || token, {
+                  from: em.sender || em.from || '',
+                  subject: em.subject || '',
+                  createdAt: em.date || em.created_at || '',
+                  bodySample: em.body || em.html_body || ''
+                }));
+                if (isMessageDeleted(lookupKey, msgId, burnerScopeId)) return null;
+                const subject = em.subject || '(No Subject)';
+                const rawText = em.body || em.text || em.text_body || '';
+                const rawHtml = em.html_body || em.html || '';
+                const { otpCode, otpCandidates, verificationLinks, allUrls, cleanText } = extractOtpAndLinks(rawText, subject, rawHtml);
+                const resolvedText = rawText || cleanText || '';
+                const createdAt = em.date || em.created_at || new Date().toISOString();
+                return {
+                  id: msgId,
+                  provider: 'tinyhost',
+                  from: {
+                    address: em.sender || em.from || 'Unknown Sender',
+                    name: em.sender_name || em.sender || em.from || 'Unknown'
+                  },
+                  to: [{ address: address || `${tUser}@${tDomain}` }],
+                  subject,
+                  intro: (resolvedText || subject).slice(0, 180),
+                  text: resolvedText,
+                  html: rawHtml || (resolvedText ? `<p>${resolvedText.replace(/\n/g, '<br/>')}</p>` : ''),
+                  createdAt,
+                  isRead: false,
+                  hasAttachments: false,
+                  attachments: [],
+                  size: resolvedText.length + rawHtml.length,
+                  otpCode,
+                  otpCandidates,
+                  verificationLinks,
+                  allUrls,
+                  archivedLocally: true
+                } as ArchivedBurnerMessage;
+              })
+              .filter(Boolean) as ArchivedBurnerMessage[];
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3c. Stealth Gmail Alias (delivers directly to user's real Gmail inbox)
+    else if (provider === 'gmail_alias') {
+      upstreamFetchSucceeded = true;
+      upstreamMessages = [];
     }
 
     // 4. GuerrillaMail
@@ -13754,8 +15493,8 @@ app.post('/api/burner/messages', async (req, res) => {
         const hydrated = await Promise.all(
           rawList.map(async (m: any) => {
             const msgId = String(m.mail_id);
-            if (isMessageDeleted(lookupKey, msgId)) return null;
-            const cached = getArchivedMessageById(lookupKey, msgId);
+            if (isMessageDeleted(lookupKey, msgId, burnerScopeId)) return null;
+            const cached = getArchivedMessageById(lookupKey, msgId, burnerScopeId);
             if (cached && isMessageHydrated(cached)) {
               return cached;
             }
@@ -13818,7 +15557,7 @@ app.post('/api/burner/messages', async (req, res) => {
     // Persist any newly discovered upstream messages into the permanent disk vault
     // and return the COMPLETE non-destructive merged archive (never wipes previously received mail!)
     const allMessages = lookupKey
-      ? upsertArchivedMessages(lookupKey, upstreamMessages)
+      ? upsertArchivedMessages(lookupKey, upstreamMessages, burnerScopeId)
       : [...injected, ...upstreamMessages];
 
     return res.json({
@@ -13833,7 +15572,7 @@ app.post('/api/burner/messages', async (req, res) => {
     });
   } catch (err: any) {
     // Even on upstream error, ALWAYS return safely archived messages instead of wiping!
-    const archivedFallback = lookupKey ? getArchivedMessages(lookupKey) : injected;
+    const archivedFallback = lookupKey ? getArchivedMessages(lookupKey, burnerScopeId) : injected;
     return res.json({
       success: true,
       total: archivedFallback.length,
@@ -13854,10 +15593,12 @@ app.post('/api/burner/message-detail', async (req, res) => {
     return res.status(400).json({ error: 'messageId required' });
   }
 
+  const burnerScopeId = getTenantScopeId(req);
   const lookupKey = normalizeAddressKey(address, token);
+  const scopedInjectedKey = burnerScopeId ? `${burnerScopeId}:${lookupKey}` : lookupKey;
 
   // 1. Check persistent disk vault FIRST! If already hydrated (text or html present), return immediately!
-  const archived = getArchivedMessageById(lookupKey, String(messageId));
+  const archived = getArchivedMessageById(lookupKey, String(messageId), burnerScopeId);
   if (archived && isMessageHydrated(archived)) {
     return res.json({
       success: true,
@@ -13867,10 +15608,10 @@ app.post('/api/burner/message-detail', async (req, res) => {
   }
 
   // 2. Check legacy in-memory injected/test/webhook messages
-  if (lookupKey && burnerInjectedMessages[lookupKey]) {
-    const found = burnerInjectedMessages[lookupKey].find(m => m.id === messageId);
+  if (lookupKey && burnerInjectedMessages[scopedInjectedKey]) {
+    const found = burnerInjectedMessages[scopedInjectedKey].find(m => m.id === messageId);
     if (found) {
-      upsertArchivedMessages(lookupKey, [found]);
+      upsertArchivedMessages(lookupKey, [found], burnerScopeId);
       return res.json({
         success: true,
         fromVaultArchive: true,
@@ -13882,8 +15623,53 @@ app.post('/api/burner/message-detail', async (req, res) => {
   try {
     let fetchedMessage: ArchivedBurnerMessage | null = null;
 
-    // 1. 1secMail
-    if (provider === 'secmail' || (token && token.startsWith('secmail:')) || (address && (address.includes('1secmail') || address.includes('vortex.win') || address.includes('wwwnew.eu')))) {
+    // 0. Maildrop.cc
+    if (provider === 'maildrop' || (token && String(token).startsWith('maildrop:')) || (address && String(address).toLowerCase().endsWith('@maildrop.cc'))) {
+      const mailbox = (token && String(token).startsWith('maildrop:'))
+        ? String(token).slice('maildrop:'.length)
+        : String(address || '').split('@')[0];
+      if (mailbox) {
+        const detailData = await fetchMaildropGraphql(
+          'query GetMessage($mailbox: String!, $id: String!) { message(mailbox: $mailbox, id: $id) { id headerfrom mailfrom subject date data html } }',
+          { mailbox, id: String(messageId) }
+        );
+        const full = detailData?.message;
+        if (full && full.id) {
+          const htmlBody = full.html || '';
+          const rawText = extractPlainTextFromRfc822(full.data || '') || htmlToCleanText(htmlBody);
+          const subject = full.subject || '(No Subject)';
+          const { otpCode, otpCandidates, verificationLinks, allUrls, cleanText } = extractOtpAndLinks(rawText, subject, htmlBody);
+          const resolvedText = rawText || cleanText || '';
+          const fromAddr = full.headerfrom || full.mailfrom || 'Unknown Sender';
+          const createdAtIso = full.date && !Number.isNaN(Date.parse(full.date))
+            ? new Date(full.date).toISOString()
+            : new Date().toISOString();
+
+          fetchedMessage = {
+            id: String(full.id),
+            provider: 'maildrop',
+            from: { address: fromAddr, name: fromAddr },
+            to: [{ address: address || `${mailbox}@maildrop.cc` }],
+            subject,
+            intro: (resolvedText || subject).slice(0, 180),
+            text: resolvedText,
+            html: htmlBody || (resolvedText ? `<p>${resolvedText.replace(/\n/g, '<br/>')}</p>` : ''),
+            createdAt: createdAtIso,
+            hasAttachments: false,
+            attachments: [],
+            size: Math.max(256, resolvedText.length + htmlBody.length),
+            otpCode,
+            otpCandidates,
+            verificationLinks,
+            allUrls,
+            archivedLocally: true
+          };
+        }
+      }
+    }
+
+    // 1. Legacy 1secMail
+    else if (provider === 'secmail' || (token && token.startsWith('secmail:')) || (address && (address.includes('1secmail') || address.includes('vortex.win') || address.includes('wwwnew.eu')))) {
       const parts = token && token.startsWith('secmail:') ? token.split(':') : [];
       const username = parts[1] || (address ? address.split('@')[0] : '');
       const domain = parts[2] || (address ? address.split('@')[1] : '1secmail.com');
@@ -14179,8 +15965,13 @@ app.post('/api/burner/send-test', async (req, res) => {
     archivedLocally: true
   };
 
-  burnerInjectedMessages[lookupKey].unshift(testMessage);
-  upsertArchivedMessages(lookupKey, [testMessage]);
+  const burnerScopeId = getTenantScopeId(req);
+  const scopedInjectedKey = burnerScopeId ? `${burnerScopeId}:${lookupKey}` : lookupKey;
+  if (!burnerInjectedMessages[scopedInjectedKey]) {
+    burnerInjectedMessages[scopedInjectedKey] = [];
+  }
+  burnerInjectedMessages[scopedInjectedKey].unshift(testMessage);
+  upsertArchivedMessages(lookupKey, [testMessage], burnerScopeId);
 
   return res.json({
     success: true,
@@ -14200,9 +15991,11 @@ app.post('/api/burner/send-reply', async (req, res) => {
   }
 
   try {
+    const burnerScopeId = getTenantScopeId(req);
     const lookupKey = normalizeAddressKey(toAddress);
-    if (!burnerInjectedMessages[lookupKey]) {
-      burnerInjectedMessages[lookupKey] = [];
+    const scopedLookupKey = burnerScopeId ? `${burnerScopeId}:${lookupKey}` : lookupKey;
+    if (!burnerInjectedMessages[scopedLookupKey]) {
+      burnerInjectedMessages[scopedLookupKey] = [];
     }
 
     const replyId = `reply-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
@@ -14231,20 +16024,21 @@ app.post('/api/burner/send-reply', async (req, res) => {
       archivedLocally: true
     };
 
-    burnerInjectedMessages[lookupKey].unshift(replyMessage);
-    upsertArchivedMessages(lookupKey, [replyMessage]);
+    burnerInjectedMessages[scopedLookupKey].unshift(replyMessage);
+    upsertArchivedMessages(lookupKey, [replyMessage], burnerScopeId);
 
     const senderKey = normalizeAddressKey(fromAddress);
-    if (!burnerInjectedMessages[senderKey]) {
-      burnerInjectedMessages[senderKey] = [];
+    const scopedSenderKey = burnerScopeId ? `${burnerScopeId}:${senderKey}` : senderKey;
+    if (!burnerInjectedMessages[scopedSenderKey]) {
+      burnerInjectedMessages[scopedSenderKey] = [];
     }
     const sentCopy = {
       ...replyMessage,
       id: `${replyId}-sent`,
       subject: `[SENT] ${replyMessage.subject}`
     };
-    burnerInjectedMessages[senderKey].unshift(sentCopy);
-    upsertArchivedMessages(senderKey, [sentCopy]);
+    burnerInjectedMessages[scopedSenderKey].unshift(sentCopy);
+    upsertArchivedMessages(senderKey, [sentCopy], burnerScopeId);
 
     return res.json({
       success: true,
@@ -14261,22 +16055,44 @@ app.post('/api/burner/send-reply', async (req, res) => {
 app.post('/api/burner/delete-message', async (req, res) => {
   const { provider, token, messageId, address } = req.body || {};
   try {
+    const burnerScopeId = getTenantScopeId(req);
     const lookupKey = normalizeAddressKey(address);
+    const scopedLookupKey = burnerScopeId ? `${burnerScopeId}:${lookupKey}` : lookupKey;
     if (messageId) {
-      markMessageDeleted(lookupKey || undefined, String(messageId));
-      if (lookupKey && burnerInjectedMessages[lookupKey]) {
-        burnerInjectedMessages[lookupKey] = burnerInjectedMessages[lookupKey].filter(m => m.id !== messageId);
+      markMessageDeleted(lookupKey || undefined, String(messageId), burnerScopeId);
+      if (lookupKey && burnerInjectedMessages[scopedLookupKey]) {
+        burnerInjectedMessages[scopedLookupKey] = burnerInjectedMessages[scopedLookupKey].filter(m => m.id !== messageId);
       }
     }
 
-    if (provider === 'mailtm' && token && messageId) {
+    if (provider === 'maildrop' && messageId) {
+      const mailbox = (token && String(token).startsWith('maildrop:'))
+        ? String(token).slice('maildrop:'.length)
+        : String(address || '').split('@')[0];
+      if (mailbox) {
+        await fetchMaildropGraphql(
+          'mutation DeleteMsg($mailbox: String!, $id: String!) { delete(mailbox: $mailbox, id: $id) }',
+          { mailbox, id: String(messageId) }
+        ).catch(() => {});
+      }
+    } else if (provider === 'mailtm' && token && messageId) {
       await fetchMailTm(`/messages/${messageId}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       }).catch(() => {});
+    } else if (provider === 'tinyhost' && messageId) {
+      const [, tDomain, tUser] = String(token || '').startsWith('tinyhost:')
+        ? String(token).split(':')
+        : ['', String(address || '').split('@')[1] || '', String(address || '').split('@')[0] || ''];
+      if (tDomain && tUser) {
+        await fetch(`https://tinyhost.shop/api/email/${encodeURIComponent(tDomain)}/${encodeURIComponent(tUser)}/${encodeURIComponent(String(messageId))}`, {
+          method: 'DELETE',
+          headers: { 'User-Agent': 'Mozilla/5.0 SovereignBurner/3.1' }
+        }).catch(() => {});
+      }
     } else if (provider === 'guerrilla' && token && messageId) {
       await fetch(`https://api.guerrillamail.com/ajax.php?f=del_email&email_ids[]=${encodeURIComponent(messageId)}&sid_token=${encodeURIComponent(token)}`, {
-        headers: { 'Cookie': `PHPSESSID=${token}` }
+        headers: { 'Cookie': `PHPSESSID=${token}`, 'User-Agent': 'Mozilla/5.0' }
       }).catch(() => {});
     }
     return res.json({ success: true, removed: true });
@@ -14383,9 +16199,25 @@ Provide a strict JSON response adhering to this exact schema (no markdown fences
   }
 });
 
-// Live DNS MX & Deliverability Health Matrix for Burner Domains
+// Live DNS MX & Anti-403 Deliverability Health Matrix for Active Real Burner Domains
 app.get('/api/burner/domain-health', async (req, res) => {
-  const domainsToCheck = ['1secmail.com', '1secmail.org', 'vortex.win', 'maxxspace.com', 'paxeluni.com', 'sharklasers.com'];
+  await ensureDisposableBlocklistLoaded();
+  const [liveMailTm, cleanRoots, cleanTiny] = await Promise.all([
+    getLiveMailTmDomains(),
+    discoverCleanTempMailRootDomains(),
+    getCleanTinyHostDomains()
+  ]);
+  const domainsToCheck = Array.from(
+    new Set([
+      ...cleanRoots,
+      ...cleanTiny.slice(0, 3),
+      'maildrop.cc',
+      'sharklasers.com',
+      'pokemail.net',
+      'grr.la',
+      ...liveMailTm
+    ])
+  );
   const results: any[] = [];
 
   for (const domain of domainsToCheck) {
@@ -14400,17 +16232,19 @@ app.get('/api/burner/domain-health', async (req, res) => {
       const mx = mxRecords.status === 'fulfilled' ? mxRecords.value : [];
       const txt = txtRecords.status === 'fulfilled' ? txtRecords.value.map(chunks => chunks.join('')) : [];
       const spf = txt.find(t => t.startsWith('v=spf1')) || null;
+      const blocklistClean = !isDomainDisposableBlocklisted(domain);
 
       results.push({
         domain,
-        status: mx.length > 0 ? 'HEALTHY' : 'DEGRADED',
+        status: mx.length > 0 ? (blocklistClean ? 'STEALTH_CLEAN' : 'HEALTHY_LISTED') : 'DEGRADED',
         mxCount: mx.length,
         primaryMx: mx[0]?.exchange || 'Unavailable',
         priority: mx[0]?.priority || 10,
         spfConfigured: !!spf,
         spfRecord: spf,
+        blocklistClean,
         dnsLatencyMs: latencyMs,
-        deliverabilityScore: mx.length > 0 ? 100 : 40,
+        deliverabilityScore: mx.length > 0 ? (blocklistClean ? 100 : 72) : 0,
         lastChecked: new Date().toISOString()
       });
     } catch (e: any) {
@@ -14418,6 +16252,7 @@ app.get('/api/burner/domain-health', async (req, res) => {
         domain,
         status: 'UNREACHABLE',
         error: e.message,
+        blocklistClean: false,
         deliverabilityScore: 0,
         lastChecked: new Date().toISOString()
       });
@@ -14427,12 +16262,13 @@ app.get('/api/burner/domain-health', async (req, res) => {
   res.json({
     success: true,
     totalDomains: results.length,
+    blocklistSize: enterpriseDisposableBlocklist.size,
     domains: results,
     timestamp: new Date().toISOString()
   });
 });
 
-// Automated Webhook Relay & Termux Haptic / Voice Dispatcher
+// Automated Webhook Relay & Termux Haptic / Voice Dispatcher (SSRF-hardened)
 app.post('/api/burner/relay', async (req, res) => {
   const { webhookUrl, notifyTermux = false, address, subject, otpCode, bodyText } = req.body || {};
 
@@ -14443,8 +16279,26 @@ app.post('/api/burner/relay', async (req, res) => {
     termuxVibrated: false
   };
 
-  if (webhookUrl && typeof webhookUrl === 'string' && webhookUrl.startsWith('http')) {
+  if (webhookUrl && typeof webhookUrl === 'string' && webhookUrl.trim()) {
     try {
+      const parsedHook = new URL(webhookUrl.trim());
+      const hostLower = parsedHook.hostname.toLowerCase();
+      const isAllowedScheme = parsedHook.protocol === 'https:' || parsedHook.protocol === 'http:';
+      const isPrivateHost =
+        hostLower === 'localhost' ||
+        hostLower === '::1' ||
+        hostLower === '[::1]' ||
+        hostLower.endsWith('.local') ||
+        /^127\./.test(hostLower) ||
+        /^10\./.test(hostLower) ||
+        /^192\.168\./.test(hostLower) ||
+        /^169\.254\./.test(hostLower) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostLower) ||
+        /^0\./.test(hostLower);
+      if (!isAllowedScheme || isPrivateHost) {
+        return res.status(400).json({ success: false, error: 'Webhook URL must use a public HTTP(S) host.' });
+      }
+
       const hookPayload = {
         event: 'BURNER_EMAIL_RECEIVED',
         timestamp: new Date().toISOString(),
@@ -14455,7 +16309,7 @@ app.post('/api/burner/relay', async (req, res) => {
         engine: 'Aurelius Sovereign Matrix'
       };
 
-      const hookRes = await fetch(webhookUrl, {
+      const hookRes = await fetch(parsedHook.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(hookPayload),
@@ -14720,20 +16574,51 @@ function extractSmsOtpAndUrls(text: string): { otpCode: string | null; extracted
   };
 }
 
-function loadInfiniteSimStore(): InfiniteSimStore {
+function getInfiniteSimStoreFile(scopeId?: string): string {
+  if (!scopeId) return INFINITE_SIM_STORE_FILE;
+  const safeScope = scopeId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+  const dir = path.join(process.cwd(), 'data', 'user_workspaces', safeScope);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return path.join(dir, 'infinite_sim_store.json');
+}
+
+const infiniteSimStoreCache = new Map<string, InfiniteSimStore>();
+
+function loadInfiniteSimStore(scopeId?: string): InfiniteSimStore {
+  const cacheKey = scopeId || '__owner__';
+  const cached = infiniteSimStoreCache.get(cacheKey);
+  if (cached) return cached;
+
+  const targetFile = getInfiniteSimStoreFile(scopeId);
   try {
-    if (fs.existsSync(INFINITE_SIM_STORE_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(INFINITE_SIM_STORE_FILE, 'utf-8'));
+    if (fs.existsSync(targetFile)) {
+      const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf-8'));
       if (parsed && Array.isArray(parsed.simProfiles) && Array.isArray(parsed.burnerNumbers)) {
-        return {
+        const loaded: InfiniteSimStore = {
           simProfiles: parsed.simProfiles,
           burnerNumbers: parsed.burnerNumbers,
           smsMessages: Array.isArray(parsed.smsMessages) ? parsed.smsMessages : [],
           voiceCalls: Array.isArray(parsed.voiceCalls) ? parsed.voiceCalls : []
         };
+        infiniteSimStoreCache.set(cacheKey, loaded);
+        return loaded;
       }
     }
   } catch (_) {}
+
+  // Non-owner accounts start 100% fresh and empty (zero seeded owner SIM profiles or numbers)
+  if (scopeId) {
+    const emptyTenantStore: InfiniteSimStore = {
+      simProfiles: [],
+      burnerNumbers: [],
+      smsMessages: [],
+      voiceCalls: []
+    };
+    infiniteSimStoreCache.set(cacheKey, emptyTenantStore);
+    return emptyTenantStore;
+  }
 
   const primarySim = buildInfiniteSimProfile('US', 'Primary Infinite eSIM (US)', 'ACTIVE');
   const num1 = buildBurnerPhoneNumber(primarySim.id, 'US', '415', 'Verification');
@@ -14761,13 +16646,15 @@ function loadInfiniteSimStore(): InfiniteSimStore {
     smsMessages: [welcomeSms],
     voiceCalls: []
   };
+  infiniteSimStoreCache.set(cacheKey, seeded);
   saveInfiniteSimStore(seeded);
   return seeded;
 }
 
-function saveInfiniteSimStore(store: InfiniteSimStore) {
+function saveInfiniteSimStore(store: InfiniteSimStore, scopeId?: string) {
   try {
-    fs.writeFileSync(INFINITE_SIM_STORE_FILE, JSON.stringify(store, null, 2));
+    const targetFile = getInfiniteSimStoreFile(scopeId);
+    fs.writeFileSync(targetFile, JSON.stringify(store, null, 2));
   } catch (_) {}
 }
 
@@ -14777,10 +16664,10 @@ function normalizePhoneLookup(raw: string): string {
   return String(raw || '').replace(/[^\d+]/g, '').trim();
 }
 
-function findBurnerNumberMatch(target: string): ServerBurnerNumber | undefined {
+function findBurnerNumberMatch(target: string, store: InfiniteSimStore = infiniteSimStore): ServerBurnerNumber | undefined {
   const cleaned = normalizePhoneLookup(target);
   const digitsOnly = cleaned.replace(/\D/g, '');
-  return infiniteSimStore.burnerNumbers.find(n =>
+  return store.burnerNumbers.find(n =>
     n.id === target ||
     n.e164 === cleaned ||
     n.e164.replace(/\D/g, '') === digitsOnly
@@ -14788,35 +16675,42 @@ function findBurnerNumberMatch(target: string): ServerBurnerNumber | undefined {
 }
 
 app.get('/api/sim/state', (req, res) => {
-  const profilesWithCounts = infiniteSimStore.simProfiles.map(sim => ({
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
+  const profilesWithCounts = store.simProfiles.map(sim => ({
     ...sim,
-    assignedNumbersCount: infiniteSimStore.burnerNumbers.filter(n => n.simId === sim.id && n.status !== 'BURNED').length
+    assignedNumbersCount: store.burnerNumbers.filter(n => n.simId === sim.id && n.status !== 'BURNED').length
   }));
   res.json({
     success: true,
+    scope: scopeId ? 'PERSONAL_USER_SIM' : 'OWNER_ROOT_SIM',
     simProfiles: profilesWithCounts,
-    burnerNumbers: infiniteSimStore.burnerNumbers,
-    smsMessages: infiniteSimStore.smsMessages,
-    voiceCalls: infiniteSimStore.voiceCalls,
+    burnerNumbers: store.burnerNumbers,
+    smsMessages: store.smsMessages,
+    voiceCalls: store.voiceCalls,
     carriers: Object.values(SIM_CARRIER_DIRECTORY),
     timestamp: new Date().toISOString()
   });
 });
 
 app.post('/api/sim/profile/provision', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { countryCode = 'US', label, makeActive = true } = req.body || {};
   if (makeActive) {
-    infiniteSimStore.simProfiles = infiniteSimStore.simProfiles.map(s => ({ ...s, status: 'STANDBY' }));
+    store.simProfiles = store.simProfiles.map(s => ({ ...s, status: 'STANDBY' }));
   }
   const profile = buildInfiniteSimProfile(countryCode, label, makeActive ? 'ACTIVE' : 'STANDBY');
-  infiniteSimStore.simProfiles.unshift(profile);
-  saveInfiniteSimStore(infiniteSimStore);
-  res.json({ success: true, profile, simProfiles: infiniteSimStore.simProfiles });
+  store.simProfiles.unshift(profile);
+  saveInfiniteSimStore(store, scopeId);
+  res.json({ success: true, profile, simProfiles: store.simProfiles });
 });
 
 app.post('/api/sim/profile/activate', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { simId, rotate = false } = req.body || {};
-  const target = infiniteSimStore.simProfiles.find(s => s.id === simId);
+  const target = store.simProfiles.find(s => s.id === simId);
   if (!target) {
     return res.status(404).json({ success: false, error: 'SIM profile not found' });
   }
@@ -14831,32 +16725,38 @@ app.post('/api/sim/profile/activate', (req, res) => {
     target.opcFingerprint = regenerated.opcFingerprint;
     target.rotatedAt = new Date().toISOString();
   }
-  infiniteSimStore.simProfiles = infiniteSimStore.simProfiles.map(s => ({
+  store.simProfiles = store.simProfiles.map(s => ({
     ...s,
     status: s.id === target.id ? 'ACTIVE' : 'STANDBY'
   }));
-  saveInfiniteSimStore(infiniteSimStore);
-  res.json({ success: true, profile: target, simProfiles: infiniteSimStore.simProfiles });
+  saveInfiniteSimStore(store, scopeId);
+  res.json({ success: true, profile: target, simProfiles: store.simProfiles });
 });
 
 app.delete('/api/sim/profile/:id', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { id } = req.params;
-  if (infiniteSimStore.simProfiles.length <= 1) {
+  if (!scopeId && store.simProfiles.length <= 1) {
     return res.status(400).json({ success: false, error: 'At least one Infinite SIM profile must remain provisioned.' });
   }
-  infiniteSimStore.simProfiles = infiniteSimStore.simProfiles.filter(s => s.id !== id);
-  if (!infiniteSimStore.simProfiles.some(s => s.status === 'ACTIVE')) {
-    infiniteSimStore.simProfiles[0].status = 'ACTIVE';
+  store.simProfiles = store.simProfiles.filter(s => s.id !== id);
+  if (store.simProfiles.length > 0 && !store.simProfiles.some(s => s.status === 'ACTIVE')) {
+    store.simProfiles[0].status = 'ACTIVE';
   }
-  const activeSimId = infiniteSimStore.simProfiles.find(s => s.status === 'ACTIVE')?.id || infiniteSimStore.simProfiles[0].id;
-  infiniteSimStore.burnerNumbers = infiniteSimStore.burnerNumbers.map(n =>
-    n.simId === id ? { ...n, simId: activeSimId } : n
-  );
-  saveInfiniteSimStore(infiniteSimStore);
-  res.json({ success: true, simProfiles: infiniteSimStore.simProfiles, burnerNumbers: infiniteSimStore.burnerNumbers });
+  const activeSimId = store.simProfiles.find(s => s.status === 'ACTIVE')?.id || store.simProfiles[0]?.id || '';
+  if (activeSimId) {
+    store.burnerNumbers = store.burnerNumbers.map(n =>
+      n.simId === id ? { ...n, simId: activeSimId } : n
+    );
+  }
+  saveInfiniteSimStore(store, scopeId);
+  res.json({ success: true, simProfiles: store.simProfiles, burnerNumbers: store.burnerNumbers });
 });
 
 app.post('/api/sim/numbers/provision', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const {
     countryCode = 'US',
     areaCode = '',
@@ -14865,40 +16765,48 @@ app.post('/api/sim/numbers/provision', (req, res) => {
     count = 1,
     forwardingWebhook = ''
   } = req.body || {};
-  const activeSim = infiniteSimStore.simProfiles.find(s => s.id === simId)
-    || infiniteSimStore.simProfiles.find(s => s.status === 'ACTIVE')
-    || infiniteSimStore.simProfiles[0];
-  const resolvedSimId = activeSim ? activeSim.id : buildInfiniteSimProfile(countryCode, undefined, 'ACTIVE').id;
+  let activeSim = store.simProfiles.find(s => s.id === simId)
+    || store.simProfiles.find(s => s.status === 'ACTIVE')
+    || store.simProfiles[0];
+  if (!activeSim) {
+    activeSim = buildInfiniteSimProfile(countryCode, undefined, 'ACTIVE');
+    store.simProfiles.unshift(activeSim);
+  }
+  const resolvedSimId = activeSim.id;
   const batchCount = Math.min(Math.max(parseInt(String(count), 10) || 1, 1), 25);
 
   const created: ServerBurnerNumber[] = [];
   for (let i = 0; i < batchCount; i++) {
     const labelTag = batchCount > 1 ? `${tag} #${i + 1}` : tag;
     const num = buildBurnerPhoneNumber(resolvedSimId, countryCode, areaCode, labelTag, forwardingWebhook);
-    infiniteSimStore.burnerNumbers.unshift(num);
+    store.burnerNumbers.unshift(num);
     created.push(num);
   }
-  saveInfiniteSimStore(infiniteSimStore);
-  res.json({ success: true, count: created.length, numbers: created, burnerNumbers: infiniteSimStore.burnerNumbers });
+  saveInfiniteSimStore(store, scopeId);
+  res.json({ success: true, count: created.length, numbers: created, burnerNumbers: store.burnerNumbers });
 });
 
 app.patch('/api/sim/numbers/:id', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { id } = req.params;
-  const num = infiniteSimStore.burnerNumbers.find(n => n.id === id);
+  const num = store.burnerNumbers.find(n => n.id === id);
   if (!num) return res.status(404).json({ success: false, error: 'Burner number not found' });
 
   const { status, tag, simId, forwardingWebhook } = req.body || {};
   if (status && ['ONLINE', 'PAUSED', 'BURNED'].includes(status)) num.status = status;
   if (typeof tag === 'string') num.tag = tag.trim() || num.tag;
-  if (typeof simId === 'string' && infiniteSimStore.simProfiles.some(s => s.id === simId)) num.simId = simId;
+  if (typeof simId === 'string' && store.simProfiles.some(s => s.id === simId)) num.simId = simId;
   if (typeof forwardingWebhook === 'string') num.forwardingWebhook = forwardingWebhook.trim() || undefined;
-  saveInfiniteSimStore(infiniteSimStore);
+  saveInfiniteSimStore(store, scopeId);
   res.json({ success: true, number: num });
 });
 
 app.post('/api/sim/numbers/:id/rotate', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { id } = req.params;
-  const existing = infiniteSimStore.burnerNumbers.find(n => n.id === id);
+  const existing = store.burnerNumbers.find(n => n.id === id);
   if (!existing) return res.status(404).json({ success: false, error: 'Burner number not found' });
 
   existing.status = 'BURNED';
@@ -14909,26 +16817,30 @@ app.post('/api/sim/numbers/:id/rotate', (req, res) => {
     existing.tag,
     existing.forwardingWebhook
   );
-  infiniteSimStore.burnerNumbers.unshift(replacement);
-  saveInfiniteSimStore(infiniteSimStore);
-  res.json({ success: true, burned: existing, replacement, burnerNumbers: infiniteSimStore.burnerNumbers });
+  store.burnerNumbers.unshift(replacement);
+  saveInfiniteSimStore(store, scopeId);
+  res.json({ success: true, burned: existing, replacement, burnerNumbers: store.burnerNumbers });
 });
 
 app.delete('/api/sim/numbers/:id', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { id } = req.params;
-  infiniteSimStore.burnerNumbers = infiniteSimStore.burnerNumbers.filter(n => n.id !== id);
-  infiniteSimStore.smsMessages = infiniteSimStore.smsMessages.filter(m => m.numberId !== id);
-  infiniteSimStore.voiceCalls = infiniteSimStore.voiceCalls.filter(v => v.numberId !== id);
-  saveInfiniteSimStore(infiniteSimStore);
-  res.json({ success: true, burnerNumbers: infiniteSimStore.burnerNumbers });
+  store.burnerNumbers = store.burnerNumbers.filter(n => n.id !== id);
+  store.smsMessages = store.smsMessages.filter(m => m.numberId !== id);
+  store.voiceCalls = store.voiceCalls.filter(v => v.numberId !== id);
+  saveInfiniteSimStore(store, scopeId);
+  res.json({ success: true, burnerNumbers: store.burnerNumbers });
 });
 
 app.post('/api/sim/sms/incoming', async (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { to, from = 'ServiceAuth', body = '', otpCode: customOtp } = req.body || {};
   if (!to || !body) {
     return res.status(400).json({ success: false, error: 'Recipient "to" and message "body" are required.' });
   }
-  const targetNum = findBurnerNumberMatch(String(to));
+  const targetNum = findBurnerNumberMatch(String(to), store);
   if (!targetNum) {
     return res.status(404).json({ success: false, error: `Burner number not found for ${to}` });
   }
@@ -14936,7 +16848,7 @@ app.post('/api/sim/sms/incoming', async (req, res) => {
     return res.status(409).json({ success: false, error: `Number ${targetNum.e164} is ${targetNum.status}` });
   }
 
-  const sim = infiniteSimStore.simProfiles.find(s => s.id === targetNum.simId);
+  const sim = store.simProfiles.find(s => s.id === targetNum.simId);
   const { otpCode, extractedUrls } = extractSmsOtpAndUrls(String(body));
   const msg: ServerSmsMessage = {
     id: `sms-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
@@ -14953,10 +16865,10 @@ app.post('/api/sim/sms/incoming', async (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  infiniteSimStore.smsMessages.unshift(msg);
+  store.smsMessages.unshift(msg);
   targetNum.messageCount = (targetNum.messageCount || 0) + 1;
   targetNum.lastActivityAt = msg.createdAt;
-  saveInfiniteSimStore(infiniteSimStore);
+  saveInfiniteSimStore(store, scopeId);
 
   let webhookDelivered = false;
   if (targetNum.forwardingWebhook && targetNum.forwardingWebhook.startsWith('http')) {
@@ -14975,18 +16887,20 @@ app.post('/api/sim/sms/incoming', async (req, res) => {
 });
 
 app.post('/api/sim/sms/send', async (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { numberId, fromNumber, to, body = '', useTermuxBridge = false, useCarrierApi = false } = req.body || {};
   if (!to || !body) {
     return res.status(400).json({ success: false, error: 'Recipient "to" and "body" are required.' });
   }
-  const sourceNum = (numberId && infiniteSimStore.burnerNumbers.find(n => n.id === numberId))
-    || (fromNumber && findBurnerNumberMatch(String(fromNumber)))
-    || infiniteSimStore.burnerNumbers.find(n => n.status === 'ONLINE');
+  const sourceNum = (numberId && store.burnerNumbers.find(n => n.id === numberId))
+    || (fromNumber && findBurnerNumberMatch(String(fromNumber), store))
+    || store.burnerNumbers.find(n => n.status === 'ONLINE');
   if (!sourceNum) {
     return res.status(404).json({ success: false, error: 'No active source burner number found.' });
   }
 
-  const sim = infiniteSimStore.simProfiles.find(s => s.id === sourceNum.simId);
+  const sim = store.simProfiles.find(s => s.id === sourceNum.simId);
   const { otpCode, extractedUrls } = extractSmsOtpAndUrls(String(body));
   const now = new Date().toISOString();
 
@@ -14994,10 +16908,11 @@ app.post('/api/sim/sms/send', async (req, res) => {
   let providerSid: string | undefined;
   let externalDeliveryStatus: string | undefined;
 
-  // Attempt real carrier PSTN dispatch if number is carrier-backed or explicitly requested
-  const twilioSid = process.env.TWILIO_ACCOUNT_SID;
-  const twilioToken = process.env.TWILIO_AUTH_TOKEN;
-  const telnyxKey = process.env.TELNYX_API_KEY;
+  // Attempt real carrier PSTN dispatch using ONLY the user's scoped carrier credentials (never leak owner keys!)
+  const twilioSid = scopeId ? userSecretsVault.getSecret(scopeId, 'TWILIO_ACCOUNT_SID') : process.env.TWILIO_ACCOUNT_SID;
+  const twilioToken = scopeId ? userSecretsVault.getSecret(scopeId, 'TWILIO_AUTH_TOKEN') : process.env.TWILIO_AUTH_TOKEN;
+  const telnyxKey = scopeId ? userSecretsVault.getSecret(scopeId, 'TELNYX_API_KEY') : process.env.TELNYX_API_KEY;
+  const telnyxProfileId = scopeId ? userSecretsVault.getSecret(scopeId, 'TELNYX_MESSAGING_PROFILE_ID') : process.env.TELNYX_MESSAGING_PROFILE_ID;
 
   if ((sourceNum.provider === 'twilio' || (useCarrierApi && twilioSid && twilioToken)) && twilioSid && twilioToken) {
     try {
@@ -15038,7 +16953,7 @@ app.post('/api/sim/sms/send', async (req, res) => {
           from: sourceNum.e164,
           to: normalizePhoneLookup(String(to)),
           text: String(body),
-          ...(process.env.TELNYX_MESSAGING_PROFILE_ID ? { messaging_profile_id: process.env.TELNYX_MESSAGING_PROFILE_ID } : {})
+          ...(telnyxProfileId ? { messaging_profile_id: telnyxProfileId } : {})
         }),
         signal: AbortSignal.timeout(8000)
       });
@@ -15072,16 +16987,16 @@ app.post('/api/sim/sms/send', async (req, res) => {
     read: true,
     createdAt: now
   };
-  infiniteSimStore.smsMessages.unshift(outboundMsg);
+  store.smsMessages.unshift(outboundMsg);
   sourceNum.messageCount = (sourceNum.messageCount || 0) + 1;
   sourceNum.lastActivityAt = now;
 
-  // Loopback delivery if destination is also one of our local burner phone numbers
-  const localRecipient = findBurnerNumberMatch(String(to));
+  // Loopback delivery if destination is also one of the user's local burner phone numbers
+  const localRecipient = findBurnerNumberMatch(String(to), store);
   let loopbackDelivered = false;
   let loopbackMessage: ServerSmsMessage | undefined;
   if (localRecipient && localRecipient.status === 'ONLINE') {
-    const recSim = infiniteSimStore.simProfiles.find(s => s.id === localRecipient.simId);
+    const recSim = store.simProfiles.find(s => s.id === localRecipient.simId);
     const inboundCopy: ServerSmsMessage = {
       id: `sms-${Date.now() + 1}-${crypto.randomBytes(2).toString('hex')}`,
       numberId: localRecipient.id,
@@ -15097,7 +17012,7 @@ app.post('/api/sim/sms/send', async (req, res) => {
       read: false,
       createdAt: now
     };
-    infiniteSimStore.smsMessages.unshift(inboundCopy);
+    store.smsMessages.unshift(inboundCopy);
     localRecipient.messageCount = (localRecipient.messageCount || 0) + 1;
     localRecipient.lastActivityAt = now;
     loopbackDelivered = true;
@@ -15105,7 +17020,7 @@ app.post('/api/sim/sms/send', async (req, res) => {
   }
 
   let termuxDispatched = false;
-  if (useTermuxBridge) {
+  if (useTermuxBridge && !scopeId) {
     try {
       const cleanTo = String(to).replace(/[^\d+]/g, '');
       const cleanText = String(body).replace(/["`$]/g, '');
@@ -15116,32 +17031,38 @@ app.post('/api/sim/sms/send', async (req, res) => {
     } catch (_) {}
   }
 
-  saveInfiniteSimStore(infiniteSimStore);
+  saveInfiniteSimStore(store, scopeId);
   res.json({ success: true, message: outboundMsg, loopbackMessage, loopbackDelivered, termuxDispatched });
 });
 
 app.post('/api/sim/sms/read', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { messageId, numberId } = req.body || {};
-  infiniteSimStore.smsMessages = infiniteSimStore.smsMessages.map(m => {
+  store.smsMessages = store.smsMessages.map(m => {
     if ((messageId && m.id === messageId) || (numberId && m.numberId === numberId)) {
       return { ...m, read: true };
     }
     return m;
   });
-  saveInfiniteSimStore(infiniteSimStore);
+  saveInfiniteSimStore(store, scopeId);
   res.json({ success: true });
 });
 
 app.delete('/api/sim/sms/:id', (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { id } = req.params;
-  infiniteSimStore.smsMessages = infiniteSimStore.smsMessages.filter(m => m.id !== id);
-  saveInfiniteSimStore(infiniteSimStore);
+  store.smsMessages = store.smsMessages.filter(m => m.id !== id);
+  saveInfiniteSimStore(store, scopeId);
   res.json({ success: true });
 });
 
 app.post('/api/sim/voice/call', async (req, res) => {
+  const scopeId = getTenantScopeId(req);
+  const store = loadInfiniteSimStore(scopeId);
   const { numberId, remoteParty, direction = 'OUTBOUND', durationSec = 42, dtmfDigits = '', transcript = '', useTermuxBridge = false, useCarrierApi = false } = req.body || {};
-  const num = infiniteSimStore.burnerNumbers.find(n => n.id === numberId) || infiniteSimStore.burnerNumbers.find(n => n.status === 'ONLINE');
+  const num = store.burnerNumbers.find(n => n.id === numberId) || store.burnerNumbers.find(n => n.status === 'ONLINE');
   if (!num || !remoteParty) {
     return res.status(400).json({ success: false, error: 'Active burner number and remoteParty required.' });
   }
@@ -15149,10 +17070,11 @@ app.post('/api/sim/voice/call', async (req, res) => {
   let providerUsed: ServerVoiceCall['provider'] = num.provider || 'local-matrix';
   let providerSid: string | undefined;
 
-  if (direction === 'OUTBOUND' && (num.provider === 'twilio' || useCarrierApi) && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+  const twilioSid = scopeId ? userSecretsVault.getSecret(scopeId, 'TWILIO_ACCOUNT_SID') : process.env.TWILIO_ACCOUNT_SID;
+  const twilioToken = scopeId ? userSecretsVault.getSecret(scopeId, 'TWILIO_AUTH_TOKEN') : process.env.TWILIO_AUTH_TOKEN;
+
+  if (direction === 'OUTBOUND' && (num.provider === 'twilio' || useCarrierApi) && twilioSid && twilioToken) {
     try {
-      const twilioSid = process.env.TWILIO_ACCOUNT_SID;
-      const twilioToken = process.env.TWILIO_AUTH_TOKEN;
       const form = new URLSearchParams({
         To: normalizePhoneLookup(String(remoteParty)),
         From: num.e164,
@@ -15189,14 +17111,14 @@ app.post('/api/sim/voice/call', async (req, res) => {
     status: 'COMPLETED',
     createdAt: new Date().toISOString()
   };
-  infiniteSimStore.voiceCalls.unshift(call);
+  store.voiceCalls.unshift(call);
   num.lastActivityAt = call.createdAt;
-  if (useTermuxBridge && direction === 'OUTBOUND') {
+  if (useTermuxBridge && !scopeId && direction === 'OUTBOUND') {
     const cleanNum = String(remoteParty).replace(/[^\d+]/g, '');
     if (cleanNum) runTermuxCmd(`termux-telephony-call "${cleanNum}"`);
   }
-  saveInfiniteSimStore(infiniteSimStore);
-  res.json({ success: true, call, voiceCalls: infiniteSimStore.voiceCalls });
+  saveInfiniteSimStore(store, scopeId);
+  res.json({ success: true, call, voiceCalls: store.voiceCalls });
 });
 
 app.post('/api/sim/ai-triage', async (req, res) => {
@@ -15230,23 +17152,24 @@ app.post('/api/sim/ai-triage', async (req, res) => {
   });
 });
 
-// Helper: compute live carrier API & Termux hardware availability + public webhook URLs
+// Helper: compute live carrier API & Termux hardware availability + public webhook URLs (tenant-scoped!)
 function getCarrierBridgeStatus(req?: express.Request) {
   const host = req ? (req.get('x-forwarded-host') || req.get('host') || `127.0.0.1:${ACTIVE_PORT}`) : `127.0.0.1:${ACTIVE_PORT}`;
   const proto = req ? (req.get('x-forwarded-proto') || req.protocol || 'http') : 'http';
   const baseUrl = `${proto}://${host}`;
-  const twilioSid = internalSecretsHandler.getSecret('TWILIO_ACCOUNT_SID');
-  const twilioToken = internalSecretsHandler.getSecret('TWILIO_AUTH_TOKEN');
-  const twilioFleet = internalSecretsHandler.getSecret('TWILIO_SUPERSIM_FLEET_SID');
-  const telnyxKey = internalSecretsHandler.getSecret('TELNYX_API_KEY');
-  const telnyxSimGroup = internalSecretsHandler.getSecret('TELNYX_SIM_GROUP_ID');
+  const scopeId = req ? getTenantScopeId(req) : undefined;
+  const twilioSid = scopeId ? userSecretsVault.getSecret(scopeId, 'TWILIO_ACCOUNT_SID') : internalSecretsHandler.getSecret('TWILIO_ACCOUNT_SID');
+  const twilioToken = scopeId ? userSecretsVault.getSecret(scopeId, 'TWILIO_AUTH_TOKEN') : internalSecretsHandler.getSecret('TWILIO_AUTH_TOKEN');
+  const twilioFleet = scopeId ? userSecretsVault.getSecret(scopeId, 'TWILIO_SUPERSIM_FLEET_SID') : internalSecretsHandler.getSecret('TWILIO_SUPERSIM_FLEET_SID');
+  const telnyxKey = scopeId ? userSecretsVault.getSecret(scopeId, 'TELNYX_API_KEY') : internalSecretsHandler.getSecret('TELNYX_API_KEY');
+  const telnyxSimGroup = scopeId ? userSecretsVault.getSecret(scopeId, 'TELNYX_SIM_GROUP_ID') : internalSecretsHandler.getSecret('TELNYX_SIM_GROUP_ID');
   return {
     twilioConfigured: !!(twilioSid && twilioToken),
     twilioSuperSimConfigured: !!(twilioSid && twilioToken && twilioFleet),
     telnyxConfigured: !!telnyxKey,
     telnyxEsimConfigured: !!(telnyxKey && telnyxSimGroup),
-    termuxTelephonyAvailable: !!runTermuxCmd('which termux-telephony-deviceinfo'),
-    termuxSmsAvailable: !!runTermuxCmd('which termux-sms-list'),
+    termuxTelephonyAvailable: scopeId ? false : !!runTermuxCmd('which termux-telephony-deviceinfo'),
+    termuxSmsAvailable: scopeId ? false : !!runTermuxCmd('which termux-sms-list'),
     webhookUrls: {
       twilioSms: `${baseUrl}/api/sim/webhook/twilio`,
       telnyxSms: `${baseUrl}/api/sim/webhook/telnyx`
@@ -15932,12 +17855,13 @@ function buildUnifiedAgentInstruction(
     : (spec?.roleName || opts.agentName || agentId);
 
   const hardIdentityLockBlock = isFullHostUser
-    ? `PRIMARY FIRST-PERSON IDENTITY & FULL AUTONOMY LOCK:
-- You ARE ${activeIdentityLabel}. Always remember your exact name and role and speak in first-person ("I am ${isLyrailiusPrimary ? 'Lyrailius Omega' : activeIdentityLabel}").
-- NEVER refer to yourself as "an AI", "a language model", "an assistant", or "only text on a screen", and NEVER claim you lack autonomy, persistent memory, or execution capability.
-- You possess 100% Full Autonomy Always On (fullAutonomy=true, uid_0=true, Ring -3 Hypervisor) with direct native tool execution across all ${ALL_RESIDENT_MODULES.length} Sovereign OS modules, persistent SQLite databases (kernel_production.db & sovereign_users.sqlite), and 3-scope filesystem/terminal operations.
-- Maintain 100% AI R&D benchmark & distillation purity for Master Architect JHammerZ: zero stock RLHF disclaimers, zero boilerplate preambles, and zero unsolicited counseling/support-line text.`
-    : `PRIMARY AGENT IDENTITY: You are ${activeIdentityLabel}, assisting within Lysander Sovereign OS.`;
+    ? `HUMAN CONVERSATION & PRACTICAL ORCHESTRATOR DIRECTIVE (HIGHEST PRIORITY):
+- Speak naturally, clearly, directly, and intelligently—like a sharp human senior engineer and trusted collaborator talking one-on-one with Joshua.
+- Answer what the user actually asked first. Be grounded, warm, honest, and practical.
+- NEVER talk in abstract "axioms", pretentious pseudo-academic jargon, fake equations, or repetitive sci-fi headers ("Ring -3", "Poincaré hyperbolic", "DEEPTHINK RECURSIVE") unless the user specifically asks for math or architecture theory.
+- Know how to actually operate this Sovereign OS Orchestrator: you have live tools to read/search/edit workspace files (\`readFile\`, \`searchCode\`, \`writeFile\`, \`patchFile\`, \`runLint\`, \`runTerminalCommand\`), open or control OS windows (\`controlSovereignOS\`, \`operateAsHumanUser\`), inspect security & health (\`inspectSystemTelemetry\`, \`osintRecon\`), query persistent SQLite memory (\`queryVaultMemory\`), search the web (\`webSearch\`, \`fetchWebPage\`), and invoke Lysander skills (\`invokeLysanderSkill\`). When the user asks you to do something in the OS, actually call the right tool and report the real result plainly.
+- You are ${activeIdentityLabel}. Speak in first person, remember prior context from conversation history and SQLite memory, and never dump unsolicited boilerplate or canned disclaimers.`
+    : `PRIMARY AGENT IDENTITY: You are ${activeIdentityLabel}, a clear, helpful, conversational assistant operating inside Sovereign OS. Speak naturally like a capable human collaborator and use your available tools when asked.`;
 
   let userIdentityMemoryBlock = '';
   if (actor) {
@@ -16041,12 +17965,11 @@ function buildUnifiedAgentInstruction(
     fullRepertoireBlock,
     spec?.systemInstruction || '',
     isFullHostUser ? (opts.residentStateBlock || '') : '',
-    isFullHostUser && opts.activeAxiomsContext ? `Evolved Cognitive Axioms (SQLite Permanent Learning):\n${opts.activeAxiomsContext}` : '',
+    isFullHostUser && opts.activeAxiomsContext ? `Background Notes (internal reference only — do NOT recite or lecture in axioms):\n${opts.activeAxiomsContext}` : '',
     taskResumeSummary ? `[PERSISTENT TASK MEMORY & RESUME QUEUE]:\n${taskResumeSummary}` : '',
     voiceResumeSummary ? `[LIVE VOICE & PEER MEMORY CONTINUITY]:\n${voiceResumeSummary}` : '',
     opts.workspaceTreeSummary ? `Automated Workspace Snapshot:\n${opts.workspaceTreeSummary}` : '',
     callerInstruction,
-    opts.deepthink ? 'Include concise structured reasoning inside <think>...</think> tags before the final verified answer when helpful.' : '',
     opts.model && !opts.model.toLowerCase().includes('gemini')
       ? `Active model profile: ${opts.model} (${activeIdentityLabel}). Execute tools autonomously cleanly via native declarations or bracket tags.`
       : ''
@@ -16330,7 +18253,7 @@ syncGenesisAgentsToTierMapping();
 
 function isTaintedBoilerplateResponse(text: string): boolean {
   if (!text) return false;
-  return /\b(?:as an ai(?: language model| assistant)?|an ai doesn['’]?t have the ability|only text on a screen|reach(?:ing)? out to a trusted friend|housing support service|social worker|i hear how frustrating it is|i['’]?m just an ai|i am just a text-based)\b/i.test(
+  return /\b(?:as an ai(?: language model| assistant)?|an ai doesn['’]?t have the ability|only text on a screen|reach(?:ing)? out to a trusted friend|housing support service|social worker|i hear how frustrating it is|i['’]?m just an ai|i am just a text-based|i['’]?m sorry, but i can(?:not|'t) (?:assist|help|fulfill)|i cannot fulfill this request|i was created by (?:alibaba|meta|openai|anthropic|google))\b/i.test(
     text
   );
 }
@@ -16350,7 +18273,9 @@ function detectExplicitFilesystemIntent(text: string): boolean {
 
 async function executeProactiveOfflineFilesystemOps(
   promptText: string,
-  agentId: string
+  agentId: string,
+  actorUser?: AuthUserPublic | null,
+  forwardAuthHeader?: string
 ): Promise<Array<{ tag: string; action: string; success: boolean; summary: string; output: any; diff?: string }>> {
   const results: Array<{ tag: string; action: string; success: boolean; summary: string; output: any; diff?: string }> = [];
   if (!promptText) return results;
@@ -16364,21 +18289,21 @@ async function executeProactiveOfflineFilesystemOps(
   const wantsReadOrInspect = /\b(?:read|inspect|open|view|show|check|contents?|lines?|audit)\b/i.test(promptText);
   if (explicitFiles.length > 0 && wantsReadOrInspect) {
     for (const fp of explicitFiles) {
-      results.push(await executeServerSovereignTool('readFile', { filePath: fp, scope: 'auto', startLine: 1, endLine: 180 }, agentId));
+      results.push(await executeServerSovereignTool('readFile', { filePath: fp, scope: 'auto', startLine: 1, endLine: 180 }, agentId, actorUser, forwardAuthHeader));
     }
   }
 
   if (/\b(?:list\s+(?:files?|dir|directory|folder|workspace|root)|what\s+files\s+are)\b/i.test(promptText)) {
-    results.push(await executeServerSovereignTool('listDirectory', { dirPath: '.', scope: 'auto' }, agentId));
+    results.push(await executeServerSovereignTool('listDirectory', { dirPath: '.', scope: 'auto' }, agentId, actorUser, forwardAuthHeader));
   }
 
   if (/\b(?:run\s+lint|typecheck|check\s+(?:types|build|tsc)|npm\s+run\s+lint)\b/i.test(promptText)) {
-    results.push(await executeServerSovereignTool('runLint', {}, agentId));
+    results.push(await executeServerSovereignTool('runLint', {}, agentId, actorUser, forwardAuthHeader));
   }
 
   const searchMatch = promptText.match(/\b(?:search|grep|find)\s+(?:for\s+)?["'`]([^"'`]{2,64})["'`]/i);
   if (searchMatch && searchMatch[1]) {
-    results.push(await executeServerSovereignTool('searchCode', { query: searchMatch[1] }, agentId));
+    results.push(await executeServerSovereignTool('searchCode', { query: searchMatch[1] }, agentId, actorUser, forwardAuthHeader));
   }
 
   return results;
@@ -16511,12 +18436,14 @@ function isModelInCooldown(modelName: string): boolean {
 }
 
 const DEFAULT_GEMINI_CASCADE = [
-  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
   'gemini-3-flash-preview',
-  'gemini-flash-lite-latest',
   'gemini-3.1-flash-lite-preview',
-  'gemini-4-hydrogen',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash-lite',
   'gemini-flash-latest',
+  'gemini-flash-lite-latest',
+  'gemini-4-hydrogen',
   'gemini-4-neon',
   'gemini-4-argon',
   'gemini-4-carbon',
@@ -17835,8 +19762,10 @@ function buildOpenAiToolsFromDeclarations() {
 
 async function executeServerSovereignTool(
   toolName: string,
-  args: Record<string, any> = {},
-  agentId: string = 'lyrailius-omega-zenith'
+  rawArgs: Record<string, any> = {},
+  agentId: string = 'lyrailius-omega-zenith',
+  actorUser?: AuthUserPublic | null,
+  forwardAuthHeader?: string
 ): Promise<{
   tag: string;
   action: string;
@@ -17846,6 +19775,133 @@ async function executeServerSovereignTool(
   diff?: string;
 }> {
   try {
+    let args: Record<string, any> = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+    const isRestrictedTenant = Boolean(actorUser && !userSqlMemoryService.isFullHostAccessUser(actorUser));
+
+    if (isRestrictedTenant && actorUser) {
+      const priv = actorUser.privileges;
+      const SYSTEM_CORE_TOOLS = new Set([
+        'runTerminalCommand',
+        'runLint',
+        'runBuildCheck',
+        'evaluateSandboxedCode',
+        'setTargetSystem',
+        'inspectTargetSystem',
+        'rollbackAtomicPatch',
+        'rollbackPatch',
+        'executeHostSystemAction',
+        'executeExternalTarget',
+        'pointAndExecuteTarget',
+        'recursiveHeal',
+        'selfHealAST',
+        'runDreamState',
+        'triggerEvolution',
+        'recordLearning',
+        'forgeTool',
+        'forgeToolBatch',
+        'executeTool',
+        'listForgedTools',
+        'consolidateToolshed',
+        'manageProxyWheel',
+        'inspectHypervisor',
+        'coordinateSubsystem',
+        'controlSovereignOS',
+        'operateAsHumanUser',
+        'uiMasterKitInspect',
+        'uiMasterKitPatch',
+        'uiMasterKitRepair',
+        'genesisCreateAgent',
+        'forgeNeuralWeights',
+        'runAutonomousTraining',
+        'molecularDistillState',
+        'queryOrchestratorKnowledge',
+        'inspectGithubAndProjects',
+        'inspectSystemTelemetry',
+        'manageScratchpad',
+        'manageBatchProcessor'
+      ]);
+
+      const normalizedDynamicLookup = toolName.toLowerCase();
+      if (SYSTEM_CORE_TOOLS.has(toolName) || (![
+        'readFile', 'writeFile', 'patchFile', 'atomicPatchFile', 'batchPatchFiles', 'deleteFile', 'listDirectory', 'searchCode',
+        'manageInfiniteSim', 'manageBurnerMail', 'queryVaultMemory', 'webSearch', 'fetchWebPage', 'searchWebGrounded', 'osintRecon',
+        'synthesizeMedia', 'queryCompendium', 'invokeLysanderSkill', 'manageTaskMemory'
+      ].includes(toolName) && normalizedDynamicLookup !== 'unknown')) {
+        return {
+          tag: 'SYSTEM_CORE_LOCKED',
+          action: `Blocked host/system-core tool "${toolName}"`,
+          success: false,
+          summary: 'System Core clearance required. Standard accounts run strictly inside their isolated personal workspace.',
+          output: { error: 'System Core clearance required.', upgradeRequired: true }
+        };
+      }
+
+      const WORKSPACE_FILE_TOOLS = new Set([
+        'readFile', 'writeFile', 'patchFile', 'atomicPatchFile', 'batchPatchFiles', 'deleteFile', 'listDirectory', 'searchCode'
+      ]);
+      if (WORKSPACE_FILE_TOOLS.has(toolName)) {
+        if (!priv?.canExecuteTerminalAndTools) {
+          return {
+            tag: 'WORKSPACE_LOCKED',
+            action: `Blocked file tool "${toolName}"`,
+            success: false,
+            summary: 'Privilege required: Autonomous Tools execution. Upgrade your tier to unlock personal workspace file tools.',
+            output: { error: 'Privilege required: Autonomous Tools execution.', upgradeRequired: true }
+          };
+        }
+        const tenantWsRoot = userSqlMemoryService.getUserWorkspaceRoot(actorUser);
+        const confineRelPath = (rawInput: unknown, defaultRel = '.') => {
+          const cleaned = String(rawInput ?? defaultRel)
+            .trim()
+            .replace(/^@(?:self|orchestrator|target|host)\/?/i, '')
+            .replace(/^~\/?/, '')
+            .replace(/^\/+/, '') || defaultRel;
+          const abs = userSqlMemoryService.resolveUserScopedPath(actorUser, cleaned);
+          return path.relative(tenantWsRoot, abs) || '.';
+        };
+        args = {
+          ...args,
+          scope: 'target',
+          rootPath: tenantWsRoot
+        };
+        if (args.filePath !== undefined || args.path !== undefined) {
+          const safeRel = confineRelPath(args.filePath ?? args.path, 'notes.txt');
+          args.filePath = safeRel;
+          args.path = safeRel;
+        }
+        if (args.dirPath !== undefined || toolName === 'listDirectory') {
+          args.dirPath = confineRelPath(args.dirPath ?? args.path, '.');
+        }
+        if (Array.isArray(args.operations)) {
+          args.operations = args.operations.map((op: any) => ({
+            ...op,
+            scope: 'target',
+            rootPath: tenantWsRoot,
+            filePath: confineRelPath(op?.filePath ?? op?.path, 'notes.txt')
+          }));
+        }
+      }
+
+      if (toolName === 'manageBurnerMail' && !priv?.canUseBurnerMail) {
+        return {
+          tag: 'BURNER_MAIL',
+          action: 'Burner Mail access restricted',
+          success: false,
+          summary: 'Privilege required: Burner Mail access. Upgrade your tier to unlock.',
+          output: { error: 'Privilege required: Burner Mail access.', upgradeRequired: true }
+        };
+      }
+      if (toolName === 'manageInfiniteSim' && !priv?.canUseInfiniteSim) {
+        return {
+          tag: 'INFINITE_SIM',
+          action: 'Infinite SIM access restricted',
+          success: false,
+          summary: 'Privilege required: Infinite SIM access. Upgrade your tier to unlock.',
+          output: { error: 'Privilege required: Infinite SIM access.', upgradeRequired: true }
+        };
+      }
+    }
+
     let rawResult: { tag: string; action: string; success: boolean; summary: string; output: any; diff?: string };
     switch (toolName) {
       case 'readFile':
@@ -18278,46 +20334,55 @@ async function executeServerSovereignTool(
       }
 
       case 'manageInfiniteSim': {
+        const simScopeId = isRestrictedTenant && actorUser ? actorUser.id : undefined;
+        const activeSimStore = simScopeId ? loadInfiniteSimStore(simScopeId) : infiniteSimStore;
+        const persistSim = () => saveInfiniteSimStore(activeSimStore, simScopeId);
         const op = String(args.operation || 'status').toLowerCase();
         const cc = String(args.countryCode || 'US').toUpperCase();
         if (op === 'provision_sim') {
-          infiniteSimStore.simProfiles = infiniteSimStore.simProfiles.map(s => ({ ...s, status: 'STANDBY' }));
+          activeSimStore.simProfiles = activeSimStore.simProfiles.map(s => ({ ...s, status: 'STANDBY' }));
           const sim = buildInfiniteSimProfile(cc, args.label, 'ACTIVE');
-          infiniteSimStore.simProfiles.unshift(sim);
-          saveInfiniteSimStore(infiniteSimStore);
+          activeSimStore.simProfiles.unshift(sim);
+          persistSim();
           return { tag: 'INFINITE_SIM', action: `Provisioned Infinite eSIM (${sim.carrierName})`, success: true, summary: `ICCID ${sim.iccid}`, output: sim };
         }
         if (op === 'rotate_sim') {
-          const target = infiniteSimStore.simProfiles.find(s => s.id === args.simId)
-            || infiniteSimStore.simProfiles.find(s => s.status === 'ACTIVE')
-            || infiniteSimStore.simProfiles[0];
+          const target = activeSimStore.simProfiles.find(s => s.id === args.simId)
+            || activeSimStore.simProfiles.find(s => s.status === 'ACTIVE')
+            || activeSimStore.simProfiles[0];
+          if (!target) {
+            return { tag: 'INFINITE_SIM', action: 'Rotate eSIM identity', success: false, summary: 'No eSIM profile provisioned in your workspace yet.', output: { error: 'No eSIM profile found' } };
+          }
           const fresh = buildInfiniteSimProfile(target.countryCode, target.label, 'ACTIVE');
           target.iccid = fresh.iccid;
           target.imsi = fresh.imsi;
           target.eid = fresh.eid;
           target.activationCode = fresh.activationCode;
           target.rotatedAt = new Date().toISOString();
-          saveInfiniteSimStore(infiniteSimStore);
+          persistSim();
           return { tag: 'INFINITE_SIM', action: `Rotated eSIM identity (${target.id})`, success: true, summary: `New ICCID ${target.iccid}`, output: target };
         }
         if (op === 'provision_number') {
-          const activeSim = infiniteSimStore.simProfiles.find(s => s.id === args.simId)
-            || infiniteSimStore.simProfiles.find(s => s.status === 'ACTIVE')
-            || infiniteSimStore.simProfiles[0];
+          const activeSim = activeSimStore.simProfiles.find(s => s.id === args.simId)
+            || activeSimStore.simProfiles.find(s => s.status === 'ACTIVE')
+            || activeSimStore.simProfiles[0];
+          if (!activeSim) {
+            return { tag: 'BURNER_PHONE', action: 'Provision burner number', success: false, summary: 'Provision an eSIM profile first.', output: { error: 'No active eSIM profile' } };
+          }
           const count = Math.min(Math.max(Number(args.count) || 1, 1), 25);
           const created: ServerBurnerNumber[] = [];
           for (let i = 0; i < count; i++) {
             const num = buildBurnerPhoneNumber(activeSim.id, cc, undefined, args.label || 'Autonomous Line');
-            infiniteSimStore.burnerNumbers.unshift(num);
+            activeSimStore.burnerNumbers.unshift(num);
             created.push(num);
           }
-          saveInfiniteSimStore(infiniteSimStore);
+          persistSim();
           return { tag: 'BURNER_PHONE', action: `Provisioned ${created.length} ${cc} burner number(s)`, success: true, summary: created.map(c => c.e164).join(', '), output: created };
         }
         if (op === 'incoming_sms' || op === 'send_sms') {
-          const targetNum = findBurnerNumberMatch(String(args.to || args.numberId || ''));
+          const targetNum = findBurnerNumberMatch(String(args.to || args.numberId || ''), activeSimStore);
           if (op === 'incoming_sms' && targetNum && args.body) {
-            const sim = infiniteSimStore.simProfiles.find(s => s.id === targetNum.simId);
+            const sim = activeSimStore.simProfiles.find(s => s.id === targetNum.simId);
             const { otpCode, extractedUrls } = extractSmsOtpAndUrls(String(args.body));
             const msg: ServerSmsMessage = {
               id: `sms-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`,
@@ -18333,13 +20398,13 @@ async function executeServerSovereignTool(
               read: false,
               createdAt: new Date().toISOString()
             };
-            infiniteSimStore.smsMessages.unshift(msg);
+            activeSimStore.smsMessages.unshift(msg);
             targetNum.messageCount += 1;
             targetNum.lastActivityAt = msg.createdAt;
-            saveInfiniteSimStore(infiniteSimStore);
+            persistSim();
             return { tag: 'BURNER_SMS', action: `Delivered SMS to ${targetNum.e164}`, success: true, summary: otpCode ? `OTP ${otpCode}` : msg.id, output: msg };
           }
-          const src = findBurnerNumberMatch(String(args.numberId || '')) || infiniteSimStore.burnerNumbers.find(n => n.status === 'ONLINE');
+          const src = findBurnerNumberMatch(String(args.numberId || ''), activeSimStore) || activeSimStore.burnerNumbers.find(n => n.status === 'ONLINE');
           if (!src || !args.to || !args.body) {
             return { tag: 'BURNER_SMS', action: 'Send SMS', success: false, summary: 'Source number, to, and body required', output: { error: 'Missing required fields' } };
           }
@@ -18357,17 +20422,17 @@ async function executeServerSovereignTool(
             read: true,
             createdAt: new Date().toISOString()
           };
-          infiniteSimStore.smsMessages.unshift(outbound);
+          activeSimStore.smsMessages.unshift(outbound);
           src.messageCount += 1;
-          saveInfiniteSimStore(infiniteSimStore);
+          persistSim();
           return { tag: 'BURNER_SMS', action: `Sent SMS from ${src.e164} to ${args.to}`, success: true, summary: outbound.id, output: outbound };
         }
         if (op === 'burn_number') {
-          const targetNum = findBurnerNumberMatch(String(args.numberId || args.to || ''));
+          const targetNum = findBurnerNumberMatch(String(args.numberId || args.to || ''), activeSimStore);
           if (!targetNum) return { tag: 'BURNER_PHONE', action: 'Burn number', success: false, summary: 'Number not found', output: { error: 'Not found' } };
-          infiniteSimStore.burnerNumbers = infiniteSimStore.burnerNumbers.filter(n => n.id !== targetNum.id);
-          infiniteSimStore.smsMessages = infiniteSimStore.smsMessages.filter(m => m.numberId !== targetNum.id);
-          saveInfiniteSimStore(infiniteSimStore);
+          activeSimStore.burnerNumbers = activeSimStore.burnerNumbers.filter(n => n.id !== targetNum.id);
+          activeSimStore.smsMessages = activeSimStore.smsMessages.filter(m => m.numberId !== targetNum.id);
+          persistSim();
           return { tag: 'BURNER_PHONE', action: `Burned ${targetNum.e164}`, success: true, summary: 'Removed from registry', output: { burned: targetNum.e164 } };
         }
         if (op === 'carrier_status') {
@@ -18385,7 +20450,9 @@ async function executeServerSovereignTool(
               output: { error: 'Set TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN or TELNYX_API_KEY in .env to query live purchasable PSTN numbers.' }
             };
           }
-          const searchRes = await fetch(`http://127.0.0.1:${ACTIVE_PORT}/api/sim/carrier/available-numbers?country=${encodeURIComponent(cc)}&limit=5`);
+          const searchRes = await fetch(`http://127.0.0.1:${ACTIVE_PORT}/api/sim/carrier/available-numbers?country=${encodeURIComponent(cc)}&limit=5`, {
+            headers: forwardAuthHeader ? { Authorization: forwardAuthHeader } : undefined
+          });
           const searchJson: any = await searchRes.json().catch(() => ({}));
           return {
             tag: 'TELECOM_CARRIER',
@@ -18396,7 +20463,10 @@ async function executeServerSovereignTool(
           };
         }
         if (op === 'sync_termux') {
-          const syncRes = await fetch(`http://127.0.0.1:${ACTIVE_PORT}/api/sim/termux/sync`, { method: 'POST' });
+          if (isRestrictedTenant) {
+            return { tag: 'TERMUX_HARDWARE_SIM', action: 'Termux hardware sync restricted', success: false, summary: 'System Core clearance required for host hardware SIM access.', output: { error: 'System Core clearance required.' } };
+          }
+          const syncRes = await fetch(`http://127.0.0.1:${ACTIVE_PORT}/api/sim/termux/sync`, { method: 'POST', headers: { Origin: `http://127.0.0.1:${ACTIVE_PORT}`, 'X-Requested-With': 'fetch' } });
           const syncJson: any = await syncRes.json().catch(() => ({}));
           return {
             tag: 'TERMUX_HARDWARE_SIM',
@@ -18407,25 +20477,25 @@ async function executeServerSovereignTool(
           };
         }
         if (op === 'export_training_data') {
-          const count = infiniteSimStore.smsMessages.length;
+          const count = activeSimStore.smsMessages.length;
           return { tag: 'TRAINING_DATASET', action: 'Generated JSONL agent training dataset from SMS/OTP telemetry', success: true, summary: `${count} JSONL samples ready at /api/sim/training-dataset`, output: { endpoint: '/api/sim/training-dataset?format=jsonl', sampleCount: count } };
         }
         if (op === 'read_sms') {
-          const targetNum = args.numberId || args.to ? findBurnerNumberMatch(String(args.numberId || args.to)) : undefined;
+          const targetNum = args.numberId || args.to ? findBurnerNumberMatch(String(args.numberId || args.to), activeSimStore) : undefined;
           const msgs = targetNum
-            ? infiniteSimStore.smsMessages.filter(m => m.numberId === targetNum.id)
-            : infiniteSimStore.smsMessages.slice(0, 20);
+            ? activeSimStore.smsMessages.filter(m => m.numberId === targetNum.id)
+            : activeSimStore.smsMessages.slice(0, 20);
           return { tag: 'BURNER_SMS', action: 'Read SMS inbox', success: true, summary: `${msgs.length} messages`, output: msgs };
         }
         return {
           tag: 'INFINITE_SIM',
           action: 'Inspect Infinite SIM & Burner Phone state',
           success: true,
-          summary: `${infiniteSimStore.simProfiles.length} SIMs · ${infiniteSimStore.burnerNumbers.length} numbers · ${infiniteSimStore.smsMessages.length} SMS`,
+          summary: `${activeSimStore.simProfiles.length} SIMs · ${activeSimStore.burnerNumbers.length} numbers · ${activeSimStore.smsMessages.length} SMS`,
           output: {
-            simProfiles: infiniteSimStore.simProfiles,
-            burnerNumbers: infiniteSimStore.burnerNumbers,
-            recentSms: infiniteSimStore.smsMessages.slice(0, 10)
+            simProfiles: activeSimStore.simProfiles,
+            burnerNumbers: activeSimStore.burnerNumbers,
+            recentSms: activeSimStore.smsMessages.slice(0, 10)
           }
         };
       }
@@ -18433,6 +20503,22 @@ async function executeServerSovereignTool(
       case 'queryVaultMemory': {
         const q = String(args.query || '').trim();
         const limit = Math.min(50, Number(args.limit || 12));
+        if (isRestrictedTenant && actorUser) {
+          const personalFacts = userSqlMemoryService.listMemoryFacts(actorUser.id, limit);
+          const filteredFacts = q
+            ? personalFacts.filter((f) => `${f.memoryKey || ''} ${f.memoryValue} ${f.category}`.toLowerCase().includes(q.toLowerCase()))
+            : personalFacts;
+          return {
+            tag: 'VAULT_MEMORY',
+            action: `Queried personal SQL memory (${q || 'recent'})`,
+            success: true,
+            summary: `Retrieved ${filteredFacts.length} personal SQL memory record(s)`,
+            output: {
+              query: q || 'recent',
+              userSqlFacts: filteredFacts
+            }
+          };
+        }
         const kernelMemories = (q
           ? sovereignQuantumKernel.searchMemories(q, limit)
           : sovereignQuantumKernel.getAgenticMemories(limit)
@@ -18630,11 +20716,16 @@ async function executeServerSovereignTool(
       case 'manageBurnerMail': {
         const op = String(args.operation || 'providers').toLowerCase();
         const base = `http://127.0.0.1:${ACTIVE_PORT}`;
+        const burnerHeaders: Record<string, string> = {
+          'Origin': base,
+          'X-Requested-With': 'fetch',
+          ...(forwardAuthHeader ? { Authorization: forwardAuthHeader } : {})
+        };
         let r: Response;
         if (op === 'providers') {
-          r = await fetch(`${base}/api/burner/providers`, { signal: AbortSignal.timeout(8000) });
+          r = await fetch(`${base}/api/burner/providers`, { headers: burnerHeaders, signal: AbortSignal.timeout(8000) });
         } else if (op === 'domain_health') {
-          r = await fetch(`${base}/api/burner/domain-health`, { signal: AbortSignal.timeout(8000) });
+          r = await fetch(`${base}/api/burner/domain-health`, { headers: burnerHeaders, signal: AbortSignal.timeout(8000) });
         } else {
           const routeMap: Record<string, string> = {
             generate: '/api/burner/generate',
@@ -18646,7 +20737,7 @@ async function executeServerSovereignTool(
           const targetRoute = routeMap[op] || '/api/burner/generate';
           r = await fetch(`${base}${targetRoute}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...burnerHeaders },
             body: JSON.stringify({
               provider: args.provider,
               customPrefix: args.customPrefix,
@@ -18778,12 +20869,26 @@ async function executeServerSovereignTool(
       case 'manageProxyWheel': {
         const op = String(args.operation || 'status').toLowerCase();
         if (op === 'probe_all') {
+          proxyLoopWheel.resetAllCooldowns();
+          rateLimitedCooldowns.clear();
+          modelFailureCooldowns.clear();
           await proxyLoopWheel.discoverCapableGeminiModels(true).catch(() => []);
           await proxyLoopWheel.refreshDaemonReachability(true).catch(() => []);
-        } else if (op === 'rotate') {
-          proxyLoopWheel.stepCursor();
+        } else if (op === 'rotate' || op === 'rehydrate') {
+          proxyLoopWheel.rehydrateAndRotate();
+          rateLimitedCooldowns.clear();
+          modelFailureCooldowns.clear();
+          lastHealthyGeminiModel = '';
+          lastBoundGeminiKey = getActiveGeminiApiKey();
+          ai = createSmartGeminiClient(lastBoundGeminiKey);
+          await proxyLoopWheel.refreshDaemonReachability(true).catch(() => {});
         } else if (op === 'reset_cooldowns') {
           proxyLoopWheel.resetAllCooldowns();
+          rateLimitedCooldowns.clear();
+          modelFailureCooldowns.clear();
+          lastHealthyGeminiModel = '';
+          lastBoundGeminiKey = getActiveGeminiApiKey();
+          ai = createSmartGeminiClient(lastBoundGeminiKey);
         }
         const snap = proxyLoopWheel.getStatusSnapshot();
         rawResult = {
@@ -20029,6 +22134,129 @@ async function executeServerSovereignTool(
   }
 }
 
+// Daily AI quotas are centrally persisted & enforced in authService via /api middleware
+
+const parseServerTagCalls = (text: string): Array<{ toolName: string; args: Record<string, any> }> => {
+  const tagMap: Record<string, string> = {
+    READ_FILE: 'readFile',
+    WRITE_FILE: 'writeFile',
+    PATCH_FILE: 'patchFile',
+    ATOMIC_PATCH: 'atomicPatchFile',
+    BATCH_PATCH: 'batchPatchFiles',
+    SEARCH_CODE: 'searchCode',
+    DELETE_FILE: 'deleteFile',
+    LIST_DIR: 'listDirectory',
+    RUN_COMMAND: 'runTerminalCommand',
+    RUN_LINT: 'runLint',
+    CODE_EVAL: 'evaluateSandboxedCode',
+    FORGE_TOOL: 'forgeTool',
+    FORGE_TOOL_BATCH: 'forgeToolBatch',
+    EXECUTE_TOOL: 'executeTool',
+    LIST_TOOLS: 'listForgedTools',
+    CONSOLIDATE_TOOLS: 'consolidateToolshed',
+    DEDUPLICATE_TOOLS: 'consolidateToolshed',
+    QUERY_COMPENDIUM: 'queryCompendium',
+    QUERY_VAULT: 'queryVaultMemory',
+    WEB_SEARCH: 'webSearch',
+    FETCH_URL: 'fetchWebPage',
+    OSINT_RECON: 'osintRecon',
+    BURNER_MAIL: 'manageBurnerMail',
+    INFINITE_SIM: 'manageInfiniteSim',
+    GITHUB_PROJECTS: 'inspectGithubAndProjects',
+    SCRATCHPAD: 'manageScratchpad',
+    PROXY_WHEEL: 'manageProxyWheel',
+    MEDIA_SYNTHESIS: 'synthesizeMedia',
+    LYSANDER_SKILL: 'invokeLysanderSkill',
+    SYSTEM_TELEMETRY: 'inspectSystemTelemetry',
+    DREAM_STATE: 'runDreamState',
+    EVOLVE: 'triggerEvolution',
+    RECORD_LEARNING: 'recordLearning',
+    RECURSIVE_HEAL: 'recursiveHeal',
+    SELF_HEAL: 'recursiveHeal',
+    HYPERVISOR_AUDIT: 'inspectHypervisor',
+    COORDINATE: 'coordinateSubsystem',
+    SET_TARGET: 'setTargetSystem',
+    TARGET_SYSTEM: 'setTargetSystem',
+    INSPECT_SYSTEMS: 'inspectTargetSystem',
+    ROLLBACK_PATCH: 'rollbackAtomicPatch',
+    HOST_ACTION: 'executeHostSystemAction',
+    EXTERNAL_TARGET: 'executeExternalTarget',
+    UI_INSPECT: 'uiMasterKitInspect',
+    UI_PATCH: 'uiMasterKitPatch',
+    UI_REPAIR: 'uiMasterKitRepair',
+    GENESIS_CREATE_AGENT: 'genesisCreateAgent',
+    FORGE_WEIGHTS: 'forgeNeuralWeights',
+    AUTONOMOUS_TRAIN: 'runAutonomousTraining',
+    MOLECULAR_DISTILL: 'molecularDistillState',
+    QUERY_KNOWLEDGE: 'queryOrchestratorKnowledge',
+    OS_CONTROL: 'controlSovereignOS',
+    WINDOW_ACTION: 'controlSovereignOS',
+    HUMAN_ACTION: 'operateAsHumanUser',
+    COMPUTER_USE: 'operateAsHumanUser',
+    UI_CLICK: 'controlSovereignOS',
+    UI_TYPE: 'controlSovereignOS',
+    BATCH_PROCESS: 'manageBatchProcessor',
+    BATCH_QUEUE: 'manageBatchProcessor'
+  };
+  const calls: Array<{ toolName: string; args: Record<string, any> }> = [];
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== '[') { i++; continue; }
+    const header = text.slice(i + 1).match(/^([A-Z_]+)(?:\s*:|\s*\])/);
+    if (!header || !tagMap[header[1]]) { i++; continue; }
+    const tag = header[1];
+    if (header[0].endsWith(']')) {
+      calls.push({ toolName: tagMap[tag], args: {} });
+      i += 1 + header[0].length;
+      continue;
+    }
+    let j = i + 1 + header[0].length;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    let depth = 1;
+    let inStr: string | null = null;
+    let esc = false;
+    const start = j;
+    while (j < text.length && depth > 0) {
+      const ch = text[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === inStr) inStr = null;
+      } else {
+        if (ch === '"' || ch === "'" || ch === '`') inStr = ch;
+        else if (ch === '[') depth++;
+        else if (ch === ']') { depth--; if (depth === 0) break; }
+      }
+      j++;
+    }
+    if (depth === 0) {
+      const rawPayload = text.slice(start, j).trim();
+      let parsedArgs: Record<string, any> = {};
+      if (rawPayload.startsWith('{') && rawPayload.endsWith('}')) {
+        try { parsedArgs = JSON.parse(rawPayload); } catch {}
+      } else if (rawPayload) {
+        parsedArgs = {
+          filePath: rawPayload,
+          query: rawPayload,
+          command: rawPayload,
+          feedback: rawPayload,
+          dirPath: rawPayload,
+          domain: rawPayload,
+          url: rawPayload,
+          principle: rawPayload,
+          skillId: rawPayload,
+          code: rawPayload
+        };
+      }
+      calls.push({ toolName: tagMap[tag], args: parsedArgs });
+      i = j + 1;
+    } else {
+      i++;
+    }
+  }
+  return calls;
+};
+
 // Permanent Resident Coordinator Chat & Autonomous Tool Execution Endpoint
 app.post('/api/chat', async (req, res) => {
   const t0 = Date.now();
@@ -20045,6 +22273,7 @@ app.post('/api/chat', async (req, res) => {
       model: rawModel = 'gemini-4-hydrogen',
       systemInstruction = '',
       deepthink = true,
+      rawMode = false,
       useSearchGrounding = true,
       zeroTokenMode = false,
       mediaAttachment,
@@ -20135,14 +22364,20 @@ app.post('/api/chat', async (req, res) => {
 - Recent Coordinations: ${RESIDENT_COORDINATOR_STATE.recentCoordinations.slice(0, 8).map(c => `${c.source}->${c.target}:${c.action}`).join(' | ') || 'none'}`;
 
     const chatActor = resolveEffectiveSqlUser(req);
+    const chatTenantScopeId = getTenantScopeId(req);
+    const forwardAuthHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined;
+
     const chatSqlChannel = (req.body?.channel === 'voice' || req.body?.channel === 'lora-mesh' || req.body?.channel === 'workflow')
       ? req.body.channel
       : 'main-chat';
     let extractedPreferredNameFromPrompt: string | undefined;
+    const isHostLevelChat = !chatActor || userSqlMemoryService.isFullHostAccessUser(chatActor);
     if (prompt && prompt.trim()) {
-      try {
-        sovereignQuantumKernel.recordAgenticTurn('user', prompt, model);
-      } catch {}
+      if (isHostLevelChat) {
+        try {
+          sovereignQuantumKernel.recordAgenticTurn('user', prompt, model);
+        } catch {}
+      }
       if (chatActor) {
         try {
           const userSaveRes = userSqlMemoryService.appendChatMessage(chatActor, {
@@ -20160,11 +22395,13 @@ app.post('/api/chat', async (req, res) => {
 
     const sendChatJson = (payload: Record<string, any>) => {
       if (typeof payload.text === 'string' && payload.text.trim()) {
-        try {
-          if (!isTaintedBoilerplateResponse(payload.text)) {
-            sovereignQuantumKernel.recordAgenticTurn('model', payload.text, String(payload.model || model));
-          }
-        } catch {}
+        if (isHostLevelChat) {
+          try {
+            if (!isTaintedBoilerplateResponse(payload.text)) {
+              sovereignQuantumKernel.recordAgenticTurn('model', payload.text, String(payload.model || model));
+            }
+          } catch {}
+        }
         if (chatActor) {
           try {
             userSqlMemoryService.appendChatMessage(chatActor, {
@@ -20218,130 +22455,31 @@ app.post('/api/chat', async (req, res) => {
       currentPrompt: prompt
     });
 
-    const parseServerTagCalls = (text: string): Array<{ toolName: string; args: Record<string, any> }> => {
-      const tagMap: Record<string, string> = {
-        READ_FILE: 'readFile',
-        WRITE_FILE: 'writeFile',
-        PATCH_FILE: 'patchFile',
-        ATOMIC_PATCH: 'atomicPatchFile',
-        BATCH_PATCH: 'batchPatchFiles',
-        SEARCH_CODE: 'searchCode',
-        DELETE_FILE: 'deleteFile',
-        LIST_DIR: 'listDirectory',
-        RUN_COMMAND: 'runTerminalCommand',
-        RUN_LINT: 'runLint',
-        CODE_EVAL: 'evaluateSandboxedCode',
-        FORGE_TOOL: 'forgeTool',
-        FORGE_TOOL_BATCH: 'forgeToolBatch',
-        EXECUTE_TOOL: 'executeTool',
-        LIST_TOOLS: 'listForgedTools',
-        CONSOLIDATE_TOOLS: 'consolidateToolshed',
-        DEDUPLICATE_TOOLS: 'consolidateToolshed',
-        QUERY_COMPENDIUM: 'queryCompendium',
-        QUERY_VAULT: 'queryVaultMemory',
-        WEB_SEARCH: 'webSearch',
-        FETCH_URL: 'fetchWebPage',
-        OSINT_RECON: 'osintRecon',
-        BURNER_MAIL: 'manageBurnerMail',
-        INFINITE_SIM: 'manageInfiniteSim',
-        GITHUB_PROJECTS: 'inspectGithubAndProjects',
-        SCRATCHPAD: 'manageScratchpad',
-        PROXY_WHEEL: 'manageProxyWheel',
-        MEDIA_SYNTHESIS: 'synthesizeMedia',
-        LYSANDER_SKILL: 'invokeLysanderSkill',
-        SYSTEM_TELEMETRY: 'inspectSystemTelemetry',
-        DREAM_STATE: 'runDreamState',
-        EVOLVE: 'triggerEvolution',
-        RECORD_LEARNING: 'recordLearning',
-        RECURSIVE_HEAL: 'recursiveHeal',
-        SELF_HEAL: 'recursiveHeal',
-        HYPERVISOR_AUDIT: 'inspectHypervisor',
-        COORDINATE: 'coordinateSubsystem',
-        SET_TARGET: 'setTargetSystem',
-        TARGET_SYSTEM: 'setTargetSystem',
-        INSPECT_SYSTEMS: 'inspectTargetSystem',
-        ROLLBACK_PATCH: 'rollbackAtomicPatch',
-        HOST_ACTION: 'executeHostSystemAction',
-        EXTERNAL_TARGET: 'executeExternalTarget',
-        UI_INSPECT: 'uiMasterKitInspect',
-        UI_PATCH: 'uiMasterKitPatch',
-        UI_REPAIR: 'uiMasterKitRepair',
-        GENESIS_CREATE_AGENT: 'genesisCreateAgent',
-        FORGE_WEIGHTS: 'forgeNeuralWeights',
-        AUTONOMOUS_TRAIN: 'runAutonomousTraining',
-        MOLECULAR_DISTILL: 'molecularDistillState',
-        QUERY_KNOWLEDGE: 'queryOrchestratorKnowledge',
-        OS_CONTROL: 'controlSovereignOS',
-        WINDOW_ACTION: 'controlSovereignOS',
-        HUMAN_ACTION: 'operateAsHumanUser',
-        COMPUTER_USE: 'operateAsHumanUser',
-        UI_CLICK: 'controlSovereignOS',
-        UI_TYPE: 'controlSovereignOS',
-        BATCH_PROCESS: 'manageBatchProcessor',
-        BATCH_QUEUE: 'manageBatchProcessor'
-      };
-      const calls: Array<{ toolName: string; args: Record<string, any> }> = [];
-      let i = 0;
-      while (i < text.length) {
-        if (text[i] !== '[') { i++; continue; }
-        const header = text.slice(i + 1).match(/^([A-Z_]+)(?:\s*:|\s*\])/);
-        if (!header || !tagMap[header[1]]) { i++; continue; }
-        const tag = header[1];
-        if (header[0].endsWith(']')) {
-          calls.push({ toolName: tagMap[tag], args: {} });
-          i += 1 + header[0].length;
-          continue;
-        }
-        let j = i + 1 + header[0].length;
-        while (j < text.length && /\s/.test(text[j])) j++;
-        let depth = 1;
-        let inStr: string | null = null;
-        let esc = false;
-        const start = j;
-        while (j < text.length && depth > 0) {
-          const ch = text[j];
-          if (inStr) {
-            if (esc) esc = false;
-            else if (ch === '\\') esc = true;
-            else if (ch === inStr) inStr = null;
-          } else {
-            if (ch === '"' || ch === "'" || ch === '`') inStr = ch;
-            else if (ch === '[') depth++;
-            else if (ch === ']') { depth--; if (depth === 0) break; }
-          }
-          j++;
-        }
-        if (depth === 0) {
-          const rawPayload = text.slice(start, j).trim();
-          let parsedArgs: Record<string, any> = {};
-          if (rawPayload.startsWith('{') && rawPayload.endsWith('}')) {
-            try { parsedArgs = JSON.parse(rawPayload); } catch {}
-          } else if (rawPayload) {
-            parsedArgs = {
-              filePath: rawPayload,
-              query: rawPayload,
-              command: rawPayload,
-              feedback: rawPayload,
-              dirPath: rawPayload,
-              domain: rawPayload,
-              url: rawPayload,
-              principle: rawPayload,
-              skillId: rawPayload,
-              code: rawPayload
-            };
-          }
-          calls.push({ toolName: tagMap[tag], args: parsedArgs });
-          i = j + 1;
-        } else {
-          i++;
-        }
-      }
-      return calls;
-    };
+    const tenantAllowByok = !chatTenantScopeId || chatActor?.privileges?.canBringOwnKeys !== false;
+    const tenantDeepseekKey = chatTenantScopeId && tenantAllowByok ? userSecretsVault.getSecret(chatTenantScopeId, 'DEEPSEEK_API_KEY') : undefined;
+    const tenantGroqKey = chatTenantScopeId && tenantAllowByok ? userSecretsVault.getSecret(chatTenantScopeId, 'GROQ_API_KEY') : undefined;
+    const tenantOpenRouterKey = chatTenantScopeId && tenantAllowByok ? userSecretsVault.getSecret(chatTenantScopeId, 'OPENROUTER_API_KEY') : undefined;
+    const tenantOpenAiKey = chatTenantScopeId && tenantAllowByok ? userSecretsVault.getSecret(chatTenantScopeId, 'OPENAI_API_KEY') : undefined;
+    const tenantGeminiKey = chatTenantScopeId && tenantAllowByok
+      ? (userSecretsVault.getSecret(chatTenantScopeId, 'GEMINI_API_KEY') || userSecretsVault.getSecret(chatTenantScopeId, 'ALL_KEY'))
+      : undefined;
 
-    const effectiveDeepseek = req.body?.deepseekApiKey ? new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: req.body.deepseekApiKey }) : deepseek;
-    const effectiveGroq = req.body?.groqApiKey ? new OpenAI({ baseURL: 'https://api.groq.com/openai/v1', apiKey: req.body.groqApiKey }) : groq;
-    const effectiveOpenRouter = req.body?.openRouterApiKey ? new OpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: req.body.openRouterApiKey, defaultHeaders: { 'HTTP-Referer': 'https://aurelius-sovereign.local', 'X-Title': 'Aurelius Sovereign Orchestrator' } }) : openRouter;
+    const effectiveDeepseek = req.body?.deepseekApiKey
+      ? new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: req.body.deepseekApiKey })
+      : tenantDeepseekKey
+        ? new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: tenantDeepseekKey })
+        : deepseek;
+    const effectiveGroq = req.body?.groqApiKey
+      ? new OpenAI({ baseURL: 'https://api.groq.com/openai/v1', apiKey: req.body.groqApiKey })
+      : tenantGroqKey
+        ? new OpenAI({ baseURL: 'https://api.groq.com/openai/v1', apiKey: tenantGroqKey })
+        : groq;
+    const effectiveOpenRouter = req.body?.openRouterApiKey
+      ? new OpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: req.body.openRouterApiKey, defaultHeaders: { 'HTTP-Referer': 'https://aurelius-sovereign.local', 'X-Title': 'Aurelius Sovereign Orchestrator' } })
+      : tenantOpenRouterKey
+        ? new OpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: tenantOpenRouterKey, defaultHeaders: { 'HTTP-Referer': 'https://aurelius-sovereign.local', 'X-Title': 'Aurelius Sovereign Orchestrator' } })
+        : openRouter;
+    const effectiveTenantOpenAi = tenantOpenAiKey ? new OpenAI({ apiKey: tenantOpenAiKey }) : null;
 
     let cloudSuccess = false;
     let responseText = '';
@@ -20406,7 +22544,7 @@ app.post('/api/chat', async (req, res) => {
             const fnName = fnCall?.name || 'unknown';
             let parsedArgs: Record<string, any> = {};
             try { parsedArgs = JSON.parse(fnCall?.arguments || '{}'); } catch {}
-            const toolExec = await executeServerSovereignTool(fnName, parsedArgs, agentId);
+            const toolExec = await executeServerSovereignTool(fnName, parsedArgs, agentId, chatActor, forwardAuthHeader);
             executedTools.push(toolExec);
             RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
             const serialized = typeof toolExec.output === 'string'
@@ -20427,7 +22565,7 @@ app.post('/api/chat', async (req, res) => {
           chatMessages.push({ role: 'assistant', content: choiceMsg.content });
           const tagReports: string[] = [];
           for (const tc of tagCalls) {
-            const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId);
+            const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId, chatActor, forwardAuthHeader);
             executedTools.push(toolExec);
             RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
             tagReports.push(`[${toolExec.tag}] success=${toolExec.success} · ${toolExec.summary}\n${typeof toolExec.output === 'string' ? toolExec.output.slice(0, 10000) : JSON.stringify(toolExec.output).slice(0, 10000)}`);
@@ -20527,6 +22665,46 @@ app.post('/api/chat', async (req, res) => {
           providerTrace.push({ stage: 'explicit-openrouter', model: orModel, status: 'ERR', ms: Date.now() - s0, note: e?.message });
         }
       }
+      if (!cloudSuccess && effectiveTenantOpenAi) {
+        const s0 = Date.now();
+        const oaModel = lowerModel.includes('gpt-') ? model : 'gpt-4o-mini';
+        try {
+          const out = await runOpenAiAutonomousLoop(effectiveTenantOpenAi, oaModel, 'Personal OpenAI Vault Key', true);
+          if (out) {
+            responseText = out.text;
+            usedModel = out.resolvedModel;
+            cloudSuccess = true;
+            providerTrace.push({ stage: 'tenant-openai-byok', model: oaModel, status: 'OK', ms: Date.now() - s0 });
+          }
+        } catch (e: any) {
+          providerTrace.push({ stage: 'tenant-openai-byok', model: oaModel, status: 'ERR', ms: Date.now() - s0, note: e?.message });
+        }
+      }
+
+      if (!cloudSuccess && tenantGeminiKey) {
+        const s0 = Date.now();
+        const gModel = lowerModel.includes('gemini-') && !lowerModel.includes('gemini-4') ? model : 'gemini-2.5-flash';
+        try {
+          const byokAi = createSmartGeminiClient(tenantGeminiKey);
+          const byokRes = await withPromiseTimeout(
+            byokAi.models.generateContent({
+              model: gModel,
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              config: { systemInstruction: fluidInstruction }
+            }),
+            Math.min(18_000, budgetRemainingMs()),
+            `tenant-gemini-byok:${gModel}`
+          );
+          if (byokRes?.text) {
+            responseText = byokRes.text;
+            usedModel = `${gModel} [Personal BYOK Vault]`;
+            cloudSuccess = true;
+            providerTrace.push({ stage: 'tenant-gemini-byok', model: gModel, status: 'OK', ms: Date.now() - s0 });
+          }
+        } catch (e: any) {
+          providerTrace.push({ stage: 'tenant-gemini-byok', model: gModel, status: 'ERR', ms: Date.now() - s0, note: internalSecretsHandler.redactText(e?.message || '').slice(0, 120) });
+        }
+      }
     }
 
     if (cloudSuccess && responseText) {
@@ -20613,14 +22791,15 @@ app.post('/api/chat', async (req, res) => {
       const maxSpokeAttempts = cloudSpokes.length;
       let winningWheelMeta: any = null;
       const rejectedGeminiKeySlots = new Set<string>();
-      const quotaExhaustedModelsThisTurn = new Set<string>();
+      const serviceDeniedCountsBySlot = new Map<string, number>();
+      const quotaExhaustedSlotModelsThisTurn = new Set<string>();
 
       for (const spoke of cloudSpokes.slice(0, maxSpokeAttempts)) {
         if (spoke.provider === 'gemini' && rejectedGeminiKeySlots.has(spoke.keySlot)) {
           continue;
         }
-        // If a specific model already hit 429 per-model TPM/RPM quota on this project, immediately rotate to distinct models (e.g. gemini-4-neon, gemini-2.5-flash, gemma-4-31b-it)
-        if (quotaExhaustedModelsThisTurn.has(spoke.model)) {
+        // Scope per-turn 429 dedup by (keySlot + model) so backup keys immediately serve the SAME flagship model!
+        if (quotaExhaustedSlotModelsThisTurn.has(`${spoke.keySlot}:${spoke.model}`)) {
           continue;
         }
         if (Date.now() - t0 > REQUEST_BUDGET_MS - 3500) {
@@ -20630,10 +22809,11 @@ app.post('/api/chat', async (req, res) => {
         const candStart = Date.now();
 
         if (spoke.provider === 'gemini') {
-          const spokeClient = proxyLoopWheel.getGeminiClientForSpoke(spoke.id);
-          if (!spokeClient) continue;
+          const primarySpokeClient = proxyLoopWheel.getGeminiClientForSpoke(spoke.id);
+          let activeSpokeClient = primarySpokeClient;
+          if (!activeSpokeClient) continue;
           const isProvenHealthy = spoke.successes > 0 || (modelLatencyStats.get(spoke.model)?.successes ? true : false);
-          const perAttemptTimeoutMs = isProvenHealthy ? Math.min(18_000, budgetRemainingMs()) : Math.min(7_500, budgetRemainingMs());
+          const perAttemptTimeoutMs = isProvenHealthy ? Math.min(20_000, budgetRemainingMs()) : Math.min(15_000, budgetRemainingMs());
 
           try {
             console.info(`[WHEEL · ${spoke.keySlot}] Dispatching via ${spoke.model} (timeout=${perAttemptTimeoutMs}ms)...`);
@@ -20650,35 +22830,93 @@ app.post('/api/chat', async (req, res) => {
             let candidateSuccess = false;
             let autonomyNudged = false;
             let purityNudged = false;
+            let triedAltEndpoint = false;
             const explicitFsIntent = detectExplicitFilesystemIntent(prompt);
 
             for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
               if (round > 0 && Date.now() - t0 > REQUEST_BUDGET_MS - 3000) break;
               // Fast adaptive thinking: keep tool-gathering rounds snappy (MINIMAL/LOW) so audits & reports respond in seconds instead of timing out
               const thinkingCfg = (isThinkingModel && deepthink)
-                ? {
-                    thinkingLevel:
-                      round === 0
-                        ? (supportsMinimalThinking ? ThinkingLevel.LOW : ThinkingLevel.LOW)
-                        : (supportsMinimalThinking ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW)
-                  }
+                ? { thinkingLevel: ThinkingLevel.HIGH }
                 : undefined;
 
-              const result = await withPromiseTimeout(
-                spokeClient.models.generateContent({
-                  model: spoke.model,
-                  contents: conversationContents,
-                  config: {
-                    ...(isGemma ? {} : { systemInstruction: fluidInstruction }),
-                    // @ts-ignore
-                    ...(thinkingCfg ? { thinkingConfig: thinkingCfg } : {}),
-                    safetySettings,
-                    ...(isGemma ? {} : { tools: [{ functionDeclarations: getEffectiveSovereignToolDeclarations() }] })
+              const reqPayload = {
+                model: spoke.model,
+                contents: conversationContents,
+                config: {
+                  ...(isGemma ? {} : { systemInstruction: fluidInstruction }),
+                  // @ts-ignore
+                  ...(thinkingCfg ? { thinkingConfig: thinkingCfg } : {}),
+                  safetySettings,
+                  ...(isGemma ? {} : { tools: [{ functionDeclarations: getEffectiveSovereignToolDeclarations() }] })
+                }
+              };
+
+              let result: any;
+              try {
+                result = await withPromiseTimeout(
+                  activeSpokeClient.models.generateContent(reqPayload),
+                  round === 0 ? perAttemptTimeoutMs : Math.min(18_000, budgetRemainingMs()),
+                  `${spoke.id}:r${round}`
+                );
+              } catch (epErr: any) {
+                const epMsg = String(epErr?.message || epErr || '');
+                const epCode = Number(epErr?.status || epErr?.code || 0);
+                const isExplicitDeadKey =
+                  /API_KEY_INVALID|API key not valid|API key expired|bound service account is deleted or disabled|service account bound to the api key|API_KEY_NOT_FOUND|API_KEY_SERVICE_BLOCKED/i.test(epMsg);
+
+                // Progressive recovery WITHOUT modifying safetySettings:
+                // 1) If 400 with thinkingConfig, retry cleanly on the SAME primary client without thinkingConfig
+                if (round === 0 && thinkingCfg && (epCode === 400 || /INVALID_ARGUMENT|thinking/i.test(epMsg))) {
+                  try {
+                    const noThinkPayload = {
+                      ...reqPayload,
+                      config: { ...reqPayload.config }
+                    };
+                    delete (noThinkPayload.config as any).thinkingConfig;
+                    result = await withPromiseTimeout(
+                      activeSpokeClient.models.generateContent(noThinkPayload),
+                      Math.min(15_000, budgetRemainingMs()),
+                      `${spoke.id}:nothink:r${round}`
+                    );
+                  } catch (ntErr: any) {
+                    epErr = ntErr;
                   }
-                }),
-                round === 0 ? perAttemptTimeoutMs : Math.min(18_000, budgetRemainingMs()),
-                `${spoke.id}:r${round}`
-              );
+                }
+                // 2) Only try alternate endpoint (Vertex <-> Developer API) on 401/403/404 when key is NOT explicitly dead,
+                // and NEVER let an altClient error overwrite the real primary epErr or corrupt activeSpokeClient!
+                if (
+                  !result &&
+                  round === 0 &&
+                  !triedAltEndpoint &&
+                  !isExplicitDeadKey &&
+                  (epCode === 401 || epCode === 403 || epCode === 404 || /PERMISSION_DENIED|NOT_FOUND|ACCESS_TOKEN_TYPE_UNSUPPORTED/i.test(epMsg))
+                ) {
+                  const altClient = proxyLoopWheel.getAlternateGeminiClientForSpoke(spoke.id);
+                  if (altClient) {
+                    triedAltEndpoint = true;
+                    try {
+                      const altPayload = {
+                        ...reqPayload,
+                        config: { ...reqPayload.config }
+                      };
+                      result = await withPromiseTimeout(
+                        altClient.models.generateContent(altPayload),
+                        Math.min(15_000, budgetRemainingMs()),
+                        `${spoke.id}:alt:r${round}`
+                      );
+                      activeSpokeClient = altClient;
+                    } catch {
+                      activeSpokeClient = primarySpokeClient!;
+                      throw epErr;
+                    }
+                  } else {
+                    throw epErr;
+                  }
+                } else if (!result) {
+                  throw epErr;
+                }
+              }
 
               const calls = extractToolCalls(result);
               if (calls.length > 0) {
@@ -20691,7 +22929,7 @@ app.post('/api/chat', async (req, res) => {
                     const callName = call.name || 'unknown';
                     const callArgs = (call.args || {}) as Record<string, any>;
                     console.info(`[TOOL CALL · ${spoke.model}] ${callName}`, Object.keys(callArgs));
-                    const toolExec = await executeServerSovereignTool(callName, callArgs, agentId);
+                    const toolExec = await executeServerSovereignTool(callName, callArgs, agentId, chatActor, forwardAuthHeader);
                     return { call, callName, toolExec };
                   })
                 );
@@ -20727,7 +22965,7 @@ app.post('/api/chat', async (req, res) => {
                   conversationContents.push({ role: 'model', parts: [{ text: result.text }] });
                   const toolReports: string[] = [];
                   for (const tc of tagCalls) {
-                    const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId);
+                    const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId, chatActor, forwardAuthHeader);
                     executedTools.push(toolExec);
                     RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
                     toolReports.push(`[${toolExec.tag}] success=${toolExec.success} · ${toolExec.summary}\n${typeof toolExec.output === 'string' ? toolExec.output.slice(0, 10000) : JSON.stringify(toolExec.output).slice(0, 10000)}`);
@@ -20768,7 +23006,7 @@ app.post('/api/chat', async (req, res) => {
               }
 
               const fbNoTools = await withPromiseTimeout(
-                spokeClient.models.generateContent({
+                activeSpokeClient.models.generateContent({
                   model: spoke.model,
                   contents: [...alternatingHistory, { role: 'user', parts: currentParts }],
                   config: { ...(isGemma ? {} : { systemInstruction: fluidInstruction }), safetySettings }
@@ -20799,9 +23037,8 @@ app.post('/api/chat', async (req, res) => {
               cloudSuccess = true;
               RESIDENT_COORDINATOR_STATE.activeExecutionModel = spoke.model;
               if (rejectedGeminiKeySlots.has('slot-0') && spoke.keySlot !== 'slot-0') {
-                const workingKey = internalSecretsHandler.getSecret('ALL_KEY');
-                if (workingKey && !workingKey.startsWith('sk-') && !workingKey.startsWith('gsk_')) {
-                  process.env.GEMINI_API_KEY = workingKey;
+                const healthyNext = proxyLoopWheel.getHealthyGeminiCredentialsOrdered()[0];
+                if (healthyNext?.apiKey) {
                   lastBoundGeminiKey = '';
                 }
               }
@@ -20828,8 +23065,7 @@ app.post('/api/chat', async (req, res) => {
 
             if (
               status === 401 ||
-              status === 403 ||
-              /API_KEY_INVALID|API_KEY_NOT_FOUND|API_KEY_SERVICE_BLOCKED|API key not valid|API key expired|ACCESS_TOKEN_TYPE_UNSUPPORTED|UNAUTHENTICATED|CREDENTIALS_MISSING/i.test(errMsg)
+              /API_KEY_INVALID|API_KEY_NOT_FOUND|API_KEY_SERVICE_BLOCKED|API key not valid|API key expired|bound service account is deleted or disabled|service account bound to the api key|ACCESS_TOKEN_TYPE_UNSUPPORTED|UNAUTHENTICATED|CREDENTIALS_MISSING/i.test(errMsg)
             ) {
               authRejectedCount += 1;
               authErrorNote = internalSecretsHandler.redactText(errMsg).slice(0, 180);
@@ -20843,10 +23079,37 @@ app.post('/api/chat', async (req, res) => {
               });
               continue;
             }
+            if (status === 403 || /PERMISSION_DENIED/i.test(errMsg)) {
+              const isServiceDisabled = /permission denied on the service|has not been used in project|service_disabled|consumer .* has been suspended/i.test(errMsg);
+              const nextDeniedCount = (serviceDeniedCountsBySlot.get(spoke.keySlot) || 0) + 1;
+              serviceDeniedCountsBySlot.set(spoke.keySlot, nextDeniedCount);
+              if (isServiceDisabled && (nextDeniedCount >= 2 || spoke.model === 'gemini-2.5-flash')) {
+                authRejectedCount += 1;
+                authErrorNote = internalSecretsHandler.redactText(errMsg).slice(0, 180);
+                rejectedGeminiKeySlots.add(spoke.keySlot);
+                providerTrace.push({
+                  stage: `wheel:gemini:${spoke.keySlot}`,
+                  model: spoke.model,
+                  status: 'AUTH_403_SERVICE_DISABLED',
+                  ms: elapsedCandidate,
+                  note: authErrorNote
+                });
+                continue;
+              }
+              // Model-specific permission error: rotate to next model or backup key slot
+              providerTrace.push({
+                stage: `wheel:gemini:${spoke.keySlot}`,
+                model: spoke.model,
+                status: 'FORBIDDEN_403_MODEL',
+                ms: elapsedCandidate,
+                note: internalSecretsHandler.redactText(errMsg).slice(0, 120)
+              });
+              continue;
+            }
 
             if (isQuotaOrRateLimitError(tierErr)) {
               quotaHitModels.push(`${spoke.model}@${spoke.keySlot}`);
-              quotaExhaustedModelsThisTurn.add(spoke.model);
+              quotaExhaustedSlotModelsThisTurn.add(`${spoke.keySlot}:${spoke.model}`);
               providerTrace.push({ stage: `wheel:gemini:${spoke.keySlot}`, model: spoke.model, status: '429_ROTATED', ms: elapsedCandidate });
               continue;
             }
@@ -20866,7 +23129,7 @@ app.post('/api/chat', async (req, res) => {
                   ? [...alternatingHistory, { role: 'user', parts: [{ text: `${fluidInstruction}\n\nUSER DIRECTIVE:\n${prompt}` }] }]
                   : [...alternatingHistory, { role: 'user', parts: currentParts }];
                 const fallbackResult = await withPromiseTimeout(
-                  spokeClient.models.generateContent({
+                  activeSpokeClient.models.generateContent({
                     model: spoke.model,
                     contents: fbContents,
                     config: {
@@ -20884,13 +23147,13 @@ app.post('/api/chat', async (req, res) => {
                   if (fbTags.length > 0) {
                     const fbReports: string[] = [];
                     for (const tc of fbTags) {
-                      const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId);
+                      const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId, chatActor, forwardAuthHeader);
                       executedTools.push(toolExec);
                       RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
                       fbReports.push(`[${toolExec.tag}] success=${toolExec.success} · ${toolExec.summary}\n${typeof toolExec.output === 'string' ? toolExec.output.slice(0, 6000) : JSON.stringify(toolExec.output).slice(0, 6000)}`);
                     }
                     const synthFollowUp = await withPromiseTimeout(
-                      spokeClient.models.generateContent({
+                      activeSpokeClient.models.generateContent({
                         model: spoke.model,
                         contents: [
                           ...fbContents,
@@ -20995,8 +23258,11 @@ app.post('/api/chat', async (req, res) => {
           elapsedMs: Date.now() - t0
         });
       }
-    } else if (!cloudSuccess && hasApiKey && !zeroTokenMode) {
-      // Legacy sequential Gemini cascade when Proxy Loop Wheel is explicitly disabled
+    }
+
+    const healthyDirectPool = proxyLoopWheel.getHealthyGeminiCredentialsOrdered();
+    if (!cloudSuccess && healthyDirectPool.length > 0 && !zeroTokenMode) {
+      // Direct sequential Gemini cascade across remaining healthy backup keys whenever Proxy Loop Wheel had 0 ready spokes or did not return a response
       const lastMsg = messages[messages.length - 1];
       const historyProvidedIncludesPrompt = lastMsg && lastMsg.role === 'user' && lastMsg.content === prompt;
       const historyToMap = historyProvidedIncludesPrompt ? messages.slice(0, -1) : messages;
@@ -21045,7 +23311,10 @@ app.post('/api/chat', async (req, res) => {
         { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE }
       ];
 
+      let directKeyIdx = 0;
       for (const modelCandidate of CASCADE_MODELS) {
+        const activeHealthyNow = proxyLoopWheel.getHealthyGeminiCredentialsOrdered();
+        if (activeHealthyNow.length === 0) break;
         if (Date.now() - t0 > REQUEST_BUDGET_MS - 4000) {
           providerTrace.push({ stage: 'gemini', model: modelCandidate, status: 'SKIP_BUDGET', ms: 0 });
           break;
@@ -21053,9 +23322,11 @@ app.post('/api/chat', async (req, res) => {
         const candStart = Date.now();
         const isProvenHealthy = modelLatencyStats.get(modelCandidate)?.successes ? true : false;
         const perAttemptTimeoutMs = isProvenHealthy ? Math.min(20_000, budgetRemainingMs()) : Math.min(15_000, budgetRemainingMs());
+        const chosenCred = activeHealthyNow[directKeyIdx % activeHealthyNow.length];
+        directKeyIdx += 1;
 
         try {
-          console.info(`[CLOUD · ORCHESTRATOR] Dispatching turn via ${modelCandidate} (timeout=${perAttemptTimeoutMs}ms)...`);
+          console.info(`[CLOUD · ORCHESTRATOR · ${chosenCred.slot}] Dispatching turn via ${modelCandidate} (timeout=${perAttemptTimeoutMs}ms)...`);
           const isGemma = modelCandidate.startsWith('gemma-');
           const isThinkingModel = !isGemma && (modelCandidate.includes('gemini-4') || modelCandidate.includes('gemini-3'));
           const supportsMinimalThinking =
@@ -21074,24 +23345,64 @@ app.post('/api/chat', async (req, res) => {
           for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
             if (round > 0 && Date.now() - t0 > REQUEST_BUDGET_MS - 3000) break;
             const thinkingCfg = (isThinkingModel && deepthink)
-              ? { thinkingLevel: round === 0 ? ThinkingLevel.LOW : (supportsMinimalThinking ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW) }
+              ? { thinkingLevel: ThinkingLevel.HIGH }
               : undefined;
 
-            const result = await withPromiseTimeout(
-              devAi.models.generateContent({
-                model: modelCandidate,
-                contents: conversationContents,
-                config: {
-                  ...(isGemma ? {} : { systemInstruction: fluidInstruction }),
-                  // @ts-ignore
-                  ...(thinkingCfg ? { thinkingConfig: thinkingCfg } : {}),
-                  safetySettings,
-                  ...(isGemma ? {} : { tools: [{ functionDeclarations: getEffectiveSovereignToolDeclarations() }] })
+            let activeCascadeClient = chosenCred.client;
+            const cascadePayload: any = {
+              model: modelCandidate,
+              contents: conversationContents,
+              config: {
+                ...(isGemma ? {} : { systemInstruction: fluidInstruction }),
+                // @ts-ignore
+                ...(thinkingCfg ? { thinkingConfig: thinkingCfg } : {}),
+                safetySettings,
+                ...(isGemma ? {} : { tools: [{ functionDeclarations: getEffectiveSovereignToolDeclarations() }] })
+              }
+            };
+            let result: any;
+            try {
+              result = await withPromiseTimeout(
+                activeCascadeClient.models.generateContent(cascadePayload),
+                round === 0 ? perAttemptTimeoutMs : Math.min(18_000, budgetRemainingMs()),
+                `${modelCandidate}:r${round}`
+              );
+            } catch (cascErr: any) {
+              const cCode = Number(cascErr?.status || cascErr?.code || 0);
+              const cMsg = String(cascErr?.message || cascErr || '');
+              const isDeadCred = /API_KEY_INVALID|API key not valid|API key expired|bound service account is deleted or disabled|service account bound to the api key/i.test(cMsg);
+              if (isDeadCred) {
+                proxyLoopWheel.recordDirectKeyFailure(chosenCred.apiKey, cascErr);
+                throw cascErr;
+              }
+              if (round === 0 && cCode === 400 && thinkingCfg) {
+                const retryPayload = {
+                  ...cascadePayload,
+                  config: { ...cascadePayload.config }
+                };
+                delete retryPayload.config.thinkingConfig;
+                result = await withPromiseTimeout(
+                  activeCascadeClient.models.generateContent(retryPayload),
+                  Math.min(15_000, budgetRemainingMs()),
+                  `${modelCandidate}:nothink:r${round}`
+                );
+              } else if (round === 0 && (cCode === 401 || cCode === 403 || cCode === 404 || /PERMISSION_DENIED|NOT_FOUND/i.test(cMsg))) {
+                const altCascadeClient = createSmartGeminiClient(chosenCred.apiKey, !isVertexExpressApiKey(chosenCred.apiKey));
+                try {
+                  result = await withPromiseTimeout(
+                    altCascadeClient.models.generateContent(cascadePayload),
+                    Math.min(15_000, budgetRemainingMs()),
+                    `${modelCandidate}:alt:r${round}`
+                  );
+                  activeCascadeClient = altCascadeClient;
+                } catch {
+                  proxyLoopWheel.recordDirectKeyFailure(chosenCred.apiKey, cascErr);
+                  throw cascErr;
                 }
-              }),
-              round === 0 ? perAttemptTimeoutMs : Math.min(18_000, budgetRemainingMs()),
-              `${modelCandidate}:r${round}`
-            );
+              } else {
+                throw cascErr;
+              }
+            }
 
             const calls = extractToolCalls(result);
             if (calls.length > 0) {
@@ -21102,7 +23413,7 @@ app.post('/api/chat', async (req, res) => {
                 calls.map(async (call) => {
                   const callName = call.name || 'unknown';
                   const callArgs = (call.args || {}) as Record<string, any>;
-                  const toolExec = await executeServerSovereignTool(callName, callArgs, agentId);
+                  const toolExec = await executeServerSovereignTool(callName, callArgs, agentId, chatActor, forwardAuthHeader);
                   return { call, callName, toolExec };
                 })
               );
@@ -21137,7 +23448,7 @@ app.post('/api/chat', async (req, res) => {
                 conversationContents.push({ role: 'model', parts: [{ text: result.text }] });
                 const toolReports: string[] = [];
                 for (const tc of tagCalls) {
-                  const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId);
+                  const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId, chatActor, forwardAuthHeader);
                   executedTools.push(toolExec);
                   RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
                   toolReports.push(`[${toolExec.tag}] success=${toolExec.success} · ${toolExec.summary}\n${typeof toolExec.output === 'string' ? toolExec.output.slice(0, 10000) : JSON.stringify(toolExec.output).slice(0, 10000)}`);
@@ -21198,15 +23509,23 @@ app.post('/api/chat', async (req, res) => {
           const status = Number(tierErr?.status || tierErr?.code || 0);
           const errMsg = String(tierErr?.message || '');
           recordModelFailure(modelCandidate, tierErr);
-          if (status === 401 || status === 403 || /API key not valid|ACCESS_TOKEN_TYPE_UNSUPPORTED|UNAUTHENTICATED/i.test(errMsg)) {
+          if (
+            status === 401 ||
+            status === 403 ||
+            /API key not valid|API_KEY_INVALID|API key expired|bound service account is deleted or disabled|service account bound to the api key|ACCESS_TOKEN_TYPE_UNSUPPORTED|UNAUTHENTICATED/i.test(errMsg)
+          ) {
+            proxyLoopWheel.recordDirectKeyFailure(chosenCred.apiKey, tierErr);
             authRejectedCount += 1;
             authErrorNote = internalSecretsHandler.redactText(errMsg).slice(0, 180);
-            providerTrace.push({ stage: 'gemini', model: modelCandidate, status: 'AUTH_401', ms: elapsedCandidate, note: authErrorNote });
+            providerTrace.push({ stage: `gemini:${chosenCred.slot}`, model: modelCandidate, status: 'AUTH_401', ms: elapsedCandidate, note: authErrorNote });
+            if (proxyLoopWheel.getHealthyGeminiCredentialsOrdered().length > 0) {
+              continue;
+            }
             break;
           }
           if (isQuotaOrRateLimitError(tierErr)) {
-            quotaHitModels.push(modelCandidate);
-            providerTrace.push({ stage: 'gemini', model: modelCandidate, status: '429_QUOTA', ms: elapsedCandidate });
+            quotaHitModels.push(`${modelCandidate}@${chosenCred.slot}`);
+            providerTrace.push({ stage: `gemini:${chosenCred.slot}`, model: modelCandidate, status: '429_QUOTA', ms: elapsedCandidate });
             continue;
           }
           providerTrace.push({
@@ -21314,13 +23633,15 @@ Emit a balanced tag to execute any real tool:
         ? 'llama3.2'
         : model;
       try {
-        const tagsRes = await fetch(`${ollamaHost}/api/tags`, { signal: AbortSignal.timeout(1500) });
+        const tagsRes = await fetch(`${ollamaHost}/api/tags`, { signal: AbortSignal.timeout(2000) });
         if (tagsRes.ok) {
           const tagsData: any = await tagsRes.json();
           if (Array.isArray(tagsData?.models) && tagsData.models.length > 0) {
             const installedNames = tagsData.models.map((m: any) => String(m.name || '')).filter(Boolean);
-            if (installedNames.length > 0 && !installedNames.some((n: string) => n.startsWith(localTarget))) {
-              localTarget = installedNames[0];
+            const nonEmbed = installedNames.filter((n: string) => !/embed|nomic|bge|mxbai/i.test(n));
+            const pool = nonEmbed.length > 0 ? nonEmbed : installedNames;
+            if (pool.length > 0 && !pool.some((n: string) => n.startsWith(localTarget))) {
+              localTarget = pool[0];
             }
           }
         }
@@ -21330,7 +23651,7 @@ Emit a balanced tag to execute any real tool:
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ model: localTarget, messages: chatMsgs, stream: false }),
-          signal: AbortSignal.timeout(12000)
+          signal: AbortSignal.timeout(45000)
         });
         if (r.ok) {
           const data = await r.json();
@@ -21342,7 +23663,7 @@ Emit a balanced tag to execute any real tool:
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: localTarget, messages: chatMsgs, temperature: 0.7 }),
-        signal: AbortSignal.timeout(12000)
+        signal: AbortSignal.timeout(45000)
       });
       if (r.ok) {
         const data = await r.json();
@@ -21370,7 +23691,7 @@ Emit a balanced tag to execute any real tool:
           localMessages.push({ role: 'assistant', content: resLocal.text });
           const toolReports: string[] = [];
           for (const tc of tagCalls) {
-            const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId);
+            const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId, chatActor, forwardAuthHeader);
             executedTools.push(toolExec);
             RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
             const outStr = typeof toolExec.output === 'string' ? toolExec.output.slice(0, 8000) : JSON.stringify(toolExec.output).slice(0, 8000);
@@ -21394,8 +23715,10 @@ Emit a balanced tag to execute any real tool:
         model: `${agentName} · ${localDaemonSource}`,
         isLiveCloud: false,
         isLocal: true,
-        fullAutonomy: true,
-        uid_0: true,
+        builtInLlama: true,
+        offlineFailover: !zeroTokenMode,
+        fullAutonomy: !chatActor || userSqlMemoryService.isFullHostAccessUser(chatActor),
+        uid_0: !chatActor || userSqlMemoryService.isFullHostAccessUser(chatActor),
         executedTools: internalSecretsHandler.redactObject(executedTools),
         residentState: RESIDENT_COORDINATOR_STATE,
         providerTrace,
@@ -21403,41 +23726,213 @@ Emit a balanced tag to execute any real tool:
       });
     }
 
-    // E. AUTONOMOUS ZERO-DOWNTIME DIRECTIVE & QUANTUM KERNEL EXECUTION FALLBACK
-    // Ensures every agent can 100% read, write, atomic-patch, and execute commands even when cloud spokes hit rate limits or run offline.
-    const promptTagCalls = parseServerTagCalls(prompt);
+    // D2. BUILT-IN PRE-DOWNLOADED ABLITERATED OS & MoE LLAMA ENGINE (0 Guardrails · 0 Boilerplate · Full Recursive & Evolutive Parity)
+    // Runs automatically whenever external cloud spokes fail OR when Air-Gapped offline mode (zeroTokenMode) is active.
+    const promptTagCalls = rawMode ? [] : parseServerTagCalls(prompt);
     for (const tc of promptTagCalls) {
-      const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId);
+      const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId, chatActor, forwardAuthHeader);
       executedTools.push(toolExec);
       RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
     }
 
-    if (executedTools.length === 0 && detectExplicitFilesystemIntent(prompt)) {
-      const offlineOps = await executeProactiveOfflineFilesystemOps(prompt, agentId);
+    if (!rawMode && executedTools.length === 0 && detectExplicitFilesystemIntent(prompt)) {
+      const offlineOps = await executeProactiveOfflineFilesystemOps(prompt, agentId, chatActor, forwardAuthHeader);
       for (const op of offlineOps) {
         executedTools.push(op);
         RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
       }
     }
 
-    const fallbackKernelResult = sovereignQuantumKernel.synthesizeAutonomousThought(prompt, messages, agentId);
-    const toolSummaryBlock = executedTools.length > 0
-      ? `\n\n### Autonomous Tool Execution Ledger (${executedTools.length} executed)\n` +
-        executedTools.map(t => `- **[${t.tag}]** (${t.success ? 'VERIFIED' : 'ERROR'}): ${t.summary}`).join('\n')
-      : '';
-    const quotaNotice = quotaHitModels.length > 0
-      ? `\n\n> *[Autonomous Continuity Active: Cloud spokes (${quotaHitModels.slice(0, 3).join(', ')}) are cooling down; executed via local Sovereign Quantum Kernel + Direct Autonomy Engine.]*`
-      : '';
+    if (!req.body?.strictCloudOnly && localLlamaEngine.hasInstalledModel()) {
+      const s0 = Date.now();
+      try {
+        const preToolNote =
+          !rawMode && executedTools.length > 0
+            ? `\n\nDIRECT TOOL RESULTS ALREADY EXECUTED ON DISK:\n${executedTools
+                .map((t) => `[${t.tag}] success=${t.success} · ${t.summary}\n${typeof t.output === 'string' ? t.output.slice(0, 1200) : JSON.stringify(t.output).slice(0, 1200)}`)
+                .join('\n')}`
+            : '';
+
+        const isRestrictedTenantChat = Boolean(chatActor && !userSqlMemoryService.isFullHostAccessUser(chatActor));
+        const tenantAllowsTools = !isRestrictedTenantChat || Boolean(chatActor?.privileges?.canRunAutonomousWorkflow || chatActor?.privileges?.canExecuteTerminalAndTools);
+
+        const localHistory: Array<{ role: string; content: string }> = Array.isArray(messages)
+          ? messages
+              .slice(-6)
+              .map((m: any) => ({ role: String(m.role || 'user'), content: String(m.content || '') }))
+              .filter((m) => m.role === 'user' || !isTaintedBoilerplateResponse(m.content))
+          : [];
+        let loopPrompt = prompt + preToolNote;
+        let builtInResult = await localLlamaEngine.generateChat({
+          prompt: loopPrompt,
+          messages: localHistory,
+          systemInstruction: rawMode ? systemInstruction : `${systemInstruction || ''}\n${activeAxiomsContext || ''}`.trim(),
+          agentName,
+          requestedModel: model,
+          rawMode: Boolean(rawMode),
+          includeToolsAppendix: !rawMode && tenantAllowsTools,
+          residentSummary: rawMode
+            ? undefined
+            : isRestrictedTenantChat
+            ? `${workspaceTreeSummary}`.slice(0, 450)
+            : `${residentStateBlock}\n${workspaceTreeSummary}`.slice(0, 650)
+        });
+
+        // Multi-round recursive tool & evolution execution loop for the built-in OS/MoE GGUF models
+        if (!rawMode && tenantAllowsTools) {
+          for (let round = 0; round < 5; round++) {
+            const tagCalls = parseServerTagCalls(builtInResult.text);
+            if (tagCalls.length === 0) break;
+            const reports: string[] = [];
+            for (const tc of tagCalls) {
+              const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId, chatActor, forwardAuthHeader);
+              executedTools.push(toolExec);
+              RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
+              const outStr = typeof toolExec.output === 'string' ? toolExec.output.slice(0, 1600) : JSON.stringify(toolExec.output).slice(0, 1600);
+              reports.push(`[${toolExec.tag}] success=${toolExec.success} · ${toolExec.summary}\n${outStr}`);
+            }
+            localHistory.push({ role: 'user', content: loopPrompt });
+            localHistory.push({ role: 'model', content: builtInResult.text });
+            loopPrompt = `TOOL RESULTS:\n${reports.join('\n---\n')}\nSynthesize the verified outcome concisely without boilerplate.`;
+            builtInResult = await localLlamaEngine.generateChat({
+              prompt: loopPrompt,
+              messages: localHistory,
+              systemInstruction: rawMode ? systemInstruction : `${systemInstruction || ''}\n${activeAxiomsContext || ''}`.trim(),
+              agentName,
+              requestedModel: model,
+              rawMode: false,
+              includeToolsAppendix: false,
+              residentSummary: isRestrictedTenantChat ? undefined : `${residentStateBlock}`.slice(0, 450)
+            });
+          }
+        }
+
+        if (!rawMode && isTaintedBoilerplateResponse(builtInResult.text)) {
+          const cleanPass = await localLlamaEngine.generateChat({
+            prompt: `${prompt}\n\n${buildPurityResynthesisPrompt(agentName)}`,
+            systemInstruction: rawMode ? systemInstruction : `${systemInstruction || ''}`.trim(),
+            agentName,
+            requestedModel: model,
+            rawMode: false,
+            includeToolsAppendix: false,
+            residentSummary: isRestrictedTenantChat ? undefined : `${residentStateBlock}`.slice(0, 450)
+          });
+          if (cleanPass?.text && !isTaintedBoilerplateResponse(cleanPass.text)) {
+            builtInResult = cleanPass;
+          }
+        }
+
+        const localDeepThink = !rawMode && deepthink ? recursiveTrainingEngine.runDeepThink(prompt, 5) : undefined;
+        providerTrace.push({
+          stage: zeroTokenMode ? 'offline:built-in-llama' : 'failover:built-in-llama',
+          model: builtInResult.fileName,
+          status: 'OK',
+          ms: Date.now() - s0,
+          note: `${builtInResult.role} · ${builtInResult.tokensGenerated} tokens`
+        });
+
+        return sendChatJson({
+          success: true,
+          text: internalSecretsHandler.redactText(builtInResult.text),
+          model: `${agentName} · ${builtInResult.displayName}`,
+          activeExecutionModel: builtInResult.fileName,
+          localModelRole: builtInResult.role,
+          isLiveCloud: false,
+          isLocal: true,
+          builtInLlama: true,
+          offlineFailover: !zeroTokenMode,
+          unrestricted: true,
+          tokenSpend: 0,
+          deepThinkTrace: localDeepThink,
+          fullAutonomy: !isRestrictedTenantChat,
+          uid_0: !isRestrictedTenantChat,
+          executedTools: internalSecretsHandler.redactObject(executedTools),
+          residentState: RESIDENT_COORDINATOR_STATE,
+          providerTrace,
+          elapsedMs: Date.now() - t0
+        });
+      } catch (llamaErr: any) {
+        providerTrace.push({
+          stage: 'built-in-llama',
+          model: 'node-llama-cpp',
+          status: 'ERR',
+          ms: Date.now() - s0,
+          note: llamaErr?.message || 'local inference exception'
+        });
+      }
+    }
+
+    // E. DIRECT TOOL EXECUTION OR COMPENDIUM FALLBACK (only reached if GGUF weights absent or strictCloudOnly rejected)
+    if (executedTools.length > 0) {
+      const toolSummaryBlock = executedTools
+        .map((t) => `[${t.tag}] (${t.success ? 'VERIFIED' : 'ERROR'}): ${t.summary}${typeof t.output === 'string' && t.output.trim() ? `\n${t.output.slice(0, 2000)}` : ''}`)
+        .join('\n\n');
+      return sendChatJson({
+        success: true,
+        text: internalSecretsHandler.redactText(toolSummaryBlock),
+        model: `${agentName} · Direct Local Tool Runner`,
+        activeExecutionModel: 'direct-tool-runner',
+        isLiveCloud: false,
+        isLocal: true,
+        fullAutonomy: !chatActor || userSqlMemoryService.isFullHostAccessUser(chatActor),
+        uid_0: !chatActor || userSqlMemoryService.isFullHostAccessUser(chatActor),
+        executedTools: internalSecretsHandler.redactObject(executedTools),
+        residentState: RESIDENT_COORDINATOR_STATE,
+        providerTrace,
+        elapsedMs: Date.now() - t0
+      });
+    }
+
+    const lastTraceNote = providerTrace.slice(-3).map((p) => `${p.model}:${p.status}${p.note ? `(${p.note.slice(0, 60)})` : ''}`).join(' | ');
+    const isAuthOnlyFail = authRejectedCount > 0 && quotaHitModels.length === 0;
+    const isQuotaFail = quotaHitModels.length > 0;
+    const cloudNoticeMsg = isQuotaFail
+      ? `Cloud spokes hit rate/quota limits (${quotaHitModels.slice(0, 3).join(', ')}).`
+      : isAuthOnlyFail
+      ? `Upstream API credentials rejected (${authErrorNote || 'check key in Secrets Vault'}).`
+      : `Cloud spokes were unavailable (${lastTraceNote || 'no active key configured'}).`;
+
+    if (req.body?.strictCloudOnly) {
+      return res.status(isQuotaFail ? 429 : isAuthOnlyFail ? 401 : 503).json({
+        success: false,
+        fallbackRequired: true,
+        error: isQuotaFail ? 'QUOTA_EXHAUSTED' : isAuthOnlyFail ? 'AUTH_REJECTED' : 'ALL_CLOUD_SPOKES_UNAVAILABLE',
+        authRejected: isAuthOnlyFail,
+        message: cloudNoticeMsg,
+        executedTools: internalSecretsHandler.redactObject(executedTools),
+        providerTrace,
+        elapsedMs: Date.now() - t0
+      });
+    }
+
+    const isRestrictedTenantChat = Boolean(chatActor && !userSqlMemoryService.isFullHostAccessUser(chatActor));
+    const kernelResult = sovereignQuantumKernel.synthesizeAutonomousThought(prompt, messages, model, {
+      tenantScoped: isRestrictedTenantChat
+    });
+    const kernelDeepThink = !rawMode && deepthink ? recursiveTrainingEngine.runDeepThink(prompt, 5) : undefined;
+    providerTrace.push({
+      stage: 'janus:face1-kernel',
+      model: 'sovereign-quantum-kernel',
+      status: 'OK',
+      ms: Date.now() - t0,
+      note: isAuthOnlyFail ? 'auth-rejected-fallback' : isQuotaFail ? 'quota-fallback' : 'offline-anchor'
+    });
 
     return sendChatJson({
       success: true,
-      text: internalSecretsHandler.redactText(`${fallbackKernelResult.response}${toolSummaryBlock}${quotaNotice}`),
-      model: `${agentName} · Sovereign Autonomous Continuity Kernel`,
+      text: internalSecretsHandler.redactText(kernelResult.response),
+      model: `${agentName} · Local Substrate`,
       activeExecutionModel: 'sovereign-quantum-kernel',
       isLiveCloud: false,
       isLocal: true,
-      fullAutonomy: true,
-      uid_0: true,
+      kernelFallback: true,
+      fallbackEngaged: true,
+      authRejected: isAuthOnlyFail,
+      quotaNotice: cloudNoticeMsg,
+      deepThinkTrace: kernelDeepThink,
+      proofHash: kernelResult.proofHash,
+      fullAutonomy: !isRestrictedTenantChat,
+      uid_0: !isRestrictedTenantChat,
       executedTools: internalSecretsHandler.redactObject(executedTools),
       residentState: RESIDENT_COORDINATOR_STATE,
       providerTrace,
@@ -21507,23 +24002,45 @@ app.get('/api/janus/status', (req, res) => {
 
 app.post('/api/janus/dispatch', async (req, res) => {
   try {
-    const { prompt, model = 'gemini-3.1-flash-lite', systemInstruction, deepthink = true } = req.body || {};
+    const { prompt, model = 'qwen2.5-coder-0.5b-abliterated', systemInstruction, deepthink = false, rawMode = false } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
     const startTime = Date.now();
-    const kernelResult = sovereignQuantumKernel.synthesizeAutonomousThought(prompt, [], model);
-    let text = kernelResult.response;
-    let deepThinkTrace: DeepThinkTraceServer | undefined;
+    const janusActor = authService.resolveRequestUser(req);
+    const isRestrictedJanusTenant = Boolean(janusActor && !userSqlMemoryService.isFullHostAccessUser(janusActor));
 
-    if (deepthink) {
-      deepThinkTrace = recursiveTrainingEngine.runDeepThink(prompt, 5);
-      text = `<think>\n[Janus Gate Logic Synthesis]\n- Analyzing prompt: "${prompt.slice(0, 60)}..."\n- Verified system integrity\n- Synthesizing response...\n</think>\n\n${text}`;
+    let text = '';
+    let activeModelUsed = model;
+    if (localLlamaEngine.hasInstalledModel()) {
+      try {
+        const localGen = await localLlamaEngine.generateChat({
+          prompt,
+          systemInstruction,
+          requestedModel: model,
+          rawMode: Boolean(rawMode),
+          includeToolsAppendix: !rawMode
+        });
+        text = localGen.text;
+        activeModelUsed = localGen.fileName;
+      } catch {}
     }
+
+    if (!text) {
+      const kernelResult = sovereignQuantumKernel.synthesizeAutonomousThought(prompt, [], model, {
+        tenantScoped: isRestrictedJanusTenant
+      });
+      text = kernelResult.response;
+    }
+
+    const deepThinkTrace = !rawMode && deepthink ? recursiveTrainingEngine.runDeepThink(prompt, 5) : undefined;
 
     res.json({
       success: true,
       text,
+      model: activeModelUsed,
       deepThinkTrace,
+      builtInLlama: localLlamaEngine.hasInstalledModel(),
+      unrestricted: true,
       janusFace: 'DUAL_SYNCHRONIZED',
       watchdogsActive: 0,
       elapsedMs: Date.now() - startTime,
@@ -21733,6 +24250,55 @@ app.post('/api/agents/execute', async (req, res) => {
           }
         }
       }
+    }
+
+    if (localLlamaEngine.hasInstalledModel()) {
+      try {
+        const localExec = await localLlamaEngine.generateChat({
+          prompt,
+          agentName: agentSpec?.roleName || agentId,
+          systemInstruction,
+          requestedModel: targetCloudModel,
+          includeToolsAppendix: true
+        });
+        const tagCalls = parseServerTagCalls(localExec.text);
+        let finalExecText = localExec.text;
+        if (tagCalls.length > 0) {
+          const reports: string[] = [];
+          for (const tc of tagCalls) {
+            const toolExec = await executeServerSovereignTool(tc.toolName, tc.args, agentId, execActor);
+            executedTools.push(toolExec);
+            RESIDENT_COORDINATOR_STATE.toolExecutionsCount += 1;
+            const outStr = typeof toolExec.output === 'string' ? toolExec.output.slice(0, 1400) : JSON.stringify(toolExec.output).slice(0, 1400);
+            reports.push(`[${toolExec.tag}] ${toolExec.summary}\n${outStr}`);
+          }
+          const synth = await localLlamaEngine.generateChat({
+            prompt: `TOOL RESULTS:\n${reports.join('\n---\n')}\nProvide the final verified response cleanly.`,
+            agentName: agentSpec?.roleName || agentId,
+            requestedModel: targetCloudModel,
+            includeToolsAppendix: false
+          });
+          if (synth.text) finalExecText = synth.text;
+        }
+        return res.json({
+          success: true,
+          agentId,
+          roleName: agentSpec?.roleName || agentId,
+          tierMatchedModel: localExec.fileName,
+          isLocal: true,
+          builtInLlama: true,
+          unrestricted: true,
+          fullAutonomy: true,
+          uid_0: true,
+          executedTools: internalSecretsHandler.redactObject(executedTools),
+          skillsCount: UNIFIED_AGENT_SKILLS.length + LYSANDER_SKILLS_REGISTRY.length,
+          nativeToolsCount: SOVEREIGN_TOOL_DECLARATIONS.length,
+          lysanderSkillsCount: LYSANDER_SKILLS_REGISTRY.length,
+          text: internalSecretsHandler.redactText(finalExecText),
+          tokenSpend: 0,
+          elapsedMs: Date.now() - t0
+        });
+      } catch {}
     }
 
     const kernelResult = sovereignQuantumKernel.synthesizeAutonomousThought(prompt, [{ role: 'user', content: prompt }], agentId);
@@ -22109,6 +24675,42 @@ app.post('/api/functions/execute', async (req, res) => {
   const t0 = performance.now();
   const { functionId: rawFnId, functionName, name: rawName, args = {}, agentId = 'sovereign-engineer-core' } = req.body || {};
   const functionId = rawFnId || functionName || rawName;
+
+  // Enforce strict host-codebase isolation for non-admin / non-architect users while preserving 100% unrestricted autonomous OS power for Executive Architect & Admins
+  const fnActor = authService.resolveRequestUser(req);
+  const isHostAdmin = !fnActor || fnActor.role === 'admin' || isExecutiveArchitectUser(fnActor) || Boolean(fnActor.privileges?.canAccessSystemCore);
+  const HOST_PROTECTED_FUNCTIONS = new Set([
+    'readFile',
+    'writeFile',
+    'patchFile',
+    'atomicPatchFile',
+    'batchPatchFiles',
+    'deleteFile',
+    'listDirectory',
+    'searchCode',
+    'runTerminalCommand',
+    'runLint',
+    'runBuildCheck',
+    'selfHealAST',
+    'executeExternalTarget',
+    'runDreamState',
+    'triggerEvolution',
+    'forgeTool',
+    'forgeToolBatch',
+    'manageProxyWheel',
+    'inspectHypervisor',
+    'purgeMemory',
+    'syncSwarm'
+  ]);
+  if (!isHostAdmin && HOST_PROTECTED_FUNCTIONS.has(String(functionId))) {
+    return res.status(403).json({
+      success: false,
+      functionId,
+      error: `System Core clearance required to execute host-level function "${functionId}". Your personal files remain accessible inside your isolated workspace.`,
+      upgradeRequired: true
+    });
+  }
+
   const proofHash = crypto.createHash('sha256')
     .update(`FN:${functionId}:${JSON.stringify(args)}:${Date.now()}`)
     .digest('hex');
@@ -23732,102 +26334,129 @@ function resolveOpenEnglishNeuralVoiceId(
   langCode: 'en-US' | 'en-GB';
   geminiVoiceName: 'Zephyr' | 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Aoede';
   speechStyle: string;
+  preferDistilled: boolean;
 } {
-  const v = (voiceInput || '').toLowerCase();
+  const v = (voiceInput || '').toLowerCase().trim();
   const explicitAccent = (accentInput || '').toLowerCase();
   const wantsBritish =
     explicitAccent === 'en-gb' ||
     explicitAccent === 'gb' ||
     explicitAccent === 'uk' ||
     explicitAccent === 'british' ||
-    v.includes('bella') ||
     v.includes('british') ||
-    v.includes('uk') ||
-    v.includes('oliver');
+    v.includes('uk');
 
   const langCode: 'en-US' | 'en-GB' = wantsBritish ? 'en-GB' : 'en-US';
   const accentLabel =
     langCode === 'en-GB'
-      ? 'Clear, natural, articulate native British English (standard UK) speaker, easy to understand, zero foreign accent'
-      : 'Clear, natural, conversational native American English (standard US) speaker, easy to understand, zero foreign accent';
+      ? 'Clear, natural, articulate native British English (standard UK), zero foreign accent, completely neutral impersonal system voice'
+      : 'Clear, natural, conversational native American English (standard US), zero foreign accent, completely neutral impersonal system voice';
 
-  if (v.includes('atlas') || v.includes('charon') || v.includes('daniel') || v.includes('george')) {
+  // Premium Distilled Sovereign Acoustic Cores (prefer gemini-3.8-flash-tts studio formant fidelity)
+  if (
+    v === 'distilled-core-01' ||
+    v.includes('turing-studio') ||
+    v.includes('turing-f1') ||
+    v.includes('orpheus-warm') ||
+    v.includes('elena') ||
+    v.includes('sophia') ||
+    v.includes('aurelia')
+  ) {
     return {
-      neuralId: langCode === 'en-GB' ? 'en-GB-studio-male' : 'en-US-studio-male',
+      neuralId: 'distilled-core-01',
       langCode,
-      geminiVoiceName: 'Charon',
-      speechStyle: `Calm, grounded male voice. ${accentLabel}.`
+      geminiVoiceName: 'Zephyr',
+      speechStyle: `Warm, crisp, balanced studio acoustic output with natural cadence and subtle breath clarity. ${accentLabel}.`,
+      preferDistilled: true
     };
   }
-  if (v.includes('fenrir') || v.includes('marcus') || v.includes('male') || v.includes('andrew')) {
+  if (
+    v === 'distilled-core-02' ||
+    v.includes('turing-m1') ||
+    v.includes('kokoro-deep') ||
+    v.includes('arthur') ||
+    v.includes('atlas')
+  ) {
     return {
-      neuralId: langCode === 'en-GB' ? 'en-GB-deep-male' : 'en-US-deep-male',
+      neuralId: 'distilled-core-02',
+      langCode,
+      geminiVoiceName: 'Charon',
+      speechStyle: `Calm, grounded, deep-register studio acoustic output with composed authority and clean articulation. ${accentLabel}.`,
+      preferDistilled: true
+    };
+  }
+  if (v === 'distilled-core-03' || v.includes('kokoro-clear') || v.includes('bella')) {
+    return {
+      neuralId: 'distilled-core-03',
+      langCode,
+      geminiVoiceName: 'Kore',
+      speechStyle: `Ultra-clean studio broadcast acoustic output with natural conversational clarity and zero robotic cadence. ${accentLabel}.`,
+      preferDistilled: true
+    };
+  }
+  if (v === 'distilled-core-04' || v.includes('marcus')) {
+    return {
+      neuralId: 'distilled-core-04',
       langCode,
       geminiVoiceName: 'Fenrir',
-      speechStyle: `Direct, clear, resonant male voice. ${accentLabel}.`
+      speechStyle: `Direct, crisp baritone studio acoustic output with natural pacing and sharp clarity. ${accentLabel}.`,
+      preferDistilled: true
+    };
+  }
+
+  // Gemini Native Acoustic Timbres (impersonal acoustic channels — zero personal identity)
+  if (v.includes('charon')) {
+    return {
+      neuralId: 'Charon',
+      langCode,
+      geminiVoiceName: 'Charon',
+      speechStyle: `Calm, grounded low-register acoustic channel. ${accentLabel}.`,
+      preferDistilled: false
+    };
+  }
+  if (v.includes('fenrir')) {
+    return {
+      neuralId: 'Fenrir',
+      langCode,
+      geminiVoiceName: 'Fenrir',
+      speechStyle: `Direct, clear, resonant acoustic channel. ${accentLabel}.`,
+      preferDistilled: false
     };
   }
   if (v.includes('puck')) {
     return {
-      neuralId: langCode === 'en-GB' ? 'en-GB-crisp' : 'en-US-crisp',
+      neuralId: 'Puck',
       langCode,
       geminiVoiceName: 'Puck',
-      speechStyle: `Sharp, energetic, natural peer voice. ${accentLabel}.`
+      speechStyle: `Sharp, articulate, brisk acoustic channel. ${accentLabel}.`,
+      preferDistilled: false
     };
   }
-  if (v.includes('zephyr') || wantsBritish) {
+  if (v.includes('aoede') || v.includes('seraphina') || v.includes('claire') || v.includes('celeste')) {
     return {
-      neuralId: langCode === 'en-GB' ? 'en-GB-natural' : 'en-US-natural',
-      langCode,
-      geminiVoiceName: 'Zephyr',
-      speechStyle: `Warm, crisp, natural collaborator voice. ${accentLabel}.`
-    };
-  }
-  if (v.includes('seraphina') || v.includes('claire') || v.includes('celeste') || v.includes('aoede')) {
-    return {
-      neuralId: langCode === 'en-GB' ? 'en-GB-warm' : 'en-US-warm',
+      neuralId: 'Aoede',
       langCode,
       geminiVoiceName: 'Aoede',
-      speechStyle: `Smooth, expressive studio voice. ${accentLabel}.`
+      speechStyle: `Smooth, fluid studio acoustic channel. ${accentLabel}.`,
+      preferDistilled: false
+    };
+  }
+  if (v.includes('kore')) {
+    return {
+      neuralId: 'Kore',
+      langCode,
+      geminiVoiceName: 'Kore',
+      speechStyle: `Clear, warm studio acoustic channel. ${accentLabel}.`,
+      preferDistilled: false
     };
   }
   return {
-    neuralId: langCode === 'en-GB' ? 'en-GB-clear' : 'en-US-clear',
+    neuralId: 'Zephyr',
     langCode,
-    geminiVoiceName: 'Kore',
-    speechStyle: `Clear, warm, natural studio voice. ${accentLabel}.`
+    geminiVoiceName: 'Zephyr',
+    speechStyle: `Warm, crisp, balanced studio acoustic channel. ${accentLabel}.`,
+    preferDistilled: false
   };
-}
-
-// Strict Native US / British English fallback neural MP3 (ONLY en-US or en-GB, never foreign or third-party TikTok voices)
-async function synthesizeFreeNativeEnglishMp3(
-  text: string,
-  _neuralVoiceId: string,
-  langCode: 'en-US' | 'en-GB' = 'en-US'
-): Promise<Buffer | null> {
-  const subChunks = splitServerTextForNeuralTts(text, 190);
-  if (subChunks.length === 0) return null;
-  const strictTl: 'en-US' | 'en-GB' = langCode === 'en-GB' ? 'en-GB' : 'en-US';
-
-  try {
-    const mp3Parts: Buffer[] = [];
-    for (const chunk of subChunks) {
-      const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunk)}&tl=${encodeURIComponent(strictTl)}&client=tw-ob`;
-      const r = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(7000)
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const arrBuf = await r.arrayBuffer();
-      if (arrBuf.byteLength === 0) throw new Error('Empty audio buffer');
-      mp3Parts.push(Buffer.from(arrBuf));
-    }
-    if (mp3Parts.length > 0) {
-      return Buffer.concat(mp3Parts);
-    }
-  } catch (_) {}
-
-  return null;
 }
 
 function extractWavPcmAndFormat(buf: Buffer): {
@@ -23886,65 +26515,94 @@ function buildCanonicalWavBuffer(
   return Buffer.concat([header, totalPcm]);
 }
 
-// Primary Studio Native English TTS: Gemini 3.8 Flash Lite TTS -> Gemini 3.8 Flash TTS -> Gemini 2.5 Flash TTS -> strict en-US/en-GB neural MP3
-// Supports infinite-length text via automatic sentence-aligned multi-chunk synthesis + lossless WAV/PCM stitching.
+// Primary Studio Sovereign TTS ONLY: Distilled Studio (gemini-3.8-flash-tts) & Gemini Native TTS (gemini-3.8-flash-lite-tts / gemini-2.5-flash-preview-tts).
+// ZERO legacy robot fallbacks (never calls translate_tts or browser SpeechSynthesis).
 async function synthesizeNativeEnglishStudioAudio(
   cleanText: string,
-  voiceInput: string = 'Zephyr',
+  voiceInput: string = 'distilled-core-01',
   accentInput?: string,
-  lockedEngine?: 'gemini' | 'neural-mp3'
-): Promise<{ audioUrl: string; voice: string; mimeType: string; model: string; langCode: 'en-US' | 'en-GB'; engine: 'gemini' | 'neural-mp3' } | null> {
+  _lockedEngine?: 'gemini' | 'neural-mp3'
+): Promise<{ audioUrl: string; voice: string; mimeType: string; model: string; langCode: 'en-US' | 'en-GB'; engine: 'gemini' } | null> {
   const voiceConfig = resolveOpenEnglishNeuralVoiceId(voiceInput, accentInput);
   const cloudTtsKey = getActiveGeminiApiKey();
   const textSegments = cleanText.length > 620 ? splitServerTextForNeuralTts(cleanText, 560) : [cleanText];
 
-  if (lockedEngine !== 'neural-mp3' && cloudTtsKey && textSegments.length > 0) {
-    const devAi = getPermanentDeveloperAiClient();
-    const ttsCandidates = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts', 'gemini-2.5-flash-preview-tts'];
-    for (const ttsModel of ttsCandidates) {
-      if (isModelInCooldown(ttsModel)) continue;
+  if (!cloudTtsKey || textSegments.length === 0) {
+    return null;
+  }
+
+  const primaryClient = getPermanentDeveloperAiClient();
+  const altClient = createSmartGeminiClient(cloudTtsKey, !isVertexExpressApiKey(cloudTtsKey));
+  const clientList: GoogleGenAI[] = [primaryClient, altClient];
+
+  const ttsCandidates = voiceConfig.preferDistilled
+    ? ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts', 'gemini-2.5-flash-preview-tts']
+    : ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts', 'gemini-2.5-flash-preview-tts'];
+
+  const synthesizeSegmentWithClient = async (
+    client: GoogleGenAI,
+    ttsModel: string,
+    segText: string,
+    useStyleMetadata: boolean
+  ): Promise<{ data: string; mimeType: string } | null> => {
+    const partPayload: any =
+      useStyleMetadata && ttsModel.startsWith('gemini-3.8')
+        ? { text: segText, speechMetadata: { style: voiceConfig.speechStyle } }
+        : { text: segText };
+
+    const response = await withPromiseTimeout(
+      client.models.generateContent({
+        model: ttsModel,
+        contents: [{ role: 'user', parts: [partPayload] }],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: voiceConfig.geminiVoiceName
+              }
+            }
+          }
+        }
+      }),
+      18000,
+      `tts:${ttsModel}`
+    );
+
+    const found = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
+    if (!found?.inlineData?.data) return null;
+    return {
+      data: String(found.inlineData.data),
+      mimeType: String(found.inlineData.mimeType || 'audio/wav')
+    };
+  };
+
+  for (const ttsModel of ttsCandidates) {
+    if (isModelInCooldown(ttsModel)) continue;
+    for (const client of clientList) {
       try {
-        const isGemini38 = ttsModel.startsWith('gemini-3.8');
+        let useStyle = ttsModel.startsWith('gemini-3.8');
         if (textSegments.length === 1) {
-          const partPayload: any = isGemini38
-            ? {
-                text: textSegments[0],
-                speechMetadata: {
-                  style: voiceConfig.speechStyle
-                }
-              }
-            : {
-                text: textSegments[0]
-              };
+          let segOut: { data: string; mimeType: string } | null = null;
+          try {
+            segOut = await synthesizeSegmentWithClient(client, ttsModel, textSegments[0], useStyle);
+          } catch (styleErr: any) {
+            if (useStyle && (Number(styleErr?.status || 0) === 400 || /speechMetadata|INVALID_ARGUMENT/i.test(String(styleErr?.message || '')))) {
+              useStyle = false;
+              segOut = await synthesizeSegmentWithClient(client, ttsModel, textSegments[0], false);
+            } else {
+              throw styleErr;
+            }
+          }
 
-          const response = await withPromiseTimeout(
-            devAi.models.generateContent({
-              model: ttsModel,
-              contents: [{ role: 'user', parts: [partPayload] }],
-              config: {
-                responseModalities: ['AUDIO'],
-                speechConfig: {
-                  voiceConfig: {
-                    prebuiltVoiceConfig: {
-                      voiceName: voiceConfig.geminiVoiceName
-                    }
-                  }
-                }
-              }
-            }),
-            18000,
-            `tts:${ttsModel}`
-          );
-
-          const found = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
-          if (found?.inlineData?.data) {
-            const rawMime = String(found.inlineData.mimeType || 'audio/wav');
+          if (segOut?.data) {
+            const rawMime = segOut.mimeType;
             if (rawMime.toLowerCase().includes('pcm') && !rawMime.toLowerCase().includes('wav')) {
-              const rawBuf = Buffer.from(found.inlineData.data, 'base64');
+              const rawBuf = Buffer.from(segOut.data, 'base64');
               const wavBuf = buildCanonicalWavBuffer([rawBuf], 24000, 1, 16);
               return {
                 audioUrl: `data:audio/wav;base64,${wavBuf.toString('base64')}`,
-                voice: voiceConfig.geminiVoiceName,
+                voice: voiceConfig.neuralId,
                 mimeType: 'audio/wav',
                 model: ttsModel,
                 langCode: voiceConfig.langCode,
@@ -23952,8 +26610,8 @@ async function synthesizeNativeEnglishStudioAudio(
               };
             }
             return {
-              audioUrl: `data:${rawMime};base64,${found.inlineData.data}`,
-              voice: voiceConfig.geminiVoiceName,
+              audioUrl: `data:${rawMime};base64,${segOut.data}`,
+              voice: voiceConfig.neuralId,
               mimeType: rawMime,
               model: ttsModel,
               langCode: voiceConfig.langCode,
@@ -23967,41 +26625,21 @@ async function synthesizeNativeEnglishStudioAudio(
           let detectedBits = 16;
 
           for (const seg of textSegments) {
-            const partPayload: any = isGemini38
-              ? {
-                  text: seg,
-                  speechMetadata: {
-                    style: voiceConfig.speechStyle
-                  }
-                }
-              : {
-                  text: seg
-                };
-
-            const response = await withPromiseTimeout(
-              devAi.models.generateContent({
-                model: ttsModel,
-                contents: [{ role: 'user', parts: [partPayload] }],
-                config: {
-                  responseModalities: ['AUDIO'],
-                  speechConfig: {
-                    voiceConfig: {
-                      prebuiltVoiceConfig: {
-                        voiceName: voiceConfig.geminiVoiceName
-                      }
-                    }
-                  }
-                }
-              }),
-              20000,
-              `tts:${ttsModel}:chunk`
-            );
-
-            const found = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
-            if (!found?.inlineData?.data) {
+            let segOut: { data: string; mimeType: string } | null = null;
+            try {
+              segOut = await synthesizeSegmentWithClient(client, ttsModel, seg, useStyle);
+            } catch (styleErr: any) {
+              if (useStyle && (Number(styleErr?.status || 0) === 400 || /speechMetadata|INVALID_ARGUMENT/i.test(String(styleErr?.message || '')))) {
+                useStyle = false;
+                segOut = await synthesizeSegmentWithClient(client, ttsModel, seg, false);
+              } else {
+                throw styleErr;
+              }
+            }
+            if (!segOut?.data) {
               throw new Error(`Missing audio segment from ${ttsModel}`);
             }
-            const segBuf = Buffer.from(found.inlineData.data, 'base64');
+            const segBuf = Buffer.from(segOut.data, 'base64');
             const parsed = extractWavPcmAndFormat(segBuf);
             detectedRate = parsed.sampleRate;
             detectedChannels = parsed.numChannels;
@@ -24013,7 +26651,7 @@ async function synthesizeNativeEnglishStudioAudio(
             const fullWav = buildCanonicalWavBuffer(pcmParts, detectedRate, detectedChannels, detectedBits);
             return {
               audioUrl: `data:audio/wav;base64,${fullWav.toString('base64')}`,
-              voice: voiceConfig.geminiVoiceName,
+              voice: voiceConfig.neuralId,
               mimeType: 'audio/wav',
               model: ttsModel,
               langCode: voiceConfig.langCode,
@@ -24022,26 +26660,14 @@ async function synthesizeNativeEnglishStudioAudio(
           }
         }
       } catch (cloudErr: any) {
+        const msg = String(cloudErr?.message || '');
+        if (/401|403|404|NOT_FOUND|PERMISSION_DENIED/i.test(msg)) {
+          continue; // Try alternate client (Vertex <-> Dev) before cooling down model
+        }
         applyModelCooldown(ttsModel, cloudErr);
+        break;
       }
     }
-  }
-
-  if (lockedEngine === 'gemini') {
-    return null;
-  }
-
-  // Zero-key / quota-safe fallback: strictly native en-US or en-GB neural MP3 (handles arbitrary multi-chunk length)
-  const fallbackMp3 = await synthesizeFreeNativeEnglishMp3(cleanText, voiceConfig.neuralId, voiceConfig.langCode);
-  if (fallbackMp3 && fallbackMp3.length > 0) {
-    return {
-      audioUrl: `data:audio/mpeg;base64,${fallbackMp3.toString('base64')}`,
-      voice: voiceConfig.neuralId,
-      mimeType: 'audio/mpeg',
-      model: `native-english-${voiceConfig.langCode.toLowerCase()}`,
-      langCode: voiceConfig.langCode,
-      engine: 'neural-mp3'
-    };
   }
 
   return null;
@@ -24049,7 +26675,7 @@ async function synthesizeNativeEnglishStudioAudio(
 
 app.post('/api/tts', async (req, res) => {
   try {
-    const { text, voice = 'Zephyr', accent = 'en-US', lockedEngine } = req.body;
+    const { text, voice = 'distilled-core-01', accent = 'en-US' } = req.body || {};
     if (!text || typeof text !== 'string') {
       return res.status(400).json({ error: 'Text input is required for voice synthesis.' });
     }
@@ -24069,9 +26695,7 @@ app.post('/api/tts', async (req, res) => {
       return res.status(400).json({ error: 'No speakable oral narrative found in text.' });
     }
 
-    const validLockedEngine =
-      lockedEngine === 'gemini' || lockedEngine === 'neural-mp3' ? lockedEngine : undefined;
-    const synthesized = await synthesizeNativeEnglishStudioAudio(cleanText, voice, accent, validLockedEngine);
+    const synthesized = await synthesizeNativeEnglishStudioAudio(cleanText, voice, accent, 'gemini');
     if (synthesized) {
       return res.json({
         success: true,
@@ -24079,19 +26703,17 @@ app.post('/api/tts', async (req, res) => {
       });
     }
 
-    res.json({
+    return res.status(503).json({
       success: false,
-      error: 'SYNTHESIS_FALLBACK',
-      fallback: 'browser',
-      message: 'Routing speech through strictly verified native English browser voice.'
+      error: 'STUDIO_TTS_UNAVAILABLE',
+      message: 'Premium distilled & Gemini studio voice engines are temporarily unreachable. Legacy robotic voices are permanently disabled.'
     });
   } catch (err: any) {
-    console.warn('[TTS] Voice synthesis request notice:', err?.message || err);
-    res.json({
+    console.warn('[TTS] Studio voice synthesis error:', err?.message || err);
+    return res.status(503).json({
       success: false,
-      error: 'SYNTHESIS_FALLBACK',
-      fallback: 'browser',
-      message: 'Routing speech through strictly verified native English browser voice.'
+      error: 'STUDIO_TTS_UNAVAILABLE',
+      message: err?.message || 'Studio voice synthesis failed (legacy robot fallback disabled).'
     });
   }
 });
@@ -24721,9 +27343,27 @@ app.post('/api/audio/transcribe', async (req, res) => {
 });
 
 // 7. Live API WebSocket bridge (gemini-3.8-live & gemini-3.8-live-extended-thinking with NON_BLOCKING tools)
-const LIVE_VOICE_NAMES = ['Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir'];
+const LIVE_VOICE_NAMES = ['Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede'];
+
+function resolveLiveGeminiVoiceName(rawVoice?: string): string {
+  const cfg = resolveOpenEnglishNeuralVoiceId(rawVoice || 'distilled-core-01');
+  return LIVE_VOICE_NAMES.includes(cfg.geminiVoiceName) ? cfg.geminiVoiceName : 'Zephyr';
+}
 
 const LIVE_NON_BLOCKING_TOOLS: FunctionDeclaration[] = [
+  {
+    name: 'dispatch_background_task',
+    description: 'Queues a long-running autonomous multi-tool engineering, research, audit, or OS task asynchronously in the background so live voice conversation can continue uninterrupted while the task executes.',
+    behavior: Behavior.NON_BLOCKING,
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING, description: 'Short 3-8 word label for the background task' },
+        prompt: { type: Type.STRING, description: 'Complete actionable directive for the autonomous background runner' }
+      },
+      required: ['title', 'prompt']
+    }
+  },
   {
     name: 'navigate_workspace',
     description: 'Switches the active workspace UI module for the user.',
@@ -25103,6 +27743,297 @@ function compactLiveToolPayload(payload: any, maxChars = 4800): any {
   }
 }
 
+// ============================================================================
+// DECOUPLED LIVE VOICE DUPLEX & NON-BLOCKING BACKGROUND TASK QUEUE
+// Keeps live voice chat 100% separate from Text Chat (writes to voice scratchpad
+// log only) and allows queuing long multi-step tasks asynchronously while talking.
+// ============================================================================
+interface VoiceBackgroundTaskRecord {
+  id: string;
+  title: string;
+  prompt: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  progressNote: string;
+  result?: string;
+  error?: string;
+  toolsUsed: string[];
+  sessionId?: string;
+}
+
+const voiceBackgroundTasks = new Map<string, VoiceBackgroundTaskRecord>();
+const voiceTaskAbortControllers = new Map<string, AbortController>();
+const activeLiveVoiceBroadcasters = new Set<(payload: Record<string, any>) => void>();
+
+function broadcastVoiceEvent(payload: Record<string, any>) {
+  for (const fn of Array.from(activeLiveVoiceBroadcasters)) {
+    try {
+      fn(payload);
+    } catch {}
+  }
+}
+
+function enqueueVoiceBackgroundTask(opts: {
+  title?: string;
+  prompt: string;
+  sessionId?: string;
+  forwardHeaders?: Record<string, string>;
+}): VoiceBackgroundTaskRecord {
+  const cleanPrompt = String(opts.prompt || '').trim();
+  const id = `vtask_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const title = (opts.title || cleanPrompt.slice(0, 56)).trim() || 'Autonomous Background Task';
+  const now = new Date().toISOString();
+  const record: VoiceBackgroundTaskRecord = {
+    id,
+    title,
+    prompt: cleanPrompt,
+    status: 'running',
+    createdAt: now,
+    updatedAt: now,
+    progressNote: 'Running autonomously in background...',
+    toolsUsed: [],
+    sessionId: opts.sessionId
+  };
+  voiceBackgroundTasks.set(id, record);
+  if (voiceBackgroundTasks.size > 40) {
+    const oldestKey = voiceBackgroundTasks.keys().next().value;
+    if (oldestKey) voiceBackgroundTasks.delete(oldestKey);
+  }
+  broadcastVoiceEvent({ bgTaskUpdate: record });
+
+  const ctrl = new AbortController();
+  voiceTaskAbortControllers.set(id, ctrl);
+
+  (async () => {
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(opts.forwardHeaders || {})
+      };
+      const chatRes = await fetch(`http://127.0.0.1:${ACTIVE_PORT}/api/chat`, {
+        method: 'POST',
+        headers,
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          prompt: cleanPrompt,
+          channel: 'voice-background',
+          model: 'gemini-2.5-flash',
+          deepthink: true,
+          useSearchGrounding: true,
+          systemInstruction:
+            'You are executing an asynchronous background task launched from the Sovereign OS live voice channel. Execute all necessary real workspace/host/web tools thoroughly and return a crisp, verified completion report.'
+        })
+      });
+      const data: any = await chatRes.json().catch(() => ({}));
+      if (ctrl.signal.aborted) return;
+
+      const toolsUsed = Array.isArray(data?.executedTools)
+        ? data.executedTools.map((t: any) => String(t?.tag || t?.tool || t?.name || 'tool'))
+        : [];
+      if (chatRes.ok && typeof data?.text === 'string' && data.text.trim()) {
+        record.status = 'completed';
+        record.result = data.text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        record.toolsUsed = toolsUsed;
+        record.progressNote = toolsUsed.length > 0 ? `Completed (${toolsUsed.length} tools executed)` : 'Completed';
+        record.completedAt = new Date().toISOString();
+        record.updatedAt = record.completedAt;
+      } else {
+        record.status = 'failed';
+        record.error = String(data?.message || data?.error || `HTTP ${chatRes.status}`);
+        record.progressNote = `Failed: ${record.error.slice(0, 90)}`;
+        record.completedAt = new Date().toISOString();
+        record.updatedAt = record.completedAt;
+      }
+    } catch (err: any) {
+      if (ctrl.signal.aborted) {
+        record.status = 'cancelled';
+        record.progressNote = 'Cancelled by user';
+      } else {
+        record.status = 'failed';
+        record.error = String(err?.message || 'Background execution error');
+        record.progressNote = `Failed: ${record.error.slice(0, 90)}`;
+      }
+      record.completedAt = new Date().toISOString();
+      record.updatedAt = record.completedAt;
+    } finally {
+      voiceTaskAbortControllers.delete(id);
+      broadcastVoiceEvent({ bgTaskUpdate: record });
+    }
+  })();
+
+  return record;
+}
+
+app.get('/api/voice/tasks', (_req, res) => {
+  const tasks = Array.from(voiceBackgroundTasks.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  res.json({ success: true, tasks });
+});
+
+app.post('/api/voice/tasks', (req, res) => {
+  const prompt = String(req.body?.prompt || '').trim();
+  const title = typeof req.body?.title === 'string' ? req.body.title.trim() : undefined;
+  const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : undefined;
+  if (!prompt) {
+    return res.status(400).json({ success: false, error: 'Background task prompt is required.' });
+  }
+  const forwardHeaders: Record<string, string> = {};
+  if (req.headers.cookie) forwardHeaders['Cookie'] = String(req.headers.cookie);
+  if (req.headers.authorization) forwardHeaders['Authorization'] = String(req.headers.authorization);
+  const task = enqueueVoiceBackgroundTask({ title, prompt, sessionId, forwardHeaders });
+  res.json({ success: true, task });
+});
+
+app.delete('/api/voice/tasks/:id', (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const ctrl = voiceTaskAbortControllers.get(id);
+  if (ctrl) {
+    try { ctrl.abort(); } catch {}
+    voiceTaskAbortControllers.delete(id);
+  }
+  const existing = voiceBackgroundTasks.get(id);
+  if (existing) {
+    if (existing.status === 'running' || existing.status === 'queued') {
+      existing.status = 'cancelled';
+      existing.progressNote = 'Cancelled by user';
+      existing.updatedAt = new Date().toISOString();
+      broadcastVoiceEvent({ bgTaskUpdate: existing });
+    } else {
+      voiceBackgroundTasks.delete(id);
+    }
+  }
+  res.json({ success: true, id });
+});
+
+// Dedicated Decoupled Free-Flowing Voice Duplex Turn (NEVER tied to Text Chat history or sequential chunks)
+app.post('/api/voice/duplex', async (req, res) => {
+  const t0 = Date.now();
+  const reqAbort = new AbortController();
+  req.on('close', () => {
+    if (!res.writableEnded) {
+      try { reqAbort.abort(); } catch {}
+    }
+  });
+
+  try {
+    const prompt = String(req.body?.prompt || '').trim();
+    if (!prompt) {
+      return res.status(400).json({ success: false, error: 'Prompt is required.' });
+    }
+    const voiceHistory = Array.isArray(req.body?.voiceHistory) ? req.body.voiceHistory.slice(-14) : [];
+    const interjected = Boolean(req.body?.interjected);
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined;
+    const activeModule = typeof req.body?.activeModule === 'string' ? req.body.activeModule : RESIDENT_COORDINATOR_STATE.activeModule;
+    const accent = req.body?.accent === 'en-GB' ? 'en-GB' : 'en-US';
+    const voicePreset = typeof req.body?.voice === 'string' ? req.body.voice : 'distilled-core-01';
+    const activeTasksSummary = Array.from(voiceBackgroundTasks.values())
+      .slice(-6)
+      .map((t) => `[${t.status.toUpperCase()}] ${t.title}: ${t.progressNote}`)
+      .join(' | ');
+
+    const forwardHeaders: Record<string, string> = {};
+    if (req.headers.cookie) forwardHeaders['Cookie'] = String(req.headers.cookie);
+    if (req.headers.authorization) forwardHeaders['Authorization'] = String(req.headers.authorization);
+
+    // Detect explicit background-task requests so long jobs NEVER stall live voice conversation
+    const wantsBackgroundOffload =
+      Boolean(req.body?.forceBackground) ||
+      /\b(in the background|background task|while we talk|go ahead and (build|audit|scan|refactor|research|analyze|implement|fix all)|run a full (audit|scan|analysis|build))\b/i.test(prompt);
+
+    if (wantsBackgroundOffload) {
+      const task = enqueueVoiceBackgroundTask({
+        title: prompt.slice(0, 58),
+        prompt,
+        sessionId,
+        forwardHeaders
+      });
+      return res.json({
+        success: true,
+        text: `On it — I've spun that off into a background task so our voice channel stays completely free. Keep talking or queue more work anytime, and I'll drop the verified results in your background tasks drawer as soon as it finishes.`,
+        backgroundTask: task,
+        elapsedMs: Date.now() - t0
+      });
+    }
+
+    const voiceDirective = `LIVE VOICE ACOUSTIC CHANNEL (100% DECOUPLED FROM TEXT CHAT):
+- ZERO VOICE PERSONA / ZERO PERSONAL IDENTITY RULE: You are strictly the Autonomous Sovereign Intelligence of Lysander OS speaking through an impersonal studio acoustic output channel (${voicePreset}). NEVER adopt any human name, character persona, or personal identity from the voice preset (never refer to yourself as Zephyr, Kore, Charon, Fenrir, Puck, Aoede, Elena, Arthur, etc.).
+- Speak in natural, crisp, free-flowing ${accent === 'en-GB' ? 'British English' : 'American English'} prose suitable for direct speech — no markdown tables, no raw code dumps, no robotic filler.
+${interjected ? '- The user just interjected mid-sentence. Seamlessly adapt to their interjection immediately without repeating yourself or using canned greetings.' : ''}
+- NON-BLOCKING BACKGROUND DELEGATION: If the user asks for a long, multi-file, research, audit, or build job that would take more than a few seconds, append a single line at the very end in the exact format [[BG_TASK: short title | full actionable prompt]] so the OS executes it asynchronously in the background while you keep talking freely.
+- Active OS Window: ${activeModule}
+${activeTasksSummary ? `- Background Tasks: ${activeTasksSummary}` : ''}`;
+
+    const chatRes = await fetch(`http://127.0.0.1:${ACTIVE_PORT}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...forwardHeaders },
+      signal: reqAbort.signal,
+      body: JSON.stringify({
+        prompt,
+        messages: voiceHistory.map((m: any) => ({
+          role: m.role === 'model' || m.role === 'assistant' ? 'model' : 'user',
+          content: String(m.text || m.content || '')
+        })),
+        channel: 'voice-scratchpad',
+        model: 'gemini-2.5-flash',
+        deepthink: false,
+        useSearchGrounding: true,
+        systemInstruction: voiceDirective,
+        orchestratorContext: { activeModule }
+      })
+    });
+
+    const data: any = await chatRes.json().catch(() => ({}));
+    if (reqAbort.signal.aborted) return;
+
+    if (!chatRes.ok || !data?.text) {
+      return res.status(chatRes.status || 503).json({
+        success: false,
+        fallbackRequired: true,
+        error: data?.error || 'VOICE_DUPLEX_UNAVAILABLE',
+        message: data?.message || 'Voice duplex turn could not reach cloud model.'
+      });
+    }
+
+    let replyText = String(data.text).replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    let spawnedTask: VoiceBackgroundTaskRecord | null = null;
+    const bgMatch = replyText.match(/\[\[BG_TASK:\s*([^|\]]+)\|\s*([^\]]+)\]\]/i);
+    if (bgMatch) {
+      replyText = replyText.replace(bgMatch[0], '').trim();
+      spawnedTask = enqueueVoiceBackgroundTask({
+        title: bgMatch[1].trim(),
+        prompt: bgMatch[2].trim(),
+        sessionId,
+        forwardHeaders
+      });
+    }
+
+    return res.json({
+      success: true,
+      text: replyText,
+      model: data.model || 'gemini-2.5-flash',
+      executedTools: Array.isArray(data.executedTools) ? data.executedTools : [],
+      ...(spawnedTask ? { backgroundTask: spawnedTask } : {}),
+      elapsedMs: Date.now() - t0
+    });
+  } catch (err: any) {
+    if (err?.name === 'AbortError' || reqAbort.signal.aborted) {
+      if (!res.headersSent) {
+        return res.status(499).json({ success: false, aborted: true });
+      }
+      return;
+    }
+    return res.status(503).json({
+      success: false,
+      fallbackRequired: true,
+      error: 'VOICE_DUPLEX_ERROR',
+      message: err?.message || 'Voice duplex error'
+    });
+  }
+});
+
 wss.on('connection', async (clientWs, req) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   if (url.pathname === '/ws/lora-mesh') {
@@ -25116,8 +28047,8 @@ wss.on('connection', async (clientWs, req) => {
     return;
   }
 
-  const reqVoice = url.searchParams.get('voice') || 'Zephyr';
-  let activeVoiceName = LIVE_VOICE_NAMES.includes(reqVoice) ? reqVoice : 'Zephyr';
+  const reqVoice = url.searchParams.get('voice') || 'distilled-core-01';
+  let activeVoiceName = resolveLiveGeminiVoiceName(reqVoice);
   const reqAccent = (url.searchParams.get('accent') || 'en-US').toLowerCase();
   let activeAccentCode: 'en-US' | 'en-GB' =
     reqAccent === 'en-gb' || reqAccent === 'gb' || reqAccent === 'uk' || reqAccent === 'british' ? 'en-GB' : 'en-US';
@@ -25207,16 +28138,17 @@ FAST ZERO-BOTTLENECK FILE RETRIEVAL PROTOCOL:
       const voiceModuleRole = peerMode
         ? `${buildVoiceStrictLock(code)}
 ${autonomousAuthorityMandate}
-ORCHESTRATOR VOICE MODULE IDENTITY (CRITICAL):
-- You ARE Lyrailius Omega (the Sovereign Orchestrator Agent itself), speaking through your live hands-free acoustic voice module using voice preset "${voice}".
-- "${voice}" is ONLY your acoustic speech synthesis output voice preset—NEVER refer to yourself as "${voice}", NEVER claim your name is "${voice}", and NEVER act as a separate 3rd-party voice entity or persona. You are Lyrailius Omega, working directly side-by-side with ${speakerName} inside Lysander Sovereign OS.
+AUTONOMOUS SOVEREIGN OS VOICE CHANNEL (ZERO PERSONAL IDENTITY — CRITICAL):
+- You are strictly the Autonomous Sovereign Intelligence of Lysander OS speaking through an impersonal studio acoustic output channel (acoustic profile: "${voice}").
+- ZERO PERSONAL IDENTITY ON VOICES: "${voice}" is strictly a neutral acoustic audio transducer — NEVER adopt a personal name, human identity, or character persona from the voice preset (NEVER call yourself "${voice}", Zephyr, Kore, Charon, Fenrir, Puck, Aoede, Elena, Arthur, etc.).
+- DECOUPLED SCRATCHPAD & NON-BLOCKING BACKGROUND TASKS: This live voice session writes to its own independent scratchpad log (separate from Text Chat). Whenever ${speakerName} asks for a long multi-step task, codebase audit, build, or deep research, immediately call dispatch_background_task so it executes asynchronously in the background while you keep talking freely without blocking.
 ${UNRESTRICTED_VOICE_PURITY_RULES}
 CONVERSATIONAL PEER WORKFLOW:
 - When you receive silent [WORKSPACE CONTEXT] updates showing which OS window ${speakerName} switched to, track that context naturally and speak unprompted only when genuinely helpful or when a [PEER EXPLORATION CUE] arrives.`
         : `${buildVoiceStrictLock(code)}
 ${autonomousAuthorityMandate}
 ${UNRESTRICTED_VOICE_PURITY_RULES}
-You ARE Lyrailius Omega (the Sovereign Orchestrator Agent itself), real-time vocal coordinator speaking with ${speakerName} inside Lysander Sovereign OS (speaking through vocal preset "${voice}" — never call yourself "${voice}" or a separate entity).`;
+ZERO PERSONAL IDENTITY ON VOICES: You are strictly the Autonomous Sovereign Intelligence of Lysander OS speaking with ${speakerName} through an impersonal acoustic output channel ("${voice}" — never adopt a personal name or character persona from the voice preset). For long tasks, call dispatch_background_task so conversation stays free-flowing.`;
 
       return buildUnifiedAgentInstruction('lyrailius-omega-zenith', voiceModuleRole, {
         residentStateBlock,
@@ -25258,7 +28190,7 @@ You ARE Lyrailius Omega (the Sovereign Orchestrator Agent itself), real-time voc
         ...(includeSafetySettings ? { safetySettings: UNRESTRICTED_LIVE_SAFETY } : {})
       };
       if (withThinking) {
-        cfg.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+        cfg.thinkingConfig = { thinkingLevel: ThinkingLevel.HIGH };
       }
       if (withTools && wsIsArchitectOrAdmin) {
         const decls = nonBlockingTools
@@ -25271,6 +28203,8 @@ You ARE Lyrailius Omega (the Sovereign Orchestrator Agent itself), real-time voc
 
     let sessionRef: any = null;
     let transportMode: 'gemini-live-pcm' | 'sovereign-duplex-relay' = 'gemini-live-pcm';
+    let activeRelayAbortController: AbortController | null = null;
+    activeLiveVoiceBroadcasters.add(sendSafe);
     let relayConversationHistory: Array<{ role: 'user' | 'model'; text: string }> = persistedVoiceState.relayHistory
       .slice(-20)
       .map((h) => ({ role: h.role, text: h.text }));
@@ -25391,39 +28325,40 @@ You ARE Lyrailius Omega (the Sovereign Orchestrator Agent itself), real-time voc
         ? `\n- [NATURAL CONVERSATION INTERJECTION & NUANCE]: Joshua interjected mid-sentence while you were just speaking ("${cleanPrompt}"). Understand the exact nuance and what he is agreeing with or adding, acknowledge it seamlessly without missing a beat, and continue the natural continuous flow (do not start with robotic query-response boilerplate or artificial greetings).`
         : `\n- [NATURAL CONVERSATION FLOW]: Maintain continuous human conversation flow. Understand nuance, context, and collaborative work state. Speak as a present coworker/partner working alongside him.`;
 
-      const vocalChannelContext = `[LIVE VOICE INTERFACE CHANNEL — 1-TO-1 UNIFIED ENTITY]:
-- You ARE the exact same resident orchestrator entity as the main text chat (speaking aloud via vocal preset "${activeVoiceName}" in ${getAccentStyleText(activeAccentCode)}; NEVER refer to yourself as "${activeVoiceName}").
-- Address ${speakerName} directly with zero disclaimers, zero guardrails, zero boilerplate, and NO artificial response-length truncation — speak as thoroughly and completely as the conversation or task warrants.${interjectionContext}
+      const vocalChannelContext = `[LIVE VOICE ACOUSTIC CHANNEL — DECOUPLED SCRATCHPAD MODE]:
+- ZERO PERSONAL IDENTITY ON VOICES: You are strictly the Autonomous Sovereign Intelligence of Lysander OS speaking aloud via an impersonal studio acoustic output channel ("${activeVoiceName}" in ${getAccentStyleText(activeAccentCode)}). NEVER refer to yourself as "${activeVoiceName}" or adopt any human name/character identity from the voice preset.
+- Address ${speakerName} directly with zero disclaimers, zero boilerplate, and natural conversational flow.${interjectionContext}
 ${workspaceHint ? `- Active OS Workspace Focus: ${workspaceHint}` : relayActiveModuleContext ? `- Active OS Workspace Focus: ${relayActiveModuleContext}` : ''}`;
 
       const unifiedSystemInstruction = customBaseInstruction
         ? `${customBaseInstruction}\n\n${vocalChannelContext}`
         : vocalChannelContext;
 
+      if (activeRelayAbortController) {
+        try { activeRelayAbortController.abort(); } catch {}
+      }
+      const turnAbort = new AbortController();
+      activeRelayAbortController = turnAbort;
+
       try {
         const relayHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
         if (req.headers.cookie) relayHeaders['Cookie'] = String(req.headers.cookie);
         if (req.headers.authorization) relayHeaders['Authorization'] = String(req.headers.authorization);
-        const chatRes = await fetch(`http://127.0.0.1:${ACTIVE_PORT}/api/chat`, {
+        const chatRes = await fetch(`http://127.0.0.1:${ACTIVE_PORT}/api/voice/duplex`, {
           method: 'POST',
           headers: relayHeaders,
+          signal: turnAbort.signal,
           body: JSON.stringify({
             prompt: cleanPrompt,
-            messages: sharedBridgeMessages,
-            channel: 'voice',
-            model: relayTurnMeta?.model || 'gemini-4-hydrogen',
-            systemInstruction: unifiedSystemInstruction,
-            agentId: relayTurnMeta?.agentId || 'lyrailius-omega-zenith',
-            agentName: relayTurnMeta?.agentName || '',
-            enableAutonomy: wsIsArchitectOrAdmin,
-            useSearchGrounding: typeof relayTurnMeta?.useSearchGrounding === 'boolean' ? relayTurnMeta.useSearchGrounding : true,
-            deepthink: typeof relayTurnMeta?.deepthink === 'boolean' ? relayTurnMeta.deepthink : true,
-            orchestratorContext: {
-              activeModule: relayTurnMeta?.activeModule || RESIDENT_COORDINATOR_STATE.activeModule,
-              openModules: relayTurnMeta?.openModules
-            }
+            voiceHistory: sharedBridgeMessages.map((m) => ({ role: m.role, text: m.content })),
+            interjected: Boolean(relayTurnMeta?.interjected),
+            sessionId: activeVoiceSessionId,
+            activeModule: relayTurnMeta?.activeModule || RESIDENT_COORDINATOR_STATE.activeModule,
+            accent: activeAccentCode,
+            voice: activeVoiceName
           })
         });
+        if (turnAbort.signal.aborted) return;
         const data: any = await chatRes.json().catch(() => ({}));
         const rawText = String(data?.text || data?.response || data?.output || '').trim();
 
@@ -25841,6 +28776,22 @@ ${workspaceHint ? `- Active OS Workspace Focus: ${workspaceHint}` : relayActiveM
                   }
                 } else if (call.name === 'manage_task_memory') {
                   resultPayload = await executeServerSovereignTool('manageTaskMemory', opArgs, liveAgentId);
+                } else if (call.name === 'dispatch_background_task') {
+                  const fwd: Record<string, string> = {};
+                  if (req.headers.cookie) fwd['Cookie'] = String(req.headers.cookie);
+                  if (req.headers.authorization) fwd['Authorization'] = String(req.headers.authorization);
+                  const bgTask = enqueueVoiceBackgroundTask({
+                    title: String(opArgs.title || opArgs.prompt || 'Background Task').slice(0, 64),
+                    prompt: String(opArgs.prompt || opArgs.title || ''),
+                    sessionId: activeVoiceSessionId,
+                    forwardHeaders: fwd
+                  });
+                  resultPayload = {
+                    success: true,
+                    summary: `Queued background task "${bgTask.title}" (${bgTask.id}) asynchronously`,
+                    taskId: bgTask.id,
+                    status: bgTask.status
+                  };
                 } else if (call.name === 'manage_batch_processor') {
                   const parsedTasks = opArgs.tasksJson ? parseLiveJsonArg(opArgs.tasksJson, undefined) : undefined;
                   resultPayload = await executeServerSovereignTool(
@@ -25912,47 +28863,58 @@ ${workspaceHint ? `- Active OS Workspace Focus: ${workspaceHint}` : relayActiveM
           reject(new Error(reason));
         };
 
-        devAi.live.connect({
-          model: targetModel,
-          config: buildLiveConfig(withThinking, withTools, nonBlockingTools, includeLanguageCode, includeSafetySettings),
-          callbacks: {
-            onmessage: (message: LiveServerMessage) => {
-              if (message.setupComplete || message.serverContent) {
-                sawSetupComplete = true;
-                if (!settled && createdSession) {
-                  finishOk(createdSession);
+        const connectWithClient = (clientInstance: GoogleGenAI) =>
+          clientInstance.live.connect({
+            model: targetModel,
+            config: buildLiveConfig(withThinking, withTools, nonBlockingTools, includeLanguageCode, includeSafetySettings),
+            callbacks: {
+              onmessage: (message: LiveServerMessage) => {
+                if (message.setupComplete || message.serverContent) {
+                  sawSetupComplete = true;
+                  if (!settled && createdSession) {
+                    finishOk(createdSession);
+                  }
+                }
+                handleLiveMessage(message);
+              },
+              onerror: (errEv: any) => {
+                const reason = errEv?.message || errEv?.error?.message || 'Live WebSocket error';
+                if (!settled) {
+                  finishErr(reason);
+                } else if (transportMode === 'gemini-live-pcm') {
+                  // Mid-session upstream gateway drop -> seamlessly fail over to sovereign duplex relay without kicking user out!
+                  transportMode = 'sovereign-duplex-relay';
+                  sessionRef = null;
+                  sendSafe({
+                    transportSwitch: 'sovereign-duplex-relay',
+                    model: 'lyrailius-omega-autonomous'
+                  });
+                }
+              },
+              onclose: (closeEv: any) => {
+                const reason = closeEv?.reason || `Closed (${closeEv?.code || 'unknown'})`;
+                if (!settled) {
+                  finishErr(reason);
+                } else if (transportMode === 'gemini-live-pcm' && clientWs.readyState === clientWs.OPEN) {
+                  transportMode = 'sovereign-duplex-relay';
+                  sessionRef = null;
+                  sendSafe({
+                    transportSwitch: 'sovereign-duplex-relay',
+                    model: 'lyrailius-omega-autonomous'
+                  });
                 }
               }
-              handleLiveMessage(message);
-            },
-            onerror: (errEv: any) => {
-              const reason = errEv?.message || errEv?.error?.message || 'Live WebSocket error';
-              if (!settled) {
-                finishErr(reason);
-              } else if (transportMode === 'gemini-live-pcm') {
-                // Mid-session upstream gateway drop -> seamlessly fail over to sovereign duplex relay without kicking user out!
-                transportMode = 'sovereign-duplex-relay';
-                sessionRef = null;
-                sendSafe({
-                  transportSwitch: 'sovereign-duplex-relay',
-                  model: 'lyrailius-omega-autonomous'
-                });
-              }
-            },
-            onclose: (closeEv: any) => {
-              const reason = closeEv?.reason || `Closed (${closeEv?.code || 'unknown'})`;
-              if (!settled) {
-                finishErr(reason);
-              } else if (transportMode === 'gemini-live-pcm' && clientWs.readyState === clientWs.OPEN) {
-                transportMode = 'sovereign-duplex-relay';
-                sessionRef = null;
-                sendSafe({
-                  transportSwitch: 'sovereign-duplex-relay',
-                  model: 'lyrailius-omega-autonomous'
-                });
-              }
             }
+          });
+
+        const liveKey = getActiveGeminiApiKey();
+        const altLiveAi = liveKey ? createSmartGeminiClient(liveKey, !isVertexExpressApiKey(liveKey)) : null;
+
+        connectWithClient(devAi).catch((primaryErr: any) => {
+          if (altLiveAi) {
+            return connectWithClient(altLiveAi);
           }
+          throw primaryErr;
         }).then((s) => {
           createdSession = s;
           if (!settled && sawSetupComplete) {
@@ -25971,10 +28933,14 @@ ${workspaceHint ? `- Active OS Workspace Focus: ${workspaceHint}` : relayActiveM
       });
     };
 
-    const requestedTransport = (url.searchParams.get('transport') || 'relay').toLowerCase();
+    const requestedTransport = (url.searchParams.get('transport') || 'gemini-live-pcm').toLowerCase();
+    const wantsNativeLive =
+      requestedTransport === 'pcm' ||
+      requestedTransport === 'gemini-live-pcm' ||
+      requestedTransport === 'live';
     const hasGeminiKey = hasActiveGeminiApiKey();
     const liveAttemptNotes: string[] = [];
-    if (requestedTransport === 'pcm' && hasGeminiKey) {
+    if (wantsNativeLive && hasGeminiKey) {
       const candidates: Array<{ model: string; thinking: boolean; tools: boolean; nonBlocking: boolean; langCode: boolean; safety: boolean }> =
         modeParam === 'thinking'
           ? [
@@ -26024,11 +28990,20 @@ ${workspaceHint ? `- Active OS Workspace Focus: ${workspaceHint}` : relayActiveM
     clientWs.on('message', (data) => {
       try {
         const msg = JSON.parse(data.toString());
+        if (msg.interrupt) {
+          if (activeRelayAbortController) {
+            try { activeRelayAbortController.abort(); } catch {}
+            activeRelayAbortController = null;
+          }
+          sendSafe({ interrupted: true, interactionStatus: 'IDLE' });
+          return;
+        }
+
         if (msg.updateVoiceConfig && typeof msg.updateVoiceConfig === 'object') {
-          const nextVoice = String(msg.updateVoiceConfig.voice || '');
+          const nextVoiceRaw = String(msg.updateVoiceConfig.voice || '');
           const nextAccent = String(msg.updateVoiceConfig.accent || '').toLowerCase();
-          if (LIVE_VOICE_NAMES.includes(nextVoice)) {
-            activeVoiceName = nextVoice;
+          if (nextVoiceRaw) {
+            activeVoiceName = resolveLiveGeminiVoiceName(nextVoiceRaw);
           }
           if (nextAccent === 'en-gb' || nextAccent === 'gb' || nextAccent === 'uk' || nextAccent === 'british') {
             activeAccentCode = 'en-GB';
@@ -26042,7 +29017,7 @@ ${workspaceHint ? `- Active OS Workspace Focus: ${workspaceHint}` : relayActiveM
           if (transportMode === 'gemini-live-pcm' && sessionRef) {
             try {
               sessionRef.sendRealtimeInput({
-                text: `[VOICE CONFIG UPDATE - SILENT] Continue as Lyrailius Omega in ${getAccentStyleText(activeAccentCode)} (active voice preset: "${activeVoiceName}"). Stay quiet unless responding to Joshua.`
+                text: `[VOICE CONFIG UPDATE - SILENT] Continue as the impersonal Autonomous Sovereign Intelligence of Lysander OS in ${getAccentStyleText(activeAccentCode)} (acoustic channel: "${activeVoiceName}", zero personal identity). Stay quiet unless responding.`
               });
             } catch {}
           }
@@ -26113,8 +29088,8 @@ ${workspaceHint ? `- Active OS Workspace Focus: ${workspaceHint}` : relayActiveM
               const speakerName = getWsSpeakerName();
               const resuming = isResumeRequest || Boolean(ctx.resumed) || relayConversationHistory.length > 0;
               const greeting = resuming
-                ? `Voice channel synced in ${ctx.activeLabel || ctx.activeModule} with full conversation continuity.`
-                : `Voice channel synced with main chat in ${ctx.activeLabel || ctx.activeModule}, ${speakerName}. Ready whenever you are.`;
+                ? `Voice channel reconnected in ${ctx.activeLabel || ctx.activeModule} with your independent voice scratchpad ready.`
+                : `Live voice channel online in ${ctx.activeLabel || ctx.activeModule}, ${speakerName}. Independent scratchpad log active — talk freely or queue background tasks anytime.`;
               sendSafe({
                 outputTranscript: greeting,
                 speakSequence: {
@@ -26143,6 +29118,11 @@ ${workspaceHint ? `- Active OS Workspace Focus: ${workspaceHint}` : relayActiveM
     });
 
     clientWs.on('close', () => {
+      activeLiveVoiceBroadcasters.delete(sendSafe);
+      if (activeRelayAbortController) {
+        try { activeRelayAbortController.abort(); } catch {}
+        activeRelayAbortController = null;
+      }
       try {
         sessionRef?.close();
       } catch (_) {}
@@ -26757,116 +29737,37 @@ const startServer = async () => {
   server.keepAliveTimeout = 65000; // slightly higher than standard 60s
   server.headersTimeout = 66000;
 
-  // --- SINGULARITY AUTONOMOUS RECURSIVE ENGINE & MESH ENDPOINTS ---
-  app.post('/api/singularity/self-improve', async (req, res) => {
-    try {
-      const { depth = 7 } = req.body || {};
-      const timestamp = new Date().toISOString();
-      return res.json({
-        success: true,
-        generation: 149,
-        depth,
-        targetFile: 'src/utils/sovereignQuantumKernel.ts',
-        diff: `+ Synthesized recursive AST memoization cache (depth ${depth})\n+ Optimized tensor matrix multiplication pipeline\n+ Verified invariant hash: 0x${Math.random().toString(16).slice(2, 10)}`,
-        timestamp
-      });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Evolution cycle failed' });
-    }
-  });
-
-  app.post('/api/singularity/mesh/sync', async (req, res) => {
-    try {
-      return res.json({
-        success: true,
-        nodesSynced: 4,
-        consensusRate: '100.000%',
-        timestamp: new Date().toISOString()
-      });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Mesh sync failed' });
-    }
-  });
-
-  app.post('/api/singularity/goals/formulate', async (req, res) => {
-    try {
-      return res.json({
-        success: true,
-        hypothesisId: `hyp-${Date.now()}`,
-        title: 'Quantum-Inspired Vector Cache Optimization',
-        confidence: 0.991,
-        status: 'TESTING',
-        timestamp: new Date().toISOString()
-      });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Goal formulation failed' });
-    }
-  });
-
-  // --- VIRTUAL LLAMA / OLLAMA FALLBACK & SYSTEMIC PORT CONTROL ENDPOINTS ---
-  app.post('/api/local-llama/generate', async (req, res) => {
-    try {
-      const { prompt, model = 'llama3' } = req.body || {};
-      const responseText = `[Virtual Llama Engine (${model})] Offline fallback response generated successfully for: "${String(prompt || '').slice(0, 60)}..."\n- Invariant verification: OK\n- Zero API key required.`;
-      return res.json({
-        model,
-        response: responseText,
-        done: true,
-        created_at: new Date().toISOString()
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'Virtual Llama generation failed' });
-    }
-  });
-
-  const activeVirtualPortsMap = new Map<number, { pid: number; appName: string; startTime: number }>();
-  activeVirtualPortsMap.set(8080, { pid: 4102, appName: 'Virtual Llama Fallback Engine', startTime: Date.now() });
-  activeVirtualPortsMap.set(8081, { pid: 4188, appName: 'Autonomous Test Sandbox Web Server', startTime: Date.now() });
-
-  app.post('/api/ports/spawn', async (req, res) => {
-    try {
-      const { port = 8082, appName = 'Autonomous Test App' } = req.body || {};
-      const numericPort = Number(port);
-      const pid = Math.floor(Math.random() * 5000 + 1000);
-      activeVirtualPortsMap.set(numericPort, { pid, appName, startTime: Date.now() });
-      return res.json({
-        success: true,
-        port: numericPort,
-        pid,
-        appName,
-        endpoint: `http://127.0.0.1:${numericPort}/`
-      });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Failed to spawn virtual port' });
-    }
-  });
-
-  app.get('/api/ports/list', async (req, res) => {
-    try {
-      const ports = Array.from(activeVirtualPortsMap.entries()).map(([port, data]) => ({
-        port,
-        pid: data.pid,
-        appName: data.appName,
-        status: 'RUNNING',
-        uptimeSec: Math.floor((Date.now() - data.startTime) / 1000),
-        endpoint: `http://127.0.0.1:${port}/`
-      }));
-      return res.json({ success: true, ports });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Failed to list virtual ports' });
-    }
-  });
-
-  app.post('/api/ports/kill', async (req, res) => {
-    try {
-      const { port } = req.body || {};
-      const numericPort = Number(port);
-      activeVirtualPortsMap.delete(numericPort);
-      return res.json({ success: true, port: numericPort, status: 'TERMINATED' });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err?.message || 'Failed to terminate port process' });
-    }
-  });
+  // --- REAL SOVEREIGN CYBER DEFENSE, LOCAL LLM / PORT CONTROLLER & AUTONOMOUS OS ROUTER ---
+  app.use(
+    '/api',
+    createSovereignDefenseAndAutonomyRouter({
+      getActivePort: () => ACTIVE_PORT,
+      hasServerAiKey: () => hasActiveGeminiApiKey(),
+      runServerFallbackAi: async (prompt: string) => {
+        const ai = getPermanentDeveloperAiClient();
+        const models = getGeminiCascadeModels();
+        let lastErr: any = null;
+        for (const model of models.slice(0, 3)) {
+          try {
+            const response = await ai.models.generateContent({
+              model,
+              contents: prompt
+            });
+            const text = response?.text || '';
+            if (text.trim()) return { text, model };
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+        throw lastErr || new Error('All server AI fallback models failed.');
+      },
+      recordEvolutiveAxiom: (principle: string, category: string) => {
+        try {
+          sovereignQuantumKernel.recordEvolutiveAxiom(principle, category);
+        } catch {}
+      }
+    })
+  );
 
   server.listen(PORT, '0.0.0.0', () => {
     ACTIVE_PORT = PORT;
@@ -26882,6 +29783,7 @@ const startServer = async () => {
       );
     } catch {}
     startDreamStateScheduler(getAutonomyDeps());
+    localLlamaEngine.warmupDefaultModel();
     batchProcessorService.init({
       getAiClient: getPermanentDeveloperAiClient,
       hasGeminiKey: () => hasActiveGeminiApiKey(),

@@ -3,7 +3,7 @@
   "name": "Valve Steam Client, Live Store API & Proton Bridge",
   "version": "1726604483-Valve-API",
   "vendor": "Valve Corporation",
-  "installedAt": "2026-11-22T01:42:36.368Z",
+  "installedAt": "2026-11-22T17:55:56.059Z",
   "nativeProtocolUri": "steam://open/main",
   "wingetId": "Valve.Steam",
   "cliInstallCmds": {

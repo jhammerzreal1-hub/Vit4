@@ -12,7 +12,19 @@ import type {
   AuthRole,
   AuthSessionResponse,
   AuthUserPublic,
-  UserPrivileges
+  BillingConfigPublic,
+  BillingLedgerRecord,
+  CryptoPaymentInvoice,
+  DailyAiQuotaUsage,
+  SupporterBoardEntry,
+  SupporterBoardSummary,
+  SupporterFeedbackSentiment,
+  SupportedBillingChain,
+  SupportedBillingCryptoToken,
+  TierBadgeColor,
+  TierPricingConfig,
+  UserPrivileges,
+  UserTierDefinition
 } from '../types/auth';
 
 // Strictly in-memory session bearer token (never written to localStorage or sessionStorage)
@@ -275,6 +287,7 @@ export async function adminCreateUserAccount(payload: {
   role: AuthRole;
   status: AuthAccountStatus;
   privileges: UserPrivileges;
+  tierId?: string;
 }): Promise<{ user: AuthUserPublic }> {
   return authFetch<{ success: boolean; user: AuthUserPublic }>('/api/auth/admin/users', {
     method: 'POST',
@@ -290,6 +303,7 @@ export async function adminUpdateUserAccount(
     role?: AuthRole;
     status?: AuthAccountStatus;
     privileges?: UserPrivileges;
+    tierId?: string;
     newPassword?: string;
   }
 ): Promise<{ user: AuthUserPublic }> {
@@ -316,3 +330,324 @@ export async function adminUpdateAuthPolicy(
     body: JSON.stringify(patch)
   });
 }
+
+// =========================================================================
+// CUSTOM USER TIERS & REAL FIAT / CRYPTO MONETIZATION CLIENT
+// =========================================================================
+
+export async function fetchPublicTiers(): Promise<{
+  tiers: UserTierDefinition[];
+  defaultTierId?: string;
+}> {
+  return authFetch<{
+    success: boolean;
+    tiers: UserTierDefinition[];
+    defaultTierId?: string;
+  }>('/api/tiers', { method: 'GET' });
+}
+
+export async function adminFetchTiers(): Promise<{
+  tiers: UserTierDefinition[];
+  defaultTierId?: string;
+}> {
+  return authFetch<{
+    success: boolean;
+    tiers: UserTierDefinition[];
+    defaultTierId?: string;
+  }>('/api/auth/admin/tiers', { method: 'GET' });
+}
+
+export async function adminCreateTier(payload: {
+  name: string;
+  slug?: string;
+  tagline?: string;
+  description?: string;
+  badgeColor?: TierBadgeColor;
+  rank?: number;
+  baseRole?: AuthRole;
+  isPublic?: boolean;
+  isMonetized?: boolean;
+  isFounderTier?: boolean;
+  pricing?: Partial<TierPricingConfig>;
+  privileges: UserPrivileges;
+  features?: string[];
+}): Promise<{ tier: UserTierDefinition }> {
+  return authFetch<{ success: boolean; tier: UserTierDefinition }>('/api/auth/admin/tiers', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function adminUpdateTier(
+  tierId: string,
+  patch: {
+    name?: string;
+    slug?: string;
+    tagline?: string;
+    description?: string;
+    badgeColor?: TierBadgeColor;
+    rank?: number;
+    baseRole?: AuthRole;
+    isPublic?: boolean;
+    isMonetized?: boolean;
+    isFounderTier?: boolean;
+    pricing?: Partial<TierPricingConfig>;
+    privileges?: UserPrivileges;
+    features?: string[];
+    syncExistingUsers?: boolean;
+  }
+): Promise<{ tier: UserTierDefinition }> {
+  return authFetch<{ success: boolean; tier: UserTierDefinition }>(
+    `/api/auth/admin/tiers/${encodeURIComponent(tierId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(patch)
+    }
+  );
+}
+
+export async function adminDeleteTier(tierId: string): Promise<void> {
+  await authFetch(`/api/auth/admin/tiers/${encodeURIComponent(tierId)}`, {
+    method: 'DELETE'
+  });
+}
+
+export async function adminAssignUserTier(
+  userId: string,
+  payload: {
+    tierId: string;
+    subscriptionStatus?: 'free' | 'active' | 'lifetime' | 'expired' | 'admin-granted';
+    tierExpiresAt?: string | null;
+  }
+): Promise<{ user: AuthUserPublic; tier: UserTierDefinition }> {
+  return authFetch<{ success: boolean; user: AuthUserPublic; tier: UserTierDefinition }>(
+    `/api/auth/admin/users/${encodeURIComponent(userId)}/assign-tier`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export interface BillingStatusResponse {
+  billing: BillingConfigPublic;
+  currentTier: {
+    tierId?: string;
+    tierName?: string;
+    tierBadgeColor?: TierBadgeColor;
+    subscriptionStatus?: string;
+    tierExpiresAt?: string | null;
+    isFounderTier?: boolean;
+  };
+  founderEligible?: boolean;
+  usage?: DailyAiQuotaUsage | null;
+  tiers: UserTierDefinition[];
+  ledger: BillingLedgerRecord[];
+  pendingInvoices: CryptoPaymentInvoice[];
+  supporterBoard?: SupporterBoardEntry[];
+  supporterBoardSummary?: SupporterBoardSummary;
+}
+
+export async function fetchBillingStatus(): Promise<BillingStatusResponse> {
+  return authFetch<BillingStatusResponse & { success: boolean }>('/api/billing/status', {
+    method: 'GET'
+  });
+}
+
+export async function fetchSupporterBoard(): Promise<{
+  entries: SupporterBoardEntry[];
+  summary: SupporterBoardSummary;
+}> {
+  return authFetch<{
+    success: boolean;
+    entries: SupporterBoardEntry[];
+    summary: SupporterBoardSummary;
+  }>('/api/supporter-board', { method: 'GET' });
+}
+
+export async function createStripeCheckout(payload: {
+  tierId: string;
+  billingCycle: 'monthly' | 'one-time';
+}): Promise<{ sessionId: string; url: string }> {
+  return authFetch<{ success: boolean; sessionId: string; url: string }>(
+    '/api/billing/stripe/checkout',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function createDonationStripeCheckout(payload: {
+  amountUsd: number;
+  isAnonymous: boolean;
+  authorName?: string;
+  feedbackCategory: SupporterFeedbackSentiment;
+  message?: string;
+}): Promise<{ sessionId: string; url: string }> {
+  return authFetch<{ success: boolean; sessionId: string; url: string }>(
+    '/api/billing/donate/stripe/checkout',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function createDonationCryptoInvoice(payload: {
+  amountUsd: number;
+  chain: SupportedBillingChain;
+  token: SupportedBillingCryptoToken;
+  isAnonymous: boolean;
+  authorName?: string;
+  feedbackCategory: SupporterFeedbackSentiment;
+  message?: string;
+}): Promise<{ invoice: CryptoPaymentInvoice }> {
+  return authFetch<{ success: boolean; invoice: CryptoPaymentInvoice }>(
+    '/api/billing/donate/crypto/invoice',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function postFounderSupporterNote(payload: {
+  isAnonymous: boolean;
+  authorName?: string;
+  feedbackCategory: SupporterFeedbackSentiment;
+  message: string;
+}): Promise<{ entry: SupporterBoardEntry }> {
+  return authFetch<{ success: boolean; entry: SupporterBoardEntry }>(
+    '/api/billing/supporter-board/founder-post',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function adminDeleteSupporterBoardEntry(entryId: string): Promise<void> {
+  await authFetch(`/api/auth/admin/supporter-board/${encodeURIComponent(entryId)}`, {
+    method: 'DELETE'
+  });
+}
+
+export async function verifyStripeSession(sessionId: string): Promise<{
+  settled: boolean;
+  entryType?: 'tier' | 'donation';
+  paymentStatus: string;
+  user?: AuthUserPublic;
+  supporterEntry?: SupporterBoardEntry;
+}> {
+  return authFetch<{
+    success: boolean;
+    settled: boolean;
+    entryType?: 'tier' | 'donation';
+    paymentStatus: string;
+    user?: AuthUserPublic;
+    supporterEntry?: SupporterBoardEntry;
+  }>('/api/billing/stripe/verify-session', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId })
+  });
+}
+
+export async function createCryptoInvoice(payload: {
+  tierId: string;
+  billingCycle: 'monthly' | 'one-time';
+  chain: SupportedBillingChain;
+  token: SupportedBillingCryptoToken;
+}): Promise<{ invoice: CryptoPaymentInvoice }> {
+  return authFetch<{ success: boolean; invoice: CryptoPaymentInvoice }>(
+    '/api/billing/crypto/invoice',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function cancelCryptoInvoice(invoiceId: string): Promise<{ invoice: CryptoPaymentInvoice }> {
+  return authFetch<{ success: boolean; invoice: CryptoPaymentInvoice }>(
+    '/api/billing/crypto/cancel',
+    {
+      method: 'POST',
+      body: JSON.stringify({ invoiceId })
+    }
+  );
+}
+
+export async function verifyCryptoPayment(payload: {
+  invoiceId: string;
+  txHash: string;
+}): Promise<{
+  verified: boolean;
+  entryType?: 'tier' | 'donation';
+  invoice: CryptoPaymentInvoice;
+  ledgerRecord?: BillingLedgerRecord;
+  user?: AuthUserPublic;
+  supporterEntry?: SupporterBoardEntry;
+}> {
+  return authFetch<{
+    success: boolean;
+    verified: boolean;
+    entryType?: 'tier' | 'donation';
+    invoice: CryptoPaymentInvoice;
+    ledgerRecord?: BillingLedgerRecord;
+    user?: AuthUserPublic;
+    supporterEntry?: SupporterBoardEntry;
+  }>('/api/billing/crypto/verify', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function adminFetchBillingConfig(): Promise<{
+  config: BillingConfigPublic;
+}> {
+  return authFetch<{ success: boolean; config: BillingConfigPublic }>(
+    '/api/auth/admin/billing/config',
+    { method: 'GET' }
+  );
+}
+
+export async function adminUpdateBillingConfig(patch: {
+  fiatStripeEnabled?: boolean;
+  cryptoEnabled?: boolean;
+  treasuryEvmAddress?: string;
+  enabledChains?: SupportedBillingChain[];
+  enabledTokens?: SupportedBillingCryptoToken[];
+  stripeSecretKey?: string;
+  stripeWebhookSecret?: string;
+}): Promise<{ config: BillingConfigPublic }> {
+  return authFetch<{ success: boolean; config: BillingConfigPublic }>(
+    '/api/auth/admin/billing/config',
+    {
+      method: 'PATCH',
+      body: JSON.stringify(patch)
+    }
+  );
+}
+
+export async function adminFetchBillingLedger(): Promise<{
+  ledger: BillingLedgerRecord[];
+  totalRevenueUsd: number;
+  fiatRevenueUsd?: number;
+  cryptoRevenueUsd?: number;
+  settledCount?: number;
+  pendingInvoicesCount?: number;
+  count: number;
+}> {
+  return authFetch<{
+    success: boolean;
+    ledger: BillingLedgerRecord[];
+    totalRevenueUsd: number;
+    fiatRevenueUsd?: number;
+    cryptoRevenueUsd?: number;
+    settledCount?: number;
+    pendingInvoicesCount?: number;
+    count: number;
+  }>('/api/auth/admin/billing/ledger', { method: 'GET' });
+}
+

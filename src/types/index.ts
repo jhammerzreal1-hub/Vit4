@@ -63,7 +63,9 @@ export type ModuleType =
   | 'singularity-self-improve'
   | 'p2p-swarm-mesh'
   | 'autonomous-goal-engine'
-  | 'local-llama-engine';
+  | 'local-llama-engine'
+  | 'swarm-consolidation'
+  | 'adversarial-red-team';
 
 export type ChatModel =
   | 'gemini-4-hydrogen'

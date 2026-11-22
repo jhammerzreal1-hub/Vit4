@@ -46,58 +46,85 @@ interface BurnerVaultDiskSchema {
 }
 
 const VAULT_DIR = path.resolve(process.cwd(), 'data');
-const VAULT_FILE = path.join(VAULT_DIR, 'burner_messages_vault.json');
+const OWNER_VAULT_FILE = path.join(VAULT_DIR, 'burner_messages_vault.json');
+const USER_WORKSPACES_ROOT = path.join(VAULT_DIR, 'user_workspaces');
+const OWNER_SCOPE = '__owner__';
 const MAX_MESSAGES_PER_ADDRESS = 250;
 const MAX_TOMBSTONES_PER_ADDRESS = 500;
 
-let vaultState: BurnerVaultDiskSchema = {
-  version: 2,
-  updatedAt: new Date().toISOString(),
-  messagesByAddress: {},
-  deletedIdsByAddress: {}
-};
+const scopedVaultStates = new Map<string, BurnerVaultDiskSchema>();
 
-function loadVaultFromDisk(): void {
+function normalizeScopeId(scopeId?: string): string {
+  const cleaned = String(scopeId || '').trim();
+  if (!cleaned || cleaned === OWNER_SCOPE) return OWNER_SCOPE;
+  const safe = cleaned.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 96);
+  if (!safe || safe === '.' || safe === '..') return OWNER_SCOPE;
+  return safe;
+}
+
+function getVaultFilePath(scopeKey: string): string {
+  if (scopeKey === OWNER_SCOPE) return OWNER_VAULT_FILE;
+  const userDir = path.resolve(USER_WORKSPACES_ROOT, scopeKey);
+  const rootResolved = path.resolve(USER_WORKSPACES_ROOT);
+  if (!userDir.startsWith(rootResolved + path.sep)) {
+    throw new Error('Invalid burner vault scope path');
+  }
+  fs.mkdirSync(userDir, { recursive: true, mode: 0o700 });
+  return path.join(userDir, 'burner_messages_vault.json');
+}
+
+function getOrLoadVaultState(scopeId?: string): { scopeKey: string; state: BurnerVaultDiskSchema } {
+  const scopeKey = normalizeScopeId(scopeId);
+  const existing = scopedVaultStates.get(scopeKey);
+  if (existing) return { scopeKey, state: existing };
+
+  const vaultFile = getVaultFilePath(scopeKey);
+  let state: BurnerVaultDiskSchema = {
+    version: 2,
+    updatedAt: new Date().toISOString(),
+    messagesByAddress: {},
+    deletedIdsByAddress: {}
+  };
   try {
-    if (!fs.existsSync(VAULT_DIR)) {
-      fs.mkdirSync(VAULT_DIR, { recursive: true });
-    }
-    if (fs.existsSync(VAULT_FILE)) {
-      const raw = fs.readFileSync(VAULT_FILE, 'utf8');
+    if (fs.existsSync(vaultFile)) {
+      const raw = fs.readFileSync(vaultFile, 'utf8');
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
-        vaultState = {
+        state = {
           version: 2,
           updatedAt: parsed.updatedAt || new Date().toISOString(),
-          messagesByAddress: parsed.messagesByAddress && typeof parsed.messagesByAddress === 'object'
-            ? parsed.messagesByAddress
-            : {},
-          deletedIdsByAddress: parsed.deletedIdsByAddress && typeof parsed.deletedIdsByAddress === 'object'
-            ? parsed.deletedIdsByAddress
-            : {}
+          messagesByAddress:
+            parsed.messagesByAddress && typeof parsed.messagesByAddress === 'object'
+              ? parsed.messagesByAddress
+              : {},
+          deletedIdsByAddress:
+            parsed.deletedIdsByAddress && typeof parsed.deletedIdsByAddress === 'object'
+              ? parsed.deletedIdsByAddress
+              : {}
         };
       }
     }
   } catch (err: any) {
-    console.warn('[BurnerVault] Failed loading disk archive, starting fresh:', err?.message);
+    console.warn(`[BurnerVault:${scopeKey}] Failed loading disk archive, starting fresh:`, err?.message);
   }
+  scopedVaultStates.set(scopeKey, state);
+  return { scopeKey, state };
 }
 
-function persistVaultToDisk(): void {
+function persistVaultToDisk(scopeKey: string, state: BurnerVaultDiskSchema): void {
   try {
-    if (!fs.existsSync(VAULT_DIR)) {
-      fs.mkdirSync(VAULT_DIR, { recursive: true });
-    }
-    vaultState.updatedAt = new Date().toISOString();
-    const tmpFile = `${VAULT_FILE}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(vaultState, null, 2), 'utf8');
-    fs.renameSync(tmpFile, VAULT_FILE);
+    const vaultFile = getVaultFilePath(scopeKey);
+    fs.mkdirSync(path.dirname(vaultFile), { recursive: true });
+    state.updatedAt = new Date().toISOString();
+    const tmpFile = `${vaultFile}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmpFile, vaultFile);
   } catch (err: any) {
-    console.warn('[BurnerVault] Disk persist warning:', err?.message);
+    console.warn(`[BurnerVault:${scopeKey}] Disk persist warning:`, err?.message);
   }
 }
 
-loadVaultFromDisk();
+getOrLoadVaultState(OWNER_SCOPE);
 
 export function normalizeAddressKey(address?: string, fallback?: string): string {
   const raw = (address || fallback || '').toLowerCase().trim();
@@ -463,22 +490,25 @@ function mergeTwoMessages(existing: ArchivedBurnerMessage, incoming: ArchivedBur
   };
 }
 
-export function isMessageDeleted(address: string, messageId: string): boolean {
+export function isMessageDeleted(address: string, messageId: string, scopeId?: string): boolean {
   const key = normalizeAddressKey(address);
   if (!key || !messageId) return false;
-  const tombstones = vaultState.deletedIdsByAddress[key];
+  const { state } = getOrLoadVaultState(scopeId);
+  const tombstones = state.deletedIdsByAddress[key];
   return Array.isArray(tombstones) && tombstones.includes(messageId);
 }
 
 export function upsertArchivedMessages(
   address: string,
-  incomingMessages: ArchivedBurnerMessage[]
+  incomingMessages: ArchivedBurnerMessage[],
+  scopeId?: string
 ): ArchivedBurnerMessage[] {
   const key = normalizeAddressKey(address);
   if (!key) return incomingMessages;
 
-  const tombstones = new Set(vaultState.deletedIdsByAddress[key] || []);
-  const existingList = vaultState.messagesByAddress[key] || [];
+  const { scopeKey, state } = getOrLoadVaultState(scopeId);
+  const tombstones = new Set(state.deletedIdsByAddress[key] || []);
+  const existingList = state.messagesByAddress[key] || [];
   const mapById = new Map<string, ArchivedBurnerMessage>();
 
   for (const msg of existingList) {
@@ -493,7 +523,6 @@ export function upsertArchivedMessages(
     const prev = mapById.get(rawMsg.id);
     if (prev) {
       const merged = mergeTwoMessages(prev, rawMsg);
-      // Detect meaningful upgrade before writing disk
       if (
         (merged.html || '').length !== (prev.html || '').length ||
         (merged.text || '').length !== (prev.text || '').length ||
@@ -518,70 +547,81 @@ export function upsertArchivedMessages(
     .sort((a, b) => (new Date(b.createdAt).getTime() || 0) - (new Date(a.createdAt).getTime() || 0))
     .slice(0, MAX_MESSAGES_PER_ADDRESS);
 
-  vaultState.messagesByAddress[key] = sorted;
+  state.messagesByAddress[key] = sorted;
   if (changed) {
-    persistVaultToDisk();
+    persistVaultToDisk(scopeKey, state);
   }
 
   return sorted;
 }
 
-export function getArchivedMessages(address: string): ArchivedBurnerMessage[] {
+export function getArchivedMessages(address: string, scopeId?: string): ArchivedBurnerMessage[] {
   const key = normalizeAddressKey(address);
   if (!key) return [];
-  const tombstones = new Set(vaultState.deletedIdsByAddress[key] || []);
-  return (vaultState.messagesByAddress[key] || [])
-    .filter(m => m && m.id && !tombstones.has(m.id))
+  const { state } = getOrLoadVaultState(scopeId);
+  const tombstones = new Set(state.deletedIdsByAddress[key] || []);
+  return (state.messagesByAddress[key] || [])
+    .filter((m) => m && m.id && !tombstones.has(m.id))
     .sort((a, b) => (new Date(b.createdAt).getTime() || 0) - (new Date(a.createdAt).getTime() || 0));
 }
 
-export function getArchivedMessageById(address: string | undefined, messageId: string): ArchivedBurnerMessage | null {
+export function getArchivedMessageById(
+  address: string | undefined,
+  messageId: string,
+  scopeId?: string
+): ArchivedBurnerMessage | null {
   if (!messageId) return null;
+  const { state } = getOrLoadVaultState(scopeId);
   const key = normalizeAddressKey(address);
-  if (key && vaultState.messagesByAddress[key]) {
-    const exact = vaultState.messagesByAddress[key].find(m => m.id === messageId);
+  if (key && state.messagesByAddress[key]) {
+    const exact = state.messagesByAddress[key].find((m) => m.id === messageId);
     if (exact) return exact;
   }
-  // Fallback scan across all archived inboxes (useful for Unified All-Inboxes view)
-  for (const list of Object.values(vaultState.messagesByAddress)) {
-    const found = list.find(m => m.id === messageId);
+  // Scan ONLY within this user's isolated vault
+  for (const list of Object.values(state.messagesByAddress)) {
+    const found = list.find((m) => m.id === messageId);
     if (found) return found;
   }
   return null;
 }
 
-export function markMessageDeleted(address: string | undefined, messageId: string): boolean {
+export function markMessageDeleted(
+  address: string | undefined,
+  messageId: string,
+  scopeId?: string
+): boolean {
   if (!messageId) return false;
+  const { scopeKey, state } = getOrLoadVaultState(scopeId);
   const key = normalizeAddressKey(address);
   let removed = false;
 
   if (key) {
-    if (!vaultState.deletedIdsByAddress[key]) {
-      vaultState.deletedIdsByAddress[key] = [];
+    if (!state.deletedIdsByAddress[key]) {
+      state.deletedIdsByAddress[key] = [];
     }
-    if (!vaultState.deletedIdsByAddress[key].includes(messageId)) {
-      vaultState.deletedIdsByAddress[key].unshift(messageId);
-      vaultState.deletedIdsByAddress[key] = vaultState.deletedIdsByAddress[key].slice(0, MAX_TOMBSTONES_PER_ADDRESS);
+    if (!state.deletedIdsByAddress[key].includes(messageId)) {
+      state.deletedIdsByAddress[key].unshift(messageId);
+      state.deletedIdsByAddress[key] = state.deletedIdsByAddress[key].slice(0, MAX_TOMBSTONES_PER_ADDRESS);
     }
-    if (vaultState.messagesByAddress[key]) {
-      const before = vaultState.messagesByAddress[key].length;
-      vaultState.messagesByAddress[key] = vaultState.messagesByAddress[key].filter(m => m.id !== messageId);
-      if (vaultState.messagesByAddress[key].length < before) removed = true;
+    if (state.messagesByAddress[key]) {
+      const before = state.messagesByAddress[key].length;
+      state.messagesByAddress[key] = state.messagesByAddress[key].filter((m) => m.id !== messageId);
+      if (state.messagesByAddress[key].length < before) removed = true;
     }
   } else {
-    for (const addrKey of Object.keys(vaultState.messagesByAddress)) {
-      const before = vaultState.messagesByAddress[addrKey].length;
-      vaultState.messagesByAddress[addrKey] = vaultState.messagesByAddress[addrKey].filter(m => m.id !== messageId);
-      if (vaultState.messagesByAddress[addrKey].length < before) {
+    for (const addrKey of Object.keys(state.messagesByAddress)) {
+      const before = state.messagesByAddress[addrKey].length;
+      state.messagesByAddress[addrKey] = state.messagesByAddress[addrKey].filter((m) => m.id !== messageId);
+      if (state.messagesByAddress[addrKey].length < before) {
         removed = true;
-        if (!vaultState.deletedIdsByAddress[addrKey]) vaultState.deletedIdsByAddress[addrKey] = [];
-        if (!vaultState.deletedIdsByAddress[addrKey].includes(messageId)) {
-          vaultState.deletedIdsByAddress[addrKey].unshift(messageId);
+        if (!state.deletedIdsByAddress[addrKey]) state.deletedIdsByAddress[addrKey] = [];
+        if (!state.deletedIdsByAddress[addrKey].includes(messageId)) {
+          state.deletedIdsByAddress[addrKey].unshift(messageId);
         }
       }
     }
   }
 
-  persistVaultToDisk();
+  persistVaultToDisk(scopeKey, state);
   return removed;
 }

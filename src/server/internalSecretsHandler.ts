@@ -17,7 +17,7 @@ export interface SecretSpec {
   id: string;
   name: string;
   envVar: string;
-  category: 'LLM & AI' | 'Database & Storage' | 'Cloud & Search' | 'Telecom & eSIM' | 'Custom';
+  category: 'LLM & AI' | 'Database & Storage' | 'Cloud & Search' | 'Telecom & eSIM' | 'Billing & Payments' | 'Custom';
   proxyEndpoint: string;
   description: string;
   isPublicEndpoint?: boolean;
@@ -89,7 +89,61 @@ export const CANONICAL_SECRET_SPECS: SecretSpec[] = [
     category: 'LLM & AI',
     proxyEndpoint: '/api/proxy-wheel/status',
     quotaPolicy: 'PROXY_LOOP_WHEEL',
-    description: 'Comma or newline separated pool of Gemini Developer API keys for automatic wheel rotation'
+    description: 'Comma or newline separated pool of Gemini API keys for automatic anti-dehydration round-robin wheel rotation'
+  },
+  {
+    id: 'gemini_backup_1',
+    name: 'Gemini Backup Rotation Key #1',
+    envVar: 'GEMINI_BACKUP_KEY_1',
+    category: 'LLM & AI',
+    proxyEndpoint: '/api/proxy-wheel/status',
+    quotaPolicy: 'PROXY_LOOP_WHEEL',
+    description: 'Dedicated Gemini backup key slot #1 automatically rotated into the Proxy Loop Wheel to prevent quota dehydration'
+  },
+  {
+    id: 'gemini_backup_2',
+    name: 'Gemini Backup Rotation Key #2',
+    envVar: 'GEMINI_BACKUP_KEY_2',
+    category: 'LLM & AI',
+    proxyEndpoint: '/api/proxy-wheel/status',
+    quotaPolicy: 'PROXY_LOOP_WHEEL',
+    description: 'Dedicated Gemini backup key slot #2 automatically rotated into the Proxy Loop Wheel to prevent quota dehydration'
+  },
+  {
+    id: 'gemini_backup_3',
+    name: 'Gemini Backup Rotation Key #3',
+    envVar: 'GEMINI_BACKUP_KEY_3',
+    category: 'LLM & AI',
+    proxyEndpoint: '/api/proxy-wheel/status',
+    quotaPolicy: 'PROXY_LOOP_WHEEL',
+    description: 'Dedicated Gemini backup key slot #3 automatically rotated into the Proxy Loop Wheel to prevent quota dehydration'
+  },
+  {
+    id: 'gemini_backup_4',
+    name: 'Gemini Backup Rotation Key #4',
+    envVar: 'GEMINI_BACKUP_KEY_4',
+    category: 'LLM & AI',
+    proxyEndpoint: '/api/proxy-wheel/status',
+    quotaPolicy: 'PROXY_LOOP_WHEEL',
+    description: 'Dedicated Gemini backup key slot #4 automatically rotated into the Proxy Loop Wheel to prevent quota dehydration'
+  },
+  {
+    id: 'gemini_backup_5',
+    name: 'Gemini Backup Rotation Key #5',
+    envVar: 'GEMINI_BACKUP_KEY_5',
+    category: 'LLM & AI',
+    proxyEndpoint: '/api/proxy-wheel/status',
+    quotaPolicy: 'PROXY_LOOP_WHEEL',
+    description: 'Dedicated Gemini backup key slot #5 automatically rotated into the Proxy Loop Wheel to prevent quota dehydration'
+  },
+  {
+    id: 'gemini_backup_6',
+    name: 'Gemini Backup Rotation Key #6',
+    envVar: 'GEMINI_BACKUP_KEY_6',
+    category: 'LLM & AI',
+    proxyEndpoint: '/api/proxy-wheel/status',
+    quotaPolicy: 'PROXY_LOOP_WHEEL',
+    description: 'Dedicated Gemini backup key slot #6 automatically rotated into the Proxy Loop Wheel to prevent quota dehydration'
   },
   {
     id: 'openai',
@@ -98,6 +152,14 @@ export const CANONICAL_SECRET_SPECS: SecretSpec[] = [
     category: 'LLM & AI',
     proxyEndpoint: '/api/v1/chat/completions',
     description: 'OpenAI API key routed into the Proxy Loop Wheel'
+  },
+  {
+    id: 'openai_pool',
+    name: 'OpenAI Key Pool',
+    envVar: 'OPENAI_API_KEYS',
+    category: 'LLM & AI',
+    proxyEndpoint: '/api/proxy-wheel/status',
+    description: 'Comma or newline separated OpenAI API key rotation pool'
   },
   {
     id: 'deepseek',
@@ -269,6 +331,31 @@ export const CANONICAL_SECRET_SPECS: SecretSpec[] = [
     proxyEndpoint: '/api/cdp/status',
     isPublicEndpoint: true,
     description: 'Default Coinbase CDP environment mode: sandbox (Base Sepolia) or live (Base/Ethereum Mainnet)'
+  },
+  {
+    id: 'stripe_secret_key',
+    name: 'Stripe Secret API Key',
+    envVar: 'STRIPE_SECRET_KEY',
+    category: 'Billing & Payments',
+    proxyEndpoint: '/api/billing/stripe/checkout',
+    description: 'Stripe server-side Secret/Restricted API key (sk_live_... / sk_test_... / rk_...) for Fiat Card Checkout'
+  },
+  {
+    id: 'stripe_webhook_secret',
+    name: 'Stripe Webhook Signing Secret',
+    envVar: 'STRIPE_WEBHOOK_SECRET',
+    category: 'Billing & Payments',
+    proxyEndpoint: '/api/billing/stripe/webhook',
+    description: 'Stripe HMAC-SHA256 webhook signing secret (whsec_...) for verifying checkout & subscription lifecycle events'
+  },
+  {
+    id: 'billing_treasury_evm_address',
+    name: 'Billing Treasury EVM Address',
+    envVar: 'BILLING_TREASURY_EVM_ADDRESS',
+    category: 'Billing & Payments',
+    proxyEndpoint: '/api/billing/status',
+    isPublicEndpoint: true,
+    description: 'Platform owner 0x EVM Treasury wallet receiving on-chain USDC/ETH tier payments'
   }
 ];
 
@@ -282,7 +369,14 @@ const PROVIDER_TO_ENV: Record<string, string> = {
   all_keys: 'ALL_KEY',
   api_universal: 'API_UNIVERSAL',
   gemini_pool: 'GEMINI_API_KEYS',
+  gemini_backup_1: 'GEMINI_BACKUP_KEY_1',
+  gemini_backup_2: 'GEMINI_BACKUP_KEY_2',
+  gemini_backup_3: 'GEMINI_BACKUP_KEY_3',
+  gemini_backup_4: 'GEMINI_BACKUP_KEY_4',
+  gemini_backup_5: 'GEMINI_BACKUP_KEY_5',
+  gemini_backup_6: 'GEMINI_BACKUP_KEY_6',
   openai: 'OPENAI_API_KEY',
+  openai_pool: 'OPENAI_API_KEYS',
   deepseek: 'DEEPSEEK_API_KEY',
   deepseek_pool: 'DEEPSEEK_API_KEYS',
   groq: 'GROQ_API_KEY',
@@ -305,7 +399,11 @@ const PROVIDER_TO_ENV: Record<string, string> = {
   cdp_api_key_secret: 'CDP_API_KEY_SECRET',
   cdp_wallet_secret: 'CDP_WALLET_SECRET',
   cdp_env: 'CDP_ENV',
-  telnyx_sim_group: 'TELNYX_SIM_GROUP_ID'
+  telnyx_sim_group: 'TELNYX_SIM_GROUP_ID',
+  stripe: 'STRIPE_SECRET_KEY',
+  stripe_secret_key: 'STRIPE_SECRET_KEY',
+  stripe_webhook_secret: 'STRIPE_WEBHOOK_SECRET',
+  billing_treasury_evm_address: 'BILLING_TREASURY_EVM_ADDRESS'
 };
 
 const SENSITIVE_RELATIVE_PATHS = new Set([
@@ -404,26 +502,78 @@ export class InternalSecretsHandler {
   private vaultCache: EncryptedVaultFile | null = null;
   private plaintextSecrets = new Map<string, string>();
   private initialEnvKeys = new Set<string>();
-  private rejectedSecretValues = new Map<string, { reason: string; timestamp: number }>();
+  private rejectedSecretValues = new Map<string, { reason: string; timestamp: number; expiresAt: number }>();
   private initialized = false;
 
-  public markSecretValueRejected(rawValue: string | undefined | null, reason = 'AUTH_REJECTED_401_403'): void {
+  public markSecretValueRejected(
+    rawValue: string | undefined | null,
+    reason = 'AUTH_REJECTED_401_403',
+    ttlMs?: number
+  ): void {
     if (!rawValue || typeof rawValue !== 'string') return;
     const trimmed = rawValue.trim();
     if (!trimmed) return;
+    const isPermanent = /deleted|disabled|invalid|expired|not_found|service_blocked/i.test(reason);
+    const effectiveTtl = typeof ttlMs === 'number' && ttlMs > 0 ? ttlMs : isPermanent ? 30 * 60_000 : 10 * 60_000;
+    const now = Date.now();
     this.rejectedSecretValues.set(trimmed, {
       reason,
-      timestamp: Date.now()
+      timestamp: now,
+      expiresAt: now + effectiveTtl
     });
   }
 
   public isSecretValueRejected(rawValue: string | undefined | null): boolean {
     if (!rawValue || typeof rawValue !== 'string') return false;
-    return this.rejectedSecretValues.has(rawValue.trim());
+    const trimmed = rawValue.trim();
+    const rec = this.rejectedSecretValues.get(trimmed);
+    if (!rec) return false;
+    if (Date.now() >= rec.expiresAt) {
+      this.rejectedSecretValues.delete(trimmed);
+      return false;
+    }
+    return true;
+  }
+
+  public getRejectedSecretTelemetry(): Array<{ masked: string; reason: string; remainingSec: number }> {
+    const now = Date.now();
+    const out: Array<{ masked: string; reason: string; remainingSec: number }> = [];
+    for (const [val, rec] of this.rejectedSecretValues.entries()) {
+      if (now >= rec.expiresAt) {
+        this.rejectedSecretValues.delete(val);
+        continue;
+      }
+      out.push({
+        masked: this.maskSecret(val),
+        reason: this.redactText(rec.reason).slice(0, 120),
+        remainingSec: Math.max(1, Math.ceil((rec.expiresAt - now) / 1000))
+      });
+    }
+    return out;
   }
 
   public clearRejectedSecretValues(): void {
     this.rejectedSecretValues.clear();
+  }
+
+  public rehydrate(): void {
+    this.ensureInit();
+    this.rejectedSecretValues.clear();
+    this.loadVaultFromDisk();
+    if (this.vaultCache && this.masterKey) {
+      for (const [envVar, entry] of Object.entries(this.vaultCache.entries)) {
+        try {
+          const decrypted = this.decryptEntry(entry);
+          if (decrypted && isUsableSecretValue(decrypted)) {
+            this.plaintextSecrets.set(envVar, decrypted.trim());
+            process.env[envVar] = decrypted.trim();
+          }
+        } catch {
+          // Skip corrupted entry cleanly
+        }
+      }
+    }
+    this.bridgeUniversalEnvAliases();
   }
 
   public init(): void {
@@ -497,13 +647,23 @@ export class InternalSecretsHandler {
       }
     }
 
-    // 3. Case-insensitive scan of process.env for any variant of "all key" / "all_key" / custom AIza... key
+    // 3. Case-insensitive scan of process.env for explicit universal / Gemini backup key aliases ONLY
+    // (Never scrape unrelated Google Maps / Firebase / YouTube / ReCaptcha / Places AIza keys into the Gemini pool)
+    const NON_GEMINI_GOOGLE_ENV = /(?:FIREBASE|MAPS|PLACES|YOUTUBE|RECAPTCHA|ANALYTICS|GEOCOD|STRIPE|TWILIO|TELNYX|CDP|GITHUB)/i;
     for (const [k, v] of Object.entries(process.env)) {
-      if (k === 'GEMINI_API_KEY' || k === 'FIREBASE_API_KEY' || k.startsWith('VITE_FIREBASE')) continue;
+      if (k === 'GEMINI_API_KEY' || NON_GEMINI_GOOGLE_ENV.test(k)) continue;
       const normKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (normKey === 'allkey' || normKey === 'allkeys' || normKey === 'allapikey' || normKey === 'apiuniversal') {
-        addEntry(k, v);
-      } else if (typeof v === 'string' && /^AIza[0-9A-Za-z\-_]{25,}$/.test(v.trim())) {
+      if (
+        normKey === 'allkey' ||
+        normKey === 'allkeys' ||
+        normKey === 'allapikey' ||
+        normKey === 'apiuniversal' ||
+        normKey.startsWith('geminibackupkey') ||
+        normKey.startsWith('geminiapikey') ||
+        normKey.startsWith('geminikey') ||
+        normKey.startsWith('googleaikey') ||
+        normKey.startsWith('genaikey')
+      ) {
         addEntry(k, v);
       }
     }
@@ -704,6 +864,14 @@ export class InternalSecretsHandler {
         if (geminiFallback) val = geminiFallback.value;
       }
     }
+    // If primary GEMINI_API_KEY is quarantined/rejected (e.g. disabled service account or invalid key),
+    // automatically promote the first healthy backup key from the full rotation pool!
+    if (envVar === 'GEMINI_API_KEY' && isUsableSecretValue(val) && this.isSecretValueRejected(val)) {
+      const healthyPool = this.getSecretPool('GEMINI_API_KEY', 'GEMINI_API_KEYS');
+      if (healthyPool.length > 0) {
+        return healthyPool[0].value;
+      }
+    }
     return isUsableSecretValue(val) ? val.trim() : undefined;
   }
 
@@ -711,11 +879,16 @@ export class InternalSecretsHandler {
     primaryEnvVar: string,
     poolEnvVar?: string,
     numberedPrefix?: string,
-    opts?: { isPublicEndpoint?: boolean }
-  ): Array<{ slot: string; masked: string; value: string; envSource: string }> {
+    opts?: { isPublicEndpoint?: boolean; includeRejected?: boolean }
+  ): Array<{ slot: string; masked: string; value: string; envSource: string; rejected?: boolean }> {
     this.ensureInit();
     const seenValues = new Set<string>();
-    const results: Array<{ slot: string; masked: string; value: string; envSource: string }> = [];
+    const results: Array<{ slot: string; masked: string; value: string; envSource: string; rejected?: boolean }> = [];
+
+    const readRawDirect = (envVar: string): string | undefined => {
+      const v = this.plaintextSecrets.get(envVar) ?? process.env[envVar];
+      return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+    };
 
     const pushCandidate = (raw: string | undefined, envSource: string) => {
       if (!raw || typeof raw !== 'string') return;
@@ -725,29 +898,46 @@ export class InternalSecretsHandler {
         .filter((s) => (opts?.isPublicEndpoint ? s.length > 0 : isUsableSecretValue(s)));
       for (const item of parts) {
         if (seenValues.has(item)) continue;
-        if (!opts?.isPublicEndpoint && this.isSecretValueRejected(item)) continue;
+        const isRejected = !opts?.isPublicEndpoint && this.isSecretValueRejected(item);
+        if (isRejected && !opts?.includeRejected) continue;
         seenValues.add(item);
         results.push({
           slot: `slot-${results.length}`,
           masked: this.maskSecret(item, opts),
           value: item,
-          envSource
+          envSource,
+          ...(isRejected ? { rejected: true } : {})
         });
       }
     };
 
-    pushCandidate(this.getSecret(primaryEnvVar), primaryEnvVar);
+    pushCandidate(readRawDirect(primaryEnvVar), primaryEnvVar);
     if (poolEnvVar) {
-      pushCandidate(this.getSecret(poolEnvVar), poolEnvVar);
+      pushCandidate(readRawDirect(poolEnvVar), poolEnvVar);
     }
     const prefix = numberedPrefix || `${primaryEnvVar}_`;
     for (let i = 1; i <= 12; i++) {
       const k = `${prefix}${i}`;
-      pushCandidate(this.getSecret(k), k);
+      pushCandidate(readRawDirect(k), k);
+    }
+
+    // Dedicated backup key slots (e.g. GEMINI_BACKUP_KEY_1..12, GEMINI_KEY_1..12, OPENROUTER_BACKUP_KEY_1..6, etc.)
+    const baseName = primaryEnvVar.replace(/_API_KEY$/, '');
+    if (baseName && baseName !== primaryEnvVar) {
+      for (let i = 1; i <= 12; i++) {
+        const backupKeyVar = `${baseName}_BACKUP_KEY_${i}`;
+        pushCandidate(readRawDirect(backupKeyVar), backupKeyVar);
+      }
+      if (primaryEnvVar === 'GEMINI_API_KEY') {
+        for (let i = 1; i <= 12; i++) {
+          const shortKeyVar = `GEMINI_KEY_${i}`;
+          pushCandidate(readRawDirect(shortKeyVar), shortKeyVar);
+        }
+      }
     }
 
     // Automatically append "all key" (ALL_KEY) and universal fallback keys into the active provider wheel pool
-    // so if GEMINI_API_KEY isn't linked, expires, or returns 401/403/429, ALL_KEY seamlessly takes over!
+    // so if GEMINI_API_KEY isn't linked, expires, or returns 401/403/429, backup keys seamlessly take over!
     if (!opts?.isPublicEndpoint) {
       const universalFallbacks = this.collectUniversalFallbackEntries();
       for (const fb of universalFallbacks) {
@@ -876,9 +1066,12 @@ export class InternalSecretsHandler {
     // 2. Scrub recognizable token shapes even if external to vault
     out = out
       .replace(/AIza[0-9A-Za-z\-_]{25,}/g, '[REDACTED:GOOGLE_API_KEY]')
+      .replace(/\bAQ\.[0-9A-Za-z\-_]{20,}\b/g, '[REDACTED:VERTEX_API_KEY]')
       .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, '[REDACTED:GITHUB_TOKEN]')
       .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[REDACTED:GITHUB_TOKEN]')
       .replace(/\bsk-(?:or-v1-|proj-)?[A-Za-z0-9\-_]{20,}\b/g, '[REDACTED:API_KEY]')
+      .replace(/\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g, '[REDACTED:STRIPE_SECRET_KEY]')
+      .replace(/\bwhsec_[A-Za-z0-9\-_]{16,}\b/g, '[REDACTED:STRIPE_WEBHOOK_SECRET]')
       .replace(/\bgsk_[A-Za-z0-9]{20,}\b/g, '[REDACTED:GROQ_API_KEY]')
       .replace(/\bKEY[A-Za-z0-9_]{24,}\b/g, '[REDACTED:TELNYX_KEY]');
 

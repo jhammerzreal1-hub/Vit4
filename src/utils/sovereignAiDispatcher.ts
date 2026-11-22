@@ -67,6 +67,8 @@ export interface DispatchChatResult {
   providerTrace?: Array<{ stage: string; model: string; status: string; ms: number; note?: string }>;
   authRejected?: boolean;
   isError?: boolean;
+  builtInLlama?: boolean;
+  offlineFailover?: boolean;
   proxyWheel?: {
     spokeId: string;
     provider: string;
@@ -134,9 +136,161 @@ export class SovereignAiDispatcher {
       'Lysander-Genesis-SuperModel-Intelligence',
       'Aurelius-Omega-Universal-Supermodel'
     ]);
-    const normalizedCloudModel = virtualCloudAliases.has(chosenModel) ? 'gemini-3.1-flash-lite' : chosenModel;
+    const normalizedCloudModel = virtualCloudAliases.has(chosenModel) ? 'gemini-2.5-flash' : chosenModel;
 
-    if (!zeroTokenMode) {
+    // Helper: try local Ollama & llama-server cascade directly from browser
+    const tryLocalLlamaOrOllamaCascade = async (): Promise<DispatchChatResult | null> => {
+      const localMessages: any[] = [
+        ...(rawInstruction ? [{ role: 'system', content: rawInstruction }] : []),
+        ...messages
+          .filter((m: any) => m && typeof m.content === 'string' && m.content.trim().length > 0)
+          .slice(-20)
+          .map((m: any) => ({ role: m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content || '') })),
+        { role: 'user', content: prompt }
+      ];
+
+      const customOllamaHost =
+        typeof window !== 'undefined'
+          ? (localStorage.getItem('sovereign_ollama_host') || localStorage.getItem('OLLAMA_HOST') || '').trim().replace(/\/+$/, '')
+          : '';
+      const ollamaHosts = Array.from(
+        new Set([
+          ...(customOllamaHost ? [customOllamaHost] : []),
+          'http://127.0.0.1:11434',
+          'http://localhost:11434'
+        ])
+      );
+
+      // 1. Try Local / Configured Ollama daemon with dynamic /api/tags model auto-discovery
+      for (const ollamaBase of ollamaHosts) {
+        if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        try {
+          const tagsRes = await fetch(`${ollamaBase}/api/tags`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(1800)
+          });
+          if (!tagsRes.ok) continue;
+          const tagsData: any = await tagsRes.json().catch(() => null);
+          const installedModels: string[] = Array.isArray(tagsData?.models)
+            ? tagsData.models.map((m: any) => String(m?.name || m?.model || '')).filter(Boolean)
+            : [];
+
+          let chosenOllamaModel = installedModels[0] || 'llama3.2';
+          const lowerChosen = (chosenModel || '').toLowerCase();
+          const exactMatch = installedModels.find(
+            (m) => m.toLowerCase() === lowerChosen || m.toLowerCase().startsWith(lowerChosen)
+          );
+          if (exactMatch) {
+            chosenOllamaModel = exactMatch;
+          } else if (installedModels.length > 0) {
+            const nonEmbed = installedModels.filter((m) => !/embed|nomic|bge|mxbai/i.test(m));
+            if (nonEmbed.length > 0) chosenOllamaModel = nonEmbed[0];
+          }
+
+          const ollamaRes = await fetch(`${ollamaBase}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: chosenOllamaModel, messages: localMessages, stream: false }),
+            signal: abortSignal || AbortSignal.timeout(45_000)
+          });
+          if (ollamaRes.ok) {
+            const data = await ollamaRes.json().catch(() => null);
+            const replyText = String(data?.message?.content || data?.response || '').trim();
+            if (replyText) {
+              return {
+                text: replyText,
+                model: `${resolvedAgentName} · Ollama (${chosenOllamaModel})`,
+                isLocal: true,
+                tokenSpend: 0,
+                engine: `Ollama Local Daemon (${ollamaBase})`,
+                executedTools: [],
+                janusFace: 'FACE_2_SPECULATIVE_CONTINUUM',
+                quotaNotice: zeroTokenMode
+                  ? undefined
+                  : `Cloud spokes unavailable — fell back automatically to offline Ollama (${chosenOllamaModel}).`
+              };
+            }
+          }
+
+          const ollamaV1Res = await fetch(`${ollamaBase}/v1/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: chosenOllamaModel, messages: localMessages, temperature: 0.7 }),
+            signal: abortSignal || AbortSignal.timeout(45_000)
+          });
+          if (ollamaV1Res.ok) {
+            const data = await ollamaV1Res.json().catch(() => null);
+            const replyText = String(data?.choices?.[0]?.message?.content || '').trim();
+            if (replyText) {
+              return {
+                text: replyText,
+                model: `${resolvedAgentName} · Ollama (${chosenOllamaModel})`,
+                isLocal: true,
+                tokenSpend: 0,
+                engine: `Ollama Local v1 (${ollamaBase})`,
+                executedTools: [],
+                janusFace: 'FACE_2_SPECULATIVE_CONTINUUM',
+                quotaNotice: zeroTokenMode
+                  ? undefined
+                  : `Cloud spokes unavailable — fell back automatically to offline Ollama (${chosenOllamaModel}).`
+              };
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 2. Try Termux / local llama-server (8080)
+      for (const llamaBase of ['http://127.0.0.1:8080', 'http://localhost:8080']) {
+        if (abortSignal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        try {
+          const healthRes = await fetch(`${llamaBase}/health`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(1000)
+          });
+          if (!healthRes.ok || healthRes.headers.get('x-aurelius-instance')) continue;
+          const ct = (healthRes.headers.get('content-type') || '').toLowerCase();
+          if (ct.includes('text/html')) continue;
+
+          const llamaRes = await fetch(`${llamaBase}/v1/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'local-gguf', messages: localMessages, temperature: 0.7 }),
+            signal: abortSignal || AbortSignal.timeout(45_000)
+          });
+          if (llamaRes.ok) {
+            const data = await llamaRes.json().catch(() => null);
+            const replyText = String(data?.choices?.[0]?.message?.content || '').trim();
+            if (replyText) {
+              return {
+                text: replyText,
+                model: `${resolvedAgentName} · Local llama-server`,
+                isLocal: true,
+                tokenSpend: 0,
+                engine: `Local llama-server (${llamaBase})`,
+                executedTools: [],
+                janusFace: 'FACE_2_SPECULATIVE_CONTINUUM',
+                quotaNotice: zeroTokenMode
+                  ? undefined
+                  : `Cloud spokes unavailable — fell back automatically to local llama-server.`
+              };
+            }
+          }
+        } catch (_) {}
+      }
+
+      return null;
+    };
+
+    const wheelState: {
+      kernelFallback: DispatchChatResult | null;
+      tierQuotaBlocked: DispatchChatResult | null;
+    } = {
+      kernelFallback: null,
+      tierQuotaBlocked: null
+    };
+
+    // Helper: dispatch via backend /api/chat (Proxy Loop Wheel in live mode, or strict offline Built-in Abliterated OS/MoE GGUF in Air-Gapped mode)
+    const tryServerProxyWheel = async (reasonNotice?: string, sendZeroTokenMode: boolean = false): Promise<DispatchChatResult | null> => {
       const payloadBody = JSON.stringify({
         prompt,
         messages,
@@ -150,7 +304,7 @@ export class SovereignAiDispatcher {
         rawMode,
         deepthink,
         useSearchGrounding,
-        zeroTokenMode: false
+        zeroTokenMode: sendZeroTokenMode
       });
 
       const maxAttempts = 2;
@@ -160,7 +314,7 @@ export class SovereignAiDispatcher {
         }
 
         const attemptController = new AbortController();
-        const timeoutId = setTimeout(() => attemptController.abort(new Error('Request ceiling timeout (82s)')), 82_000);
+        const timeoutId = setTimeout(() => attemptController.abort(new Error('Request ceiling timeout (95s)')), 95_000);
         const onParentAbort = () => attemptController.abort(abortSignal?.reason);
         abortSignal?.addEventListener('abort', onParentAbort, { once: true });
 
@@ -178,38 +332,81 @@ export class SovereignAiDispatcher {
             lastProviderTrace = data.providerTrace;
           }
 
+          if (res.status === 429 && data?.error === 'DAILY_TIER_QUOTA_REACHED') {
+            const msg = data?.message || 'Daily AI request quota reached for your current tier. Upgrade your plan to continue.';
+            wheelState.tierQuotaBlocked = {
+              text: `[Daily Tier Limit Reached]\n\n${msg}`,
+              model: `${resolvedAgentName} (${normalizedCloudModel})`,
+              isLocal: false,
+              tokenSpend: 0,
+              engine: 'Tier Quota Gate',
+              executedTools: [],
+              quotaNotice: msg,
+              providerTrace: lastProviderTrace,
+              isError: true
+            };
+            return null;
+          }
+
+          const isBuiltInLlama = Boolean(data?.builtInLlama);
+          const isKernelFallback =
+            !isBuiltInLlama &&
+            (Boolean(data?.kernelFallback) ||
+              Boolean(data?.fallbackRequired) ||
+              data?.activeExecutionModel === 'sovereign-quantum-kernel' ||
+              String(data?.model || '').includes('Sovereign Autonomous Continuity Kernel'));
+
           if (res.ok && data && typeof data.text === 'string' && data.text.length > 0 && !data.error && !data.isError) {
             const finalText = rawMode
               ? data.text
               : janusGate.healReasoningStream(data.text, prompt).fullText;
-            return {
+            const builtResult: DispatchChatResult = {
               text: finalText,
               model: data.model || `${resolvedAgentName} (${normalizedCloudModel})`,
-              isLocal: data.isLocal || false,
+              isLocal: data.isLocal || isBuiltInLlama || isKernelFallback || false,
+              builtInLlama: isBuiltInLlama,
+              offlineFailover: Boolean(data.offlineFailover),
               tokenSpend: data.tokenSpend || 0,
-              engine: data.isLiveCloud ? 'Sovereign Cloud Chain' : 'Local Daemon',
+              engine: isBuiltInLlama
+                ? `Built-in Abliterated GGUF (${data.activeExecutionModel || 'OS Core'})`
+                : isKernelFallback
+                ? 'Local Substrate Kernel'
+                : (data.isLiveCloud ? 'Sovereign Cloud Chain' : 'Local Daemon'),
               executedTools: Array.isArray(data.executedTools) ? data.executedTools : [],
               deepThinkTrace: data.deepThinkTrace,
               groundingMetadata: data.groundingMetadata || null,
-              janusFace: 'FACE_2_SPECULATIVE_CONTINUUM',
+              janusFace: isBuiltInLlama || !isKernelFallback ? 'FACE_2_SPECULATIVE_CONTINUUM' : 'FACE_1_SOVEREIGN_ANCHOR',
+              quotaNotice: isBuiltInLlama ? undefined : (reasonNotice || data.quotaNotice),
               providerTrace: data.providerTrace,
               proxyWheel: data.proxyWheel,
               elapsedMs: data.elapsedMs,
+              authRejected: Boolean(data.authRejected),
               extractedPreferredName: data.extractedPreferredName ?? null,
               userProfile: data.userProfile ?? null
             };
+
+            if (isKernelFallback) {
+              wheelState.kernelFallback = builtResult;
+              if (data.authRejected) lastAuthRejected = true;
+              if (data.quotaNotice) {
+                lastErrorMessage = data.quotaNotice;
+                quotaNotice = data.quotaNotice;
+              }
+              return null;
+            }
+            return builtResult;
           }
 
           if (res.status === 422 || data?.railBlocked) {
             lastRailBlocked = true;
-            lastErrorMessage = data?.error || data?.message || 'Upstream spokes hit a content filter or refusal rail; stopped before polluting stream.';
+            lastErrorMessage = data?.error || data?.message || 'Upstream spokes hit a content filter or refusal rail.';
             quotaNotice = lastErrorMessage;
             break;
           }
 
           if (res.status === 401 || data?.error === 'AUTH_REJECTED' || data?.authRejected) {
             lastAuthRejected = true;
-            lastErrorMessage = data?.message || 'Upstream API key rejected (401). Please update or activate your upgraded Gemini / AI provider key in Settings > Secrets or API Keys & Gateway.';
+            lastErrorMessage = data?.message || 'Upstream API key rejected (401).';
             quotaNotice = lastErrorMessage;
             break;
           }
@@ -226,7 +423,6 @@ export class SovereignAiDispatcher {
             lastErrorMessage = `Chat dispatch returned HTTP ${res.status}`;
           }
 
-          // Retry once on transient 502/503/504 only
           if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt === 0) {
             await new Promise(r => setTimeout(r, 600));
             continue;
@@ -245,86 +441,24 @@ export class SovereignAiDispatcher {
           abortSignal?.removeEventListener('abort', onParentAbort);
         }
       }
+      return null;
+    };
 
-      // Automatic Local Llama & Ollama Cascade Fallback when cloud API limits hit
-      const tryLocalLlamaOrOllamaCascade = async (): Promise<DispatchChatResult | null> => {
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        const isLocalOrigin = host === 'localhost' || host === '127.0.0.1' || host === '::1';
-        if (!isLocalOrigin) {
-          return null;
-        }
-        const localMessages: any[] = [
-          { role: 'system', content: rawInstruction },
-          ...messages.map((m: any) => ({ role: m.role === 'model' ? 'assistant' : 'user', content: String(m.content || '') })),
-          { role: 'user', content: prompt }
-        ];
-
-        // 1. Try Ollama (11434)
-        try {
-          const ollamaRes = await fetch('http://127.0.0.1:11434/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'llama3.2', messages: localMessages, stream: false }),
-            signal: AbortSignal.timeout(4500)
-          });
-          if (ollamaRes.ok) {
-            const data = await ollamaRes.json();
-            if (data?.message?.content) {
-              return {
-                text: data.message.content,
-                model: `${resolvedAgentName} (Ollama Local Llama Engine)`,
-                isLocal: true,
-                tokenSpend: 0,
-                engine: 'Ollama Local Llama Daemon (11434)',
-                executedTools: [],
-                janusFace: 'FACE_2_SPECULATIVE_CONTINUUM',
-                quotaNotice: `Cloud spoke limit reached; cascaded seamlessly to Ollama Local Llama engine.`
-              };
-            }
-          }
-        } catch (_) {}
-
-        // 2. Try Termux / local llama-server (8080)
-        try {
-          const llamaRes = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'llama3.2:latest', messages: localMessages, temperature: 0.7 }),
-            signal: AbortSignal.timeout(4500)
-          });
-          if (llamaRes.ok) {
-            const data = await llamaRes.json();
-            if (data?.choices?.[0]?.message?.content) {
-              return {
-                text: data.choices[0].message.content,
-                model: `${resolvedAgentName} (Termux llama-server)`,
-                isLocal: true,
-                tokenSpend: 0,
-                engine: 'Termux Native llama-server (8080)',
-                executedTools: [],
-                janusFace: 'FACE_2_SPECULATIVE_CONTINUUM',
-                quotaNotice: `Cloud spoke limit reached; cascaded seamlessly to Termux llama-server.`
-              };
-            }
-          }
-        } catch (_) {}
-
-        return null;
-      };
+    if (!zeroTokenMode) {
+      // Standard Mode: Try Cloud first -> backend automatically fails over to Built-in Pre-downloaded Abliterated OS/MoE GGUFs
+      const serverRes = await tryServerProxyWheel(undefined, false);
+      if (serverRes) return serverRes;
+      if (wheelState.tierQuotaBlocked) return wheelState.tierQuotaBlocked;
 
       const localCascadeRes = await tryLocalLlamaOrOllamaCascade();
-      if (localCascadeRes) {
-        return localCascadeRes;
-      }
+      if (localCascadeRes) return localCascadeRes;
 
-      // If WebGPU is supported and weights aren't loaded yet, auto-boot the in-browser WebLLM Llama model on demand
       if (!localLlmManager.hasLoadedWeights() && localLlmManager.isWebGpuSupported()) {
         try {
           await localLlmManager.loadWebLlmModel(normalizedCloudModel || 'Llama-3.2-1B-Instruct-q4f16_1-MLC');
         } catch (_) {}
       }
 
-      // Check if a REAL local engine (WebGPU weights loaded, Termux llama-server, or Ollama) is available before falling back
       const [hasOllama, hasTermux] = await Promise.all([
         localLlmManager.probeOllama().catch(() => false),
         localLlmManager.probeLlamaCppServer().catch(() => false)
@@ -332,48 +466,39 @@ export class SovereignAiDispatcher {
       const hasRealLocal = localLlmManager.hasLoadedWeights() || hasOllama || hasTermux;
 
       if (!hasRealLocal) {
-        const failureHeader = lastAuthRejected
-          ? `Authentication Rejected (${resolvedAgentName})`
-          : lastRailBlocked
-          ? `Upstream Safety Rail Triggered (${resolvedAgentName})`
-          : `Model Dispatch Failed (${resolvedAgentName})`;
-        const remediation = lastAuthRejected
-          ? 'Link a valid API key to ALL_KEY ("all key") or GEMINI_API_KEY in Settings > Secrets, or add a provider key in API Keys & Secrets Vault.'
-          : lastRailBlocked
-          ? 'Configure an unrestricted open-weight model endpoint (OpenRouter, DeepSeek, Custom Proxy, or local Ollama/llama-server) in API Keys & Gateway so unfiltered weights handle this prompt.'
-          : 'Verify an active API key in API Keys & Gateway, load WebGPU weights, or start a local Ollama/llama-server daemon.';
-
-        return {
-          text: `[${failureHeader}]\n\n${lastErrorMessage || 'All configured cloud & local spokes failed to return an unblocked model response.'}\n\nNext Step: ${remediation}`,
-          model: `${resolvedAgentName} (${normalizedCloudModel})`,
-          isLocal: false,
-          tokenSpend: 0,
-          engine: lastAuthRejected ? 'Auth Rejected (401)' : lastRailBlocked ? 'Rail Blocked (422)' : 'Dispatch Error',
-          executedTools: [],
-          quotaNotice: lastErrorMessage,
-          providerTrace: lastProviderTrace,
-          authRejected: lastAuthRejected,
-          isError: true
-        };
+        if (wheelState.kernelFallback) {
+          return wheelState.kernelFallback;
+        }
+        if (!quotaNotice) {
+          quotaNotice = lastAuthRejected
+            ? (lastErrorMessage || 'Cloud API key rejected (401) — operating via Local Substrate.')
+            : lastRailBlocked
+            ? (lastErrorMessage || 'Upstream rail triggered — operating via Local Substrate.')
+            : (lastErrorMessage || 'Cloud spokes unavailable — operating via Local Substrate.');
+        }
       }
-    }
+    } else {
+      // Air-Gapped / Offline Test Mode: Strictly test offline models without touching external cloud APIs!
+      const localDirect = await tryLocalLlamaOrOllamaCascade();
+      if (localDirect) return localDirect;
 
-    // Check real local engine availability even in zeroTokenMode (never synthesize fake text!)
-    const [hasOllamaLocal, hasTermuxLocal] = await Promise.all([
-      localLlmManager.probeOllama().catch(() => false),
-      localLlmManager.probeLlamaCppServer().catch(() => false)
-    ]);
-    if (!localLlmManager.hasLoadedWeights() && !hasOllamaLocal && !hasTermuxLocal) {
-      return {
-        text: `[No Local Inference Engine Running]\n\nAir-Gapped mode is active, but no WebGPU weights are loaded and neither Ollama (11434) nor llama-server (8080) responded.\n\nNext Step: Load a WebGPU model, start Ollama / llama-server, or switch off Air-Gapped mode.`,
-        model: chosenModel,
-        isLocal: false,
-        tokenSpend: 0,
-        engine: 'Local Engine Unavailable',
-        executedTools: [],
-        quotaNotice: 'No real local inference engine available.',
-        isError: true
-      };
+      if (!localLlmManager.hasLoadedWeights() && localLlmManager.isWebGpuSupported()) {
+        try {
+          await localLlmManager.loadWebLlmModel(chosenModel || 'Llama-3.2-1B-Instruct-q4f16_1-MLC');
+        } catch (_) {}
+      }
+
+      const [hasOllamaLocal, hasTermuxLocal] = await Promise.all([
+        localLlmManager.probeOllama().catch(() => false),
+        localLlmManager.probeLlamaCppServer().catch(() => false)
+      ]);
+      if (!localLlmManager.hasLoadedWeights() && !hasOllamaLocal && !hasTermuxLocal) {
+        // Call server in strict zeroTokenMode=true so it skips all cloud APIs and runs ONLY the pre-downloaded GGUF OS/MoE engine
+        const offlineServerRes = await tryServerProxyWheel(undefined, true);
+        if (wheelState.tierQuotaBlocked) return wheelState.tierQuotaBlocked;
+        if (offlineServerRes) return offlineServerRes;
+        if (wheelState.kernelFallback) return wheelState.kernelFallback;
+      }
     }
 
     const janusResult = await janusGate.executeThroughGate({
@@ -392,12 +517,14 @@ export class SovereignAiDispatcher {
 
     return {
       text: janusResult.text,
-      model: `${resolvedAgentName} (${chosenModel})`,
+      model: `${resolvedAgentName} (${janusResult.faceUsed === 'FACE_1_SOVEREIGN_ANCHOR' ? 'Face 1 Anchor' : chosenModel})`,
       isLocal: true,
       tokenSpend: 0,
-      engine: `Local Inference (${janusResult.faceUsed})`,
+      engine: `Janus Gate (${janusResult.faceUsed})`,
       executedTools: [],
       janusFace: janusResult.faceUsed,
+      providerTrace: lastProviderTrace,
+      authRejected: lastAuthRejected,
       quotaNotice
     };
   }

@@ -223,16 +223,16 @@ export const SovereignOSBar: React.FC<SovereignOSBarProps> = ({
       <div
         className={`${
           isBottomWindows
-            ? 'min-h-11 pb-safe-nav bg-zinc-950/95 backdrop-blur-xl border-t border-zinc-800/90 px-2 sm:px-3 z-30'
-            : 'h-9 bg-zinc-950/95 border-b border-zinc-800/80 px-2 sm:px-3 z-20'
-        } flex items-center justify-between gap-1.5 sm:gap-2 shrink-0 select-none`}
+            ? 'min-h-11 pb-safe-nav bg-zinc-950/95 backdrop-blur-xl border-t border-zinc-800/90 px-1.5 sm:px-3 z-30'
+            : 'h-9 bg-zinc-950/95 border-b border-zinc-800/80 px-1.5 sm:px-3 z-20'
+        } flex items-center justify-between gap-1 sm:gap-2 shrink-0 select-none`}
       >
         {/* Left: Start / OS Apps Button + Running & Pinned Taskbar Icons */}
-        <div className="flex items-center gap-1.5 flex-1 min-w-0 overflow-x-auto scrollbar-none">
+        <div className="flex items-center gap-1 sm:gap-1.5 flex-1 min-w-0 overflow-x-auto scrollbar-none py-1">
           <button
             type="button"
             onClick={() => onSetLauncherOpen(!isLauncherOpen)}
-            className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+            className={`px-2 sm:px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
               isLauncherOpen
                 ? 'bg-sky-500/20 border-sky-400/60 text-sky-200'
                 : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-700/80 hover:border-amber-500/40 text-zinc-100'
@@ -240,7 +240,7 @@ export const SovereignOSBar: React.FC<SovereignOSBarProps> = ({
             title="Open Sovereign OS Start Menu & App Launcher (Alt+L)"
           >
             <LayoutGrid className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-            <span>{isBottomWindows ? 'Start' : 'OS Apps'}</span>
+            <span>{isBottomWindows ? 'Start' : 'Apps'}</span>
           </button>
 
           {onToggleDesktopSidebar && isBottomWindows && (
@@ -262,7 +262,7 @@ export const SovereignOSBar: React.FC<SovereignOSBarProps> = ({
             <button
               type="button"
               onClick={onToggleDetachChat}
-              className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+              className={`hidden sm:flex px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
                 isChatDetached
                   ? 'bg-amber-500/20 border-amber-400/60 text-amber-200 shadow-[0_0_12px_rgba(245,158,11,0.2)]'
                   : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-amber-300'
@@ -270,7 +270,7 @@ export const SovereignOSBar: React.FC<SovereignOSBarProps> = ({
               title={isChatDetached ? 'Re-Dock Orchestrator Chat' : 'Detach Chat as Always-On-Top Floating PiP (Navigate OS Freely)'}
             >
               <PictureInPicture2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="hidden sm:inline">{isChatDetached ? 'Chat Detached' : 'Detach Chat'}</span>
+              <span>{isChatDetached ? 'Chat Detached' : 'Detach Chat'}</span>
             </button>
           )}
 
@@ -278,7 +278,7 @@ export const SovereignOSBar: React.FC<SovereignOSBarProps> = ({
             <button
               type="button"
               onClick={onTogglePersistentTalk}
-              className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+              className={`px-2 sm:px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
                 persistentTalkSpeaking
                   ? 'bg-sky-500/25 border-sky-400/70 text-sky-100'
                   : persistentTalkActive

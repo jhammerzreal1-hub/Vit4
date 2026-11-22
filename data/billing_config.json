@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "fiatStripeEnabled": false,
+  "cryptoEnabled": false,
+  "treasuryEvmAddress": "",
+  "enabledChains": [
+    "base",
+    "ethereum",
+    "polygon",
+    "arbitrum"
+  ],
+  "enabledTokens": [
+    "USDC",
+    "ETH"
+  ],
+  "updatedAt": "2026-11-22T17:40:10.644Z"
+}

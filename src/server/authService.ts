@@ -16,6 +16,7 @@ import {
   ALL_SOVEREIGN_MODULES,
   COLLABORATOR_PRIVILEGES,
   OPERATOR_PRIVILEGES,
+  SYSTEM_CORE_ONLY_MODULES,
   VIEWER_PRIVILEGES,
   clonePrivileges,
   type ActiveSessionSummary,
@@ -26,7 +27,15 @@ import {
   type AuthSessionResponse,
   type AuthUserPublic,
   type AuthorityTier,
-  type UserPrivileges
+  type DailyAiQuotaUsage,
+  type SupportedBillingChain,
+  type SupportedBillingCryptoToken,
+  type TierBadgeColor,
+  type TierBillingMode,
+  type TierPricingConfig,
+  type UserPrivileges,
+  type UserSubscriptionStatus,
+  type UserTierDefinition
 } from '../types/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -47,6 +56,7 @@ interface PersistedAuthStore {
   users: StoredAuthUser[];
   sessions: StoredAuthSession[];
   policy: AuthPolicySettings;
+  tiers: UserTierDefinition[];
   auditLog: AdminAuditEntry[];
 }
 
@@ -81,6 +91,7 @@ const SESSION_TTL_REMEMBER_MS = 1000 * 60 * 60 * 24 * 30; // 30 days when Save L
 const SESSION_TTL_SHORT_MS = 1000 * 60 * 60 * 12; // 12 hours when Remember Me is off
 const DATA_DIR = path.join(process.cwd(), 'data');
 const AUTH_STORE_FILE = path.join(DATA_DIR, 'auth_store.json');
+const AI_QUOTA_FILE = path.join(DATA_DIR, 'ai_usage_quotas.json');
 const AUTH_HMAC_KEY_FILE = path.join(DATA_DIR, '.auth_hmac.key');
 const VALID_MODULE_SET = new Set<string>(ALL_SOVEREIGN_MODULES);
 
@@ -110,10 +121,187 @@ const DEFAULT_POLICY: AuthPolicySettings = {
   allowSelfRegistration: true,
   newUsersRequireApproval: false,
   defaultRole: 'collaborator',
+  defaultTierId: 'tier-free',
   defaultPrivileges: clonePrivileges(COLLABORATOR_PRIVILEGES),
   entityIntelligenceDelegationEnabled: true,
   systemLockdownMode: false
 };
+
+const VALID_BADGE_COLORS = new Set<TierBadgeColor>(['zinc', 'emerald', 'cyan', 'amber', 'violet', 'rose']);
+const VALID_BILLING_MODES = new Set<TierBillingMode>(['free', 'monthly', 'one-time', 'both']);
+const VALID_CHAINS = new Set<SupportedBillingChain>(['base', 'ethereum', 'polygon', 'arbitrum', 'base-sepolia']);
+const VALID_TOKENS = new Set<SupportedBillingCryptoToken>(['USDC', 'ETH']);
+
+function buildDefaultTiers(): UserTierDefinition[] {
+  const now = new Date().toISOString();
+  const eliteModules = ALL_SOVEREIGN_MODULES.filter((m) => !SYSTEM_CORE_ONLY_MODULES.includes(m));
+  return [
+    {
+      id: 'tier-free',
+      slug: 'explorer-free',
+      name: 'Explorer Free',
+      tagline: 'Isolated personal OS sandbox to evaluate the platform before backing',
+      description:
+        'Clean personal workspace with orchestrator chat, live voice, search, browser, creative studio, personal files, and your own encrypted API key vault. Upgrade anytime to invest in the project.',
+      badgeColor: 'zinc',
+      rank: 1,
+      baseRole: 'collaborator',
+      isBuiltIn: true,
+      isPublic: true,
+      isMonetized: false,
+      isFounderTier: false,
+      pricing: {
+        billingMode: 'free',
+        monthlyUsdCents: 0,
+        oneTimeUsdCents: 0,
+        cryptoUsdAmount: 0,
+        acceptedCryptoChains: ['base', 'ethereum', 'polygon', 'arbitrum'],
+        acceptedCryptoTokens: ['USDC', 'ETH']
+      },
+      privileges: clonePrivileges(COLLABORATOR_PRIVILEGES),
+      features: [
+        '100% Isolated Personal Workspace & SQL Memory',
+        'Bring Your Own API Keys (Personal Encrypted Vault)',
+        'Orchestrator Chat, Voice, Search & Browser',
+        'Personal File Sandbox & Creative Media Tools'
+      ],
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'tier-pro',
+      slug: 'operator-pro',
+      name: 'Operator Pro',
+      tagline: 'Invest in core R&D & compute sustainability while unlocking autonomous workflows',
+      description:
+        'Directly backs ongoing development, open-architecture research, and server infrastructure. Unlocks autonomous workflows, isolated terminal & tools, personal crypto wallet vault, Burner Mail, War Room, and Grant Hunter.',
+      badgeColor: 'emerald',
+      rank: 2,
+      baseRole: 'operator',
+      isBuiltIn: true,
+      isPublic: true,
+      isMonetized: true,
+      isFounderTier: false,
+      pricing: {
+        billingMode: 'both',
+        monthlyUsdCents: 1900,
+        oneTimeUsdCents: 19900,
+        cryptoUsdAmount: 19,
+        acceptedCryptoChains: ['base', 'ethereum', 'polygon', 'arbitrum'],
+        acceptedCryptoTokens: ['USDC', 'ETH']
+      },
+      privileges: clonePrivileges({
+        ...OPERATOR_PRIVILEGES,
+        allowedModules: Array.from(new Set([...OPERATOR_PRIVILEGES.allowedModules, 'grant-hunter', 'burner-mail'])),
+        canUseBurnerMail: true,
+        canAccessGrantHunter: true,
+        canAccessSecretsAndWallets: true,
+        canBringOwnKeys: true,
+        canAccessSystemCore: false,
+        maxDailyAiRequests: 500
+      }),
+      features: [
+        'Directly Funds Active Engineering & Project Continuity',
+        'Autonomous Multi-Step Orchestrator Workflows',
+        'Personal Crypto Wallet Vault & CDP Connectors',
+        'Real Burner Mail Vault, Grant Hunter & Terminal',
+        '500 Daily AI Orchestration Requests'
+      ],
+      createdAt: now,
+      updatedAt: now
+    },
+    {
+      id: 'tier-sovereign',
+      slug: 'sovereign-founder',
+      name: 'Sovereign Founder',
+      tagline: 'Founder-tier project investment: permanent Founder Wall seat, all modules & unlimited AI',
+      description:
+        'Anchor the long-term survival, independence, and roadmap of the project. Includes a permanently timestamped Founder & Supporter Message Board seat (anonymous or attributed, with direct unfiltered feedback priority) plus every user OS module and unlimited AI.',
+      badgeColor: 'amber',
+      rank: 3,
+      baseRole: 'operator',
+      isBuiltIn: true,
+      isPublic: true,
+      isMonetized: true,
+      isFounderTier: true,
+      pricing: {
+        billingMode: 'both',
+        monthlyUsdCents: 4900,
+        oneTimeUsdCents: 49900,
+        cryptoUsdAmount: 49,
+        acceptedCryptoChains: ['base', 'ethereum', 'polygon', 'arbitrum'],
+        acceptedCryptoTokens: ['USDC', 'ETH']
+      },
+      privileges: clonePrivileges({
+        allModules: false,
+        allowedModules: eliteModules,
+        canUseChat: true,
+        canUseVoiceChat: true,
+        canRunAutonomousWorkflow: true,
+        canExecuteTerminalAndTools: true,
+        canAccessSecretsAndWallets: true,
+        canModifyOSSettings: true,
+        canManageUsers: false,
+        canUseBurnerMail: true,
+        canUseInfiniteSim: true,
+        canAccessGrantHunter: true,
+        canBringOwnKeys: true,
+        canAccessSystemCore: false,
+        maxDailyAiRequests: 0
+      }),
+      features: [
+        'Permanent Timestamped Seat on Founder & Supporter Wall',
+        'Share Anonymous or Public Feedback & Proof You Backed Early',
+        'All User-Level OS Modules + Infinite SIM & AI Distillery',
+        'Unlimited Daily Orchestrator Executions',
+        'Directly Accelerates New Releases & Compute Independence'
+      ],
+      createdAt: now,
+      updatedAt: now
+    }
+  ];
+}
+
+function sanitizeTierBadgeColor(raw: unknown, fallback: TierBadgeColor = 'emerald'): TierBadgeColor {
+  const s = String(raw || '').trim().toLowerCase() as TierBadgeColor;
+  return VALID_BADGE_COLORS.has(s) ? s : fallback;
+}
+
+function sanitizeTierPricing(raw: unknown, fallback?: TierPricingConfig): TierPricingConfig {
+  const base: TierPricingConfig = fallback || {
+    billingMode: 'free',
+    monthlyUsdCents: 0,
+    oneTimeUsdCents: 0,
+    cryptoUsdAmount: 0,
+    acceptedCryptoChains: ['base', 'ethereum', 'polygon', 'arbitrum'],
+    acceptedCryptoTokens: ['USDC', 'ETH']
+  };
+  if (!raw || typeof raw !== 'object') return { ...base };
+  const obj = raw as Record<string, unknown>;
+  const modeRaw = String(obj.billingMode || base.billingMode) as TierBillingMode;
+  const billingMode: TierBillingMode = VALID_BILLING_MODES.has(modeRaw) ? modeRaw : base.billingMode;
+  const monthlyUsdCents = Math.max(0, Math.min(100_000_000, Math.round(Number(obj.monthlyUsdCents ?? base.monthlyUsdCents) || 0)));
+  const oneTimeUsdCents = Math.max(0, Math.min(100_000_000, Math.round(Number(obj.oneTimeUsdCents ?? base.oneTimeUsdCents) || 0)));
+  const cryptoUsdAmount = Math.max(
+    0,
+    Math.min(1_000_000, Math.round((Number(obj.cryptoUsdAmount ?? (monthlyUsdCents > 0 ? monthlyUsdCents / 100 : oneTimeUsdCents / 100)) || 0) * 100) / 100)
+  );
+  const rawChains = Array.isArray(obj.acceptedCryptoChains) ? obj.acceptedCryptoChains : base.acceptedCryptoChains;
+  const acceptedCryptoChains = rawChains.filter((c): c is SupportedBillingChain => VALID_CHAINS.has(c as SupportedBillingChain));
+  const rawTokens = Array.isArray(obj.acceptedCryptoTokens) ? obj.acceptedCryptoTokens : base.acceptedCryptoTokens;
+  const acceptedCryptoTokens = rawTokens.filter((t): t is SupportedBillingCryptoToken => VALID_TOKENS.has(t as SupportedBillingCryptoToken));
+  const stripePriceId = typeof obj.stripePriceId === 'string' ? obj.stripePriceId.trim().slice(0, 128) : base.stripePriceId;
+
+  return {
+    billingMode,
+    monthlyUsdCents,
+    oneTimeUsdCents,
+    cryptoUsdAmount,
+    acceptedCryptoChains: acceptedCryptoChains.length > 0 ? acceptedCryptoChains : ['base', 'ethereum'],
+    acceptedCryptoTokens: acceptedCryptoTokens.length > 0 ? acceptedCryptoTokens : ['USDC', 'ETH'],
+    ...(stripePriceId ? { stripePriceId } : {})
+  };
+}
 
 // Executive Architect identity helper moved above for strict provider-aware checks
 
@@ -123,6 +311,11 @@ function enforceArchitectInvariants(user: StoredAuthUser): StoredAuthUser {
     user.authorityTier = 'executive-architect';
     user.role = 'admin';
     user.status = 'active';
+    user.tierId = 'executive-architect';
+    user.tierName = 'Executive Architect';
+    user.tierBadgeColor = 'amber';
+    user.subscriptionStatus = 'lifetime';
+    user.tierExpiresAt = null;
     user.privileges = clonePrivileges(ADMIN_PRIVILEGES);
   } else {
     user.isExecutiveArchitect = false;
@@ -182,14 +375,20 @@ export function sanitizePrivileges(input: unknown, role: AuthRole): UserPrivileg
   const base = defaultPrivilegesForRole(role);
   if (!input || typeof input !== 'object') return base;
   const obj = input as Record<string, unknown>;
+  const canAccessSystemCore = false; // Strictly reserved for Admin / Executive Architect
   const rawModules = Array.isArray(obj.allowedModules) ? obj.allowedModules : base.allowedModules;
   const filteredModules = Array.from(
     new Set(
       rawModules
         .map((m) => String(m || '').trim())
-        .filter((m): m is ModuleType => VALID_MODULE_SET.has(m))
+        .filter((m): m is ModuleType => VALID_MODULE_SET.has(m) && !SYSTEM_CORE_ONLY_MODULES.includes(m as ModuleType))
     )
   ).slice(0, 64);
+
+  const canAccessSecretsAndWallets =
+    typeof obj.canAccessSecretsAndWallets === 'boolean'
+      ? obj.canAccessSecretsAndWallets
+      : base.canAccessSecretsAndWallets;
 
   return {
     allModules: Boolean(obj.allModules),
@@ -204,13 +403,31 @@ export function sanitizePrivileges(input: unknown, role: AuthRole): UserPrivileg
       typeof obj.canExecuteTerminalAndTools === 'boolean'
         ? obj.canExecuteTerminalAndTools
         : base.canExecuteTerminalAndTools,
-    canAccessSecretsAndWallets:
-      typeof obj.canAccessSecretsAndWallets === 'boolean'
-        ? obj.canAccessSecretsAndWallets
-        : base.canAccessSecretsAndWallets,
+    canAccessSecretsAndWallets,
     canModifyOSSettings:
       typeof obj.canModifyOSSettings === 'boolean' ? obj.canModifyOSSettings : base.canModifyOSSettings,
-    canManageUsers: typeof obj.canManageUsers === 'boolean' ? obj.canManageUsers : base.canManageUsers
+    canManageUsers: typeof obj.canManageUsers === 'boolean' ? obj.canManageUsers : base.canManageUsers,
+    canUseBurnerMail:
+      typeof obj.canUseBurnerMail === 'boolean'
+        ? obj.canUseBurnerMail
+        : Boolean(base.canUseBurnerMail || filteredModules.includes('burner-mail')),
+    canUseInfiniteSim:
+      typeof obj.canUseInfiniteSim === 'boolean'
+        ? obj.canUseInfiniteSim
+        : Boolean(base.canUseInfiniteSim || filteredModules.includes('infinite-sim')),
+    canAccessGrantHunter:
+      typeof obj.canAccessGrantHunter === 'boolean'
+        ? obj.canAccessGrantHunter
+        : Boolean(base.canAccessGrantHunter || filteredModules.includes('grant-hunter')),
+    canBringOwnKeys:
+      typeof obj.canBringOwnKeys === 'boolean'
+        ? obj.canBringOwnKeys
+        : Boolean(base.canBringOwnKeys ?? canAccessSecretsAndWallets),
+    canAccessSystemCore,
+    maxDailyAiRequests:
+      typeof obj.maxDailyAiRequests === 'number' && Number.isFinite(obj.maxDailyAiRequests) && obj.maxDailyAiRequests >= 0
+        ? Math.round(obj.maxDailyAiRequests)
+        : (base.maxDailyAiRequests ?? 0)
   };
 }
 
@@ -359,18 +576,56 @@ export async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFi
 class SovereignAuthService {
   private store: PersistedAuthStore;
   private initialized = false;
+  private dailyQuotas: Record<string, { dayKey: string; count: number }> = {};
 
   constructor() {
     this.store = {
-      version: 2,
+      version: 3,
       users: [],
       sessions: [],
       policy: {
         ...DEFAULT_POLICY,
         defaultPrivileges: clonePrivileges(DEFAULT_POLICY.defaultPrivileges)
       },
+      tiers: buildDefaultTiers(),
       auditLog: []
     };
+  }
+
+  private getTodayKey(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  private loadQuotasFromDisk(): void {
+    try {
+      if (fs.existsSync(AI_QUOTA_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(AI_QUOTA_FILE, 'utf8'));
+        if (parsed && typeof parsed === 'object') {
+          const today = this.getTodayKey();
+          const cleaned: Record<string, { dayKey: string; count: number }> = {};
+          for (const [uid, rec] of Object.entries(parsed)) {
+            const r = rec as any;
+            if (r && r.dayKey === today && typeof r.count === 'number' && r.count >= 0) {
+              cleaned[uid] = { dayKey: today, count: Math.round(r.count) };
+            }
+          }
+          this.dailyQuotas = cleaned;
+        }
+      }
+    } catch {
+      this.dailyQuotas = {};
+    }
+  }
+
+  private persistQuotasToDisk(): void {
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      const tmp = `${AI_QUOTA_FILE}.tmp.${process.pid}`;
+      fs.writeFileSync(tmp, JSON.stringify(this.dailyQuotas, null, 2), { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(tmp, AI_QUOTA_FILE);
+    } catch {
+      // Non-fatal
+    }
   }
 
   public init(): void {
@@ -382,9 +637,64 @@ class SovereignAuthService {
         const raw = fs.readFileSync(AUTH_STORE_FILE, 'utf8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
+          if (Array.isArray(parsed.tiers) && parsed.tiers.length > 0) {
+            const defaults = buildDefaultTiers();
+            const defaultById = new Map(defaults.map((d) => [d.id, d]));
+            this.store.tiers = parsed.tiers.map((t: any, idx: number) => {
+              const id = String(t.id || `tier-${idx + 1}`);
+              const defTier = defaultById.get(id);
+              const baseRole = sanitizeRole(t.baseRole, 'collaborator');
+              const safeRole: AuthRole = baseRole === 'admin' ? 'operator' : baseRole;
+              const pricing = sanitizeTierPricing(t.pricing);
+              const rawTagline = String(t.tagline || '').trim().slice(0, 140);
+              const shouldRefreshBuiltInCopy =
+                defTier &&
+                Boolean(t.isBuiltIn) &&
+                (!rawTagline ||
+                  rawTagline === 'Fresh isolated personal OS workspace to get started' ||
+                  rawTagline === 'Autonomous workflows, terminal, burner mail & personal crypto vault' ||
+                  rawTagline === 'Unrestricted user-level OS modules, Infinite SIM, Genesis Distillery & priority autonomy');
+
+              return {
+                id,
+                slug: String(t.slug || t.id || `tier-${idx + 1}`).toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
+                name:
+                  shouldRefreshBuiltInCopy && id === 'tier-sovereign' && t.name === 'Sovereign Elite'
+                    ? defTier!.name
+                    : String(t.name || `Tier ${idx + 1}`).trim().slice(0, 64),
+                tagline: shouldRefreshBuiltInCopy ? defTier!.tagline : rawTagline,
+                description: shouldRefreshBuiltInCopy
+                  ? defTier!.description
+                  : String(t.description || '').trim().slice(0, 400),
+                badgeColor: sanitizeTierBadgeColor(t.badgeColor, 'emerald'),
+                rank: Number.isFinite(Number(t.rank)) ? Number(t.rank) : idx + 1,
+                baseRole: safeRole,
+                isBuiltIn: Boolean(t.isBuiltIn),
+                isPublic: typeof t.isPublic === 'boolean' ? t.isPublic : true,
+                isMonetized: Boolean(t.isMonetized && pricing.billingMode !== 'free'),
+                isFounderTier:
+                  typeof t.isFounderTier === 'boolean'
+                    ? t.isFounderTier
+                    : id === 'tier-sovereign' || id === 'tier-founder' || Number(t.rank || 0) >= 3,
+                pricing,
+                privileges: sanitizePrivileges(t.privileges, safeRole),
+                features: shouldRefreshBuiltInCopy
+                  ? defTier!.features
+                  : Array.isArray(t.features)
+                    ? t.features.map((f: unknown) => String(f || '').trim().slice(0, 140)).filter(Boolean).slice(0, 16)
+                    : [],
+                createdAt: typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString(),
+                updatedAt: typeof t.updatedAt === 'string' ? t.updatedAt : new Date().toISOString()
+              } satisfies UserTierDefinition;
+            });
+          } else {
+            this.store.tiers = buildDefaultTiers();
+          }
+
           if (Array.isArray(parsed.users)) {
             this.store.users = parsed.users.map((u: any) => {
               const role = sanitizeRole(u.role, 'collaborator');
+              const matchedTier = this.store.tiers.find((t) => t.id === u.tierId);
               const rec: StoredAuthUser = {
                 id: String(u.id || crypto.randomUUID()),
                 username: normalizeUsername(u.username || u.email || 'user'),
@@ -397,6 +707,11 @@ class SovereignAuthService {
                 status: sanitizeStatus(u.status, 'active'),
                 isExecutiveArchitect: Boolean(u.isExecutiveArchitect),
                 authorityTier: u.isExecutiveArchitect ? 'executive-architect' : role === 'admin' ? 'delegated-admin' : 'standard',
+                tierId: typeof u.tierId === 'string' ? u.tierId : matchedTier?.id || 'tier-free',
+                tierName: typeof u.tierName === 'string' ? u.tierName : matchedTier?.name || 'Explorer Free',
+                tierBadgeColor: sanitizeTierBadgeColor(u.tierBadgeColor || matchedTier?.badgeColor, 'zinc'),
+                subscriptionStatus: (u.subscriptionStatus as UserSubscriptionStatus) || 'free',
+                tierExpiresAt: typeof u.tierExpiresAt === 'string' ? u.tierExpiresAt : null,
                 privileges: sanitizePrivileges(u.privileges, role),
                 passwordHash: typeof u.passwordHash === 'string' ? u.passwordHash : undefined,
                 createdAt: typeof u.createdAt === 'string' ? u.createdAt : new Date().toISOString(),
@@ -425,6 +740,11 @@ class SovereignAuthService {
           }
           if (parsed.policy && typeof parsed.policy === 'object') {
             const defRole = sanitizeRole(parsed.policy.defaultRole, 'collaborator');
+            const defaultTierId =
+              typeof parsed.policy.defaultTierId === 'string' &&
+              this.store.tiers.some((t) => t.id === parsed.policy.defaultTierId)
+                ? parsed.policy.defaultTierId
+                : this.store.tiers[0]?.id || 'tier-free';
             this.store.policy = {
               requireLoginOnBoot:
                 typeof parsed.policy.requireLoginOnBoot === 'boolean'
@@ -439,6 +759,7 @@ class SovereignAuthService {
                   ? parsed.policy.newUsersRequireApproval
                   : DEFAULT_POLICY.newUsersRequireApproval,
               defaultRole: defRole,
+              defaultTierId,
               defaultPrivileges: sanitizePrivileges(parsed.policy.defaultPrivileges, defRole),
               entityIntelligenceDelegationEnabled:
                 typeof parsed.policy.entityIntelligenceDelegationEnabled === 'boolean'
@@ -455,6 +776,7 @@ class SovereignAuthService {
     } catch (err: any) {
       console.warn('[AUTH] Starting with fresh auth store:', err?.message || err);
     }
+    this.loadQuotasFromDisk();
   }
 
   private recordAudit(
@@ -483,6 +805,18 @@ class SovereignAuthService {
     if (this.store.auditLog.length > 250) {
       this.store.auditLog = this.store.auditLog.slice(-250);
     }
+  }
+
+  public recordAuditEvent(
+    actor: AuthUserPublic | null,
+    action: string,
+    target: string,
+    details: string,
+    outcome: 'allowed' | 'blocked' = 'allowed'
+  ): void {
+    this.init();
+    this.recordAudit(actor, action, target, details, outcome);
+    this.persist();
   }
 
   private persist(): void {
@@ -627,6 +961,77 @@ class SovereignAuthService {
     return false;
   }
 
+  private checkAndApplyTierExpiration(user: StoredAuthUser): boolean {
+    if (isExecutiveArchitectRecord(user) || user.role === 'admin') return false;
+    if (user.subscriptionStatus === 'active' && user.tierExpiresAt) {
+      const expMs = Date.parse(user.tierExpiresAt);
+      if (Number.isFinite(expMs) && Date.now() > expMs) {
+        const fallback =
+          this.store.tiers.find((t) => t.id === 'tier-free') ||
+          this.store.tiers.find((t) => !t.isMonetized) ||
+          this.resolveDefaultTier();
+        user.tierId = fallback?.id || 'tier-free';
+        user.tierName = fallback?.name || 'Explorer Free';
+        user.tierBadgeColor = fallback?.badgeColor || 'zinc';
+        user.role = fallback ? (fallback.baseRole === 'admin' ? 'collaborator' : fallback.baseRole) : 'collaborator';
+        user.privileges = fallback ? clonePrivileges(fallback.privileges) : clonePrivileges(COLLABORATOR_PRIVILEGES);
+        user.privileges.canManageUsers = false;
+        user.privileges.canAccessSystemCore = false;
+        user.subscriptionStatus = 'expired';
+        user.tierExpiresAt = null;
+        user.updatedAt = new Date().toISOString();
+        this.recordAudit(
+          null,
+          'TIER_EXPIRED_DOWNGRADE',
+          user.username,
+          `Subscription expired; automatically downgraded to "${user.tierName}".`
+        );
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public getDailyAiUsage(user: AuthUserPublic | null): DailyAiQuotaUsage | null {
+    this.init();
+    if (!user) return null;
+    const dayKey = this.getTodayKey();
+    const rec = this.dailyQuotas[user.id];
+    const usedToday = rec && rec.dayKey === dayKey ? rec.count : 0;
+    const unlimited = isExecutiveArchitectUserRecord(user);
+    const dailyLimit = unlimited ? 0 : Math.max(0, Number(user.privileges?.maxDailyAiRequests ?? 0));
+    const remaining = dailyLimit > 0 ? Math.max(0, dailyLimit - usedToday) : null;
+    return { usedToday, dailyLimit, remaining, dayKey };
+  }
+
+  public consumeDailyAiQuota(user: AuthUserPublic | null): { allowed: boolean; usage: DailyAiQuotaUsage | null } {
+    this.init();
+    if (!user) return { allowed: true, usage: null };
+    const dayKey = this.getTodayKey();
+    const existing = this.dailyQuotas[user.id];
+    const currentCount = existing && existing.dayKey === dayKey ? existing.count : 0;
+    const unlimited = isExecutiveArchitectUserRecord(user);
+    const dailyLimit = unlimited ? 0 : Math.max(0, Number(user.privileges?.maxDailyAiRequests ?? 0));
+    if (dailyLimit > 0 && currentCount >= dailyLimit) {
+      return {
+        allowed: false,
+        usage: { usedToday: currentCount, dailyLimit, remaining: 0, dayKey }
+      };
+    }
+    const nextCount = currentCount + 1;
+    this.dailyQuotas[user.id] = { dayKey, count: nextCount };
+    this.persistQuotasToDisk();
+    return {
+      allowed: true,
+      usage: {
+        usedToday: nextCount,
+        dailyLimit,
+        remaining: dailyLimit > 0 ? Math.max(0, dailyLimit - nextCount) : null,
+        dayKey
+      }
+    };
+  }
+
   public resolveRequestUser(req: express.Request): AuthUserPublic | null {
     this.init();
     const rawToken = this.extractRawToken(req);
@@ -637,6 +1042,9 @@ class SovereignAuthService {
     if (!session) return null;
     const user = this.store.users.find((u) => u.id === session.userId);
     if (!user) return null;
+    if (this.checkAndApplyTierExpiration(user)) {
+      this.persist();
+    }
     return toPublicUser(user);
   }
 
@@ -646,10 +1054,52 @@ class SovereignAuthService {
     return {
       authenticated: Boolean(user),
       user,
+      usage: this.getDailyAiUsage(user),
       adminClaimed: this.isLocalAdminClaimed(),
       envAdminConfigured: this.isEnvAdminConfigured(),
-      policy: this.getPolicy()
+      policy: this.getPolicy(),
+      tiers: this.listTiers(false)
     };
+  }
+
+  public getUserById(userId: string): AuthUserPublic | null {
+    this.init();
+    const user = this.store.users.find((u) => u.id === userId);
+    if (!user) return null;
+    if (this.checkAndApplyTierExpiration(user)) {
+      this.persist();
+    }
+    return toPublicUser(user);
+  }
+
+  public listTiers(includePrivate = false): UserTierDefinition[] {
+    this.init();
+    return this.store.tiers
+      .filter((t) => includePrivate || t.isPublic)
+      .map((t) => ({
+        ...t,
+        pricing: { ...t.pricing, acceptedCryptoChains: [...t.pricing.acceptedCryptoChains], acceptedCryptoTokens: [...t.pricing.acceptedCryptoTokens] },
+        privileges: clonePrivileges(t.privileges),
+        features: [...t.features]
+      }))
+      .sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
+  }
+
+  public getTierById(tierId: string): UserTierDefinition | null {
+    this.init();
+    const t = this.store.tiers.find((item) => item.id === tierId || item.slug === tierId);
+    if (!t) return null;
+    return {
+      ...t,
+      pricing: { ...t.pricing, acceptedCryptoChains: [...t.pricing.acceptedCryptoChains], acceptedCryptoTokens: [...t.pricing.acceptedCryptoTokens] },
+      privileges: clonePrivileges(t.privileges),
+      features: [...t.features]
+    };
+  }
+
+  private resolveDefaultTier(): UserTierDefinition | undefined {
+    const id = this.store.policy.defaultTierId || 'tier-free';
+    return this.store.tiers.find((t) => t.id === id) || this.store.tiers.find((t) => !t.isMonetized) || this.store.tiers[0];
   }
 
   public claimOwnerAdmin(input: {
@@ -710,11 +1160,21 @@ class SovereignAuthService {
     }
 
     const now = new Date().toISOString();
-    const role: AuthRole =
-      this.store.policy.defaultRole === 'admin' ? 'collaborator' : this.store.policy.defaultRole;
+    const defaultTier = this.resolveDefaultTier();
+    const role: AuthRole = defaultTier
+      ? defaultTier.baseRole === 'admin'
+        ? 'collaborator'
+        : defaultTier.baseRole
+      : this.store.policy.defaultRole === 'admin'
+        ? 'collaborator'
+        : this.store.policy.defaultRole;
     const status: AuthAccountStatus = this.store.policy.newUsersRequireApproval ? 'pending' : 'active';
-    const safePrivileges = sanitizePrivileges(this.store.policy.defaultPrivileges, role);
+    const safePrivileges = sanitizePrivileges(
+      defaultTier ? defaultTier.privileges : this.store.policy.defaultPrivileges,
+      role
+    );
     safePrivileges.canManageUsers = false;
+    safePrivileges.canAccessSystemCore = false;
 
     const newUser: StoredAuthUser = {
       id: `usr_${crypto.randomBytes(10).toString('hex')}`,
@@ -726,6 +1186,11 @@ class SovereignAuthService {
       status,
       isExecutiveArchitect: false,
       authorityTier: 'standard',
+      tierId: defaultTier?.id || 'tier-free',
+      tierName: defaultTier?.name || 'Explorer Free',
+      tierBadgeColor: defaultTier?.badgeColor || 'zinc',
+      subscriptionStatus: 'free',
+      tierExpiresAt: null,
       privileges: safePrivileges,
       passwordHash: hashPassword(input.password),
       createdAt: now,
@@ -737,7 +1202,7 @@ class SovereignAuthService {
       toPublicUser(newUser),
       'USER_SELF_REGISTERED',
       newUser.username,
-      `Registered standard ${newUser.role} account (${newUser.status}).`
+      `Registered isolated ${newUser.role} account on tier "${newUser.tierName}" (${newUser.status}).`
     );
     const token = this.createSessionForUser(newUser.id, input.rememberMe !== false);
     return { user: toPublicUser(newUser), token };
@@ -834,16 +1299,29 @@ class SovereignAuthService {
         candidate = `${baseUsername.slice(0, 24)}_${suffix++}`;
       }
 
+      const defaultTier = isOwnerEmail ? undefined : this.resolveDefaultTier();
       const role: AuthRole = isOwnerEmail
         ? 'admin'
-        : this.store.policy.defaultRole === 'admin'
-        ? 'collaborator'
-        : this.store.policy.defaultRole;
+        : defaultTier
+          ? defaultTier.baseRole === 'admin'
+            ? 'collaborator'
+            : defaultTier.baseRole
+          : this.store.policy.defaultRole === 'admin'
+            ? 'collaborator'
+            : this.store.policy.defaultRole;
       const status: AuthAccountStatus = isOwnerEmail
         ? 'active'
         : this.store.policy.newUsersRequireApproval
-        ? 'pending'
-        : 'active';
+          ? 'pending'
+          : 'active';
+
+      const initialPrivs = isOwnerEmail
+        ? clonePrivileges(ADMIN_PRIVILEGES)
+        : sanitizePrivileges(defaultTier ? defaultTier.privileges : this.store.policy.defaultPrivileges, role);
+      if (!isOwnerEmail) {
+        initialPrivs.canManageUsers = false;
+        initialPrivs.canAccessSystemCore = false;
+      }
 
       user = enforceArchitectInvariants({
         id: `usr_${crypto.randomBytes(10).toString('hex')}`,
@@ -857,9 +1335,12 @@ class SovereignAuthService {
         status,
         isExecutiveArchitect: isOwnerEmail,
         authorityTier: isOwnerEmail ? 'executive-architect' : 'standard',
-        privileges: isOwnerEmail
-          ? clonePrivileges(ADMIN_PRIVILEGES)
-          : sanitizePrivileges(this.store.policy.defaultPrivileges, role),
+        tierId: isOwnerEmail ? 'executive-architect' : defaultTier?.id || 'tier-free',
+        tierName: isOwnerEmail ? 'Executive Architect' : defaultTier?.name || 'Explorer Free',
+        tierBadgeColor: isOwnerEmail ? 'amber' : defaultTier?.badgeColor || 'zinc',
+        subscriptionStatus: isOwnerEmail ? 'lifetime' : 'free',
+        tierExpiresAt: null,
+        privileges: initialPrivs,
         createdAt: now,
         updatedAt: now,
         lastLoginAt: now
@@ -897,6 +1378,11 @@ class SovereignAuthService {
 
   public listUsers(): AuthUserPublic[] {
     this.init();
+    let changed = false;
+    for (const u of this.store.users) {
+      if (this.checkAndApplyTierExpiration(u)) changed = true;
+    }
+    if (changed) this.persist();
     return this.store.users
       .map(toPublicUser)
       .sort((a, b) => {
@@ -923,12 +1409,22 @@ class SovereignAuthService {
         username: pub.username,
         displayName: pub.displayName,
         role: pub.role,
+        tierName: pub.tierName,
         isExecutiveArchitect: Boolean(pub.isExecutiveArchitect),
         createdAt: ses.createdAt,
         expiresAt: ses.expiresAt
       });
     }
     return summaries.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  public isUserFounderTierEligible(user?: AuthUserPublic | null): boolean {
+    if (!user || user.status !== 'active') return false;
+    if (isExecutiveArchitectRecord(user) || user.role === 'admin') return true;
+    if (user.subscriptionStatus === 'expired' || user.subscriptionStatus === 'free') return false;
+    const tier = user.tierId ? this.store.tiers.find((t) => t.id === user.tierId) : undefined;
+    if (!tier) return false;
+    return Boolean(tier.isFounderTier || tier.rank >= 3);
   }
 
   public getAuditLog(): AdminAuditEntry[] {
@@ -1234,6 +1730,14 @@ class SovereignAuthService {
     if (typeof patch.systemLockdownMode === 'boolean') {
       this.store.policy.systemLockdownMode = patch.systemLockdownMode;
     }
+    if (typeof patch.defaultTierId === 'string') {
+      const matched = this.store.tiers.find((t) => t.id === patch.defaultTierId);
+      if (matched) {
+        this.store.policy.defaultTierId = matched.id;
+        this.store.policy.defaultRole = matched.baseRole === 'admin' ? 'collaborator' : matched.baseRole;
+        this.store.policy.defaultPrivileges = clonePrivileges(matched.privileges);
+      }
+    }
     if (patch.defaultRole) {
       const safeRole = sanitizeRole(patch.defaultRole, 'collaborator');
       this.store.policy.defaultRole = safeRole === 'admin' ? 'collaborator' : safeRole;
@@ -1248,11 +1752,307 @@ class SovereignAuthService {
       actor || null,
       'POLICY_UPDATED',
       'system-policy',
-      `Updated policy (lockdown=${Boolean(this.store.policy.systemLockdownMode)}, entityDelegation=${this.store.policy.entityIntelligenceDelegationEnabled !== false}, loginOnBoot=${this.store.policy.requireLoginOnBoot}).`
+      `Updated policy (lockdown=${Boolean(this.store.policy.systemLockdownMode)}, entityDelegation=${this.store.policy.entityIntelligenceDelegationEnabled !== false}, loginOnBoot=${this.store.policy.requireLoginOnBoot}, defaultTier=${this.store.policy.defaultTierId || 'tier-free'}).`
     );
     this.persist();
     return this.getPolicy();
   }
+
+  // -------------------------------------------------------------------------
+  // CUSTOM USER TIER MANAGEMENT & MONETIZED TIER ASSIGNMENT
+  // -------------------------------------------------------------------------
+  public adminCreateTier(
+    actor: AuthUserPublic,
+    input: {
+      name: string;
+      slug?: string;
+      tagline?: string;
+      description?: string;
+      badgeColor?: TierBadgeColor;
+      rank?: number;
+      baseRole?: AuthRole;
+      isPublic?: boolean;
+      isMonetized?: boolean;
+      isFounderTier?: boolean;
+      pricing?: Partial<TierPricingConfig>;
+      privileges?: Partial<UserPrivileges>;
+      features?: string[];
+    }
+  ): UserTierDefinition {
+    this.init();
+    const name = String(input.name || '').trim().slice(0, 64);
+    if (name.length < 2) {
+      throw new Error('Tier name must be at least 2 characters.');
+    }
+    const baseSlug = String(input.slug || name)
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || `tier-${crypto.randomBytes(3).toString('hex')}`;
+    let slug = baseSlug;
+    let suffix = 1;
+    while (this.store.tiers.some((t) => t.slug === slug)) {
+      slug = `${baseSlug}-${suffix++}`;
+    }
+
+    const requestedRole = sanitizeRole(input.baseRole, 'collaborator');
+    const safeRole: AuthRole = requestedRole === 'admin' ? 'operator' : requestedRole;
+    const pricing = sanitizeTierPricing(input.pricing);
+    const isMonetized = Boolean(input.isMonetized && pricing.billingMode !== 'free' && (pricing.monthlyUsdCents > 0 || pricing.oneTimeUsdCents > 0 || pricing.cryptoUsdAmount > 0));
+    const safePrivileges = sanitizePrivileges(input.privileges, safeRole);
+    safePrivileges.canManageUsers = false;
+    safePrivileges.canAccessSystemCore = false;
+
+    const now = new Date().toISOString();
+    const rank = Number.isFinite(Number(input.rank)) ? Number(input.rank) : this.store.tiers.length + 1;
+    const tier: UserTierDefinition = {
+      id: `tier-${crypto.randomBytes(5).toString('hex')}`,
+      slug,
+      name,
+      tagline: String(input.tagline || '').trim().slice(0, 140),
+      description: String(input.description || '').trim().slice(0, 400),
+      badgeColor: sanitizeTierBadgeColor(input.badgeColor, 'cyan'),
+      rank,
+      baseRole: safeRole,
+      isBuiltIn: false,
+      isPublic: typeof input.isPublic === 'boolean' ? input.isPublic : true,
+      isMonetized,
+      isFounderTier: typeof input.isFounderTier === 'boolean' ? input.isFounderTier : rank >= 3,
+      pricing,
+      privileges: safePrivileges,
+      features: Array.isArray(input.features)
+        ? input.features.map((f) => String(f || '').trim().slice(0, 140)).filter(Boolean).slice(0, 16)
+        : [],
+      createdAt: now,
+      updatedAt: now
+    };
+
+    this.store.tiers.push(tier);
+    this.recordAudit(
+      actor,
+      'TIER_CREATED',
+      tier.name,
+      `Created custom tier "${tier.name}" (monetized=${tier.isMonetized}, founder=${Boolean(tier.isFounderTier)}, monthly=$${(tier.pricing.monthlyUsdCents / 100).toFixed(2)}).`
+    );
+    this.persist();
+    return this.getTierById(tier.id)!;
+  }
+
+  public adminUpdateTier(
+    actor: AuthUserPublic,
+    tierId: string,
+    patch: {
+      name?: string;
+      tagline?: string;
+      description?: string;
+      badgeColor?: TierBadgeColor;
+      rank?: number;
+      baseRole?: AuthRole;
+      isPublic?: boolean;
+      isMonetized?: boolean;
+      isFounderTier?: boolean;
+      pricing?: Partial<TierPricingConfig>;
+      privileges?: Partial<UserPrivileges>;
+      features?: string[];
+      syncExistingUsers?: boolean;
+    }
+  ): UserTierDefinition {
+    this.init();
+    const tier = this.store.tiers.find((t) => t.id === tierId);
+    if (!tier) {
+      throw new Error('Tier not found.');
+    }
+
+    if (typeof patch.name === 'string' && patch.name.trim().length >= 2) {
+      tier.name = patch.name.trim().slice(0, 64);
+    }
+    if (typeof patch.tagline === 'string') {
+      tier.tagline = patch.tagline.trim().slice(0, 140);
+    }
+    if (typeof patch.description === 'string') {
+      tier.description = patch.description.trim().slice(0, 400);
+    }
+    if (patch.badgeColor) {
+      tier.badgeColor = sanitizeTierBadgeColor(patch.badgeColor, tier.badgeColor);
+    }
+    if (typeof patch.rank === 'number' && Number.isFinite(patch.rank)) {
+      tier.rank = patch.rank;
+    }
+    if (patch.baseRole) {
+      const safeRole = sanitizeRole(patch.baseRole, tier.baseRole);
+      tier.baseRole = safeRole === 'admin' ? 'operator' : safeRole;
+    }
+    if (typeof patch.isPublic === 'boolean') {
+      tier.isPublic = patch.isPublic;
+    }
+    if (typeof patch.isFounderTier === 'boolean') {
+      tier.isFounderTier = patch.isFounderTier;
+    }
+    if (patch.pricing) {
+      tier.pricing = sanitizeTierPricing(patch.pricing, tier.pricing);
+    }
+    if (typeof patch.isMonetized === 'boolean') {
+      tier.isMonetized = Boolean(
+        patch.isMonetized &&
+          tier.pricing.billingMode !== 'free' &&
+          (tier.pricing.monthlyUsdCents > 0 || tier.pricing.oneTimeUsdCents > 0 || tier.pricing.cryptoUsdAmount > 0)
+      );
+    }
+    if (patch.privileges) {
+      const nextPrivs = sanitizePrivileges(patch.privileges, tier.baseRole);
+      nextPrivs.canManageUsers = false;
+      nextPrivs.canAccessSystemCore = false;
+      tier.privileges = nextPrivs;
+    }
+    if (Array.isArray(patch.features)) {
+      tier.features = patch.features.map((f) => String(f || '').trim().slice(0, 140)).filter(Boolean).slice(0, 16);
+    }
+    tier.updatedAt = new Date().toISOString();
+
+    // Optionally propagate updated privileges & label to existing non-architect users on this tier
+    if (patch.syncExistingUsers !== false) {
+      for (const u of this.store.users) {
+        if (isExecutiveArchitectRecord(u) || u.role === 'admin') continue;
+        if (u.tierId === tier.id) {
+          u.tierName = tier.name;
+          u.tierBadgeColor = tier.badgeColor;
+          u.role = tier.baseRole;
+          u.privileges = clonePrivileges(tier.privileges);
+          u.updatedAt = tier.updatedAt;
+        }
+      }
+    }
+
+    this.recordAudit(
+      actor,
+      'TIER_UPDATED',
+      tier.name,
+      `Updated tier "${tier.name}" (monetized=${tier.isMonetized}, founder=${Boolean(tier.isFounderTier)}, monthly=$${(tier.pricing.monthlyUsdCents / 100).toFixed(2)}).`
+    );
+    this.persist();
+    return this.getTierById(tier.id)!;
+  }
+
+  public adminDeleteTier(actor: AuthUserPublic, tierId: string): void {
+    this.init();
+    const tier = this.store.tiers.find((t) => t.id === tierId);
+    if (!tier) {
+      throw new Error('Tier not found.');
+    }
+    if (tier.id === 'tier-free') {
+      throw new Error('The baseline Explorer Free tier cannot be deleted (you can still customize its permissions).');
+    }
+    if (this.store.tiers.length <= 1) {
+      throw new Error('At least one user tier must remain.');
+    }
+
+    const fallbackTier = this.store.tiers.find((t) => t.id === 'tier-free') || this.store.tiers.find((t) => t.id !== tierId)!;
+    for (const u of this.store.users) {
+      if (isExecutiveArchitectRecord(u) || u.role === 'admin') continue;
+      if (u.tierId === tierId) {
+        u.tierId = fallbackTier.id;
+        u.tierName = fallbackTier.name;
+        u.tierBadgeColor = fallbackTier.badgeColor;
+        u.role = fallbackTier.baseRole;
+        u.privileges = clonePrivileges(fallbackTier.privileges);
+        u.updatedAt = new Date().toISOString();
+      }
+    }
+    if (this.store.policy.defaultTierId === tierId) {
+      this.store.policy.defaultTierId = fallbackTier.id;
+    }
+
+    this.store.tiers = this.store.tiers.filter((t) => t.id !== tierId);
+    this.recordAudit(actor, 'TIER_DELETED', tier.name, `Deleted tier "${tier.name}" and migrated users to "${fallbackTier.name}".`);
+    this.persist();
+  }
+
+  public assignTierToUser(
+    userId: string,
+    tierId: string,
+    options: {
+      actor?: AuthUserPublic | null;
+      subscriptionStatus?: UserSubscriptionStatus;
+      tierExpiresAt?: string | null;
+      reason?: string;
+    } = {}
+  ): AuthUserPublic {
+    this.init();
+    const user = this.store.users.find((u) => u.id === userId);
+    if (!user) {
+      throw new Error('User account not found.');
+    }
+    if (isExecutiveArchitectRecord(user)) {
+      return toPublicUser(user);
+    }
+    const tier = this.store.tiers.find((t) => t.id === tierId);
+    if (!tier) {
+      throw new Error('Selected tier does not exist.');
+    }
+
+    user.tierId = tier.id;
+    user.tierName = tier.name;
+    user.tierBadgeColor = tier.badgeColor;
+    user.role = tier.baseRole === 'admin' ? 'operator' : tier.baseRole;
+    user.privileges = clonePrivileges(tier.privileges);
+    user.privileges.canManageUsers = false;
+    user.privileges.canAccessSystemCore = false;
+    user.subscriptionStatus = options.subscriptionStatus || (tier.isMonetized ? 'admin-granted' : 'free');
+    user.tierExpiresAt = options.tierExpiresAt !== undefined ? options.tierExpiresAt : null;
+    user.updatedAt = new Date().toISOString();
+
+    this.recordAudit(
+      options.actor || null,
+      'USER_TIER_ASSIGNED',
+      user.username,
+      `Assigned tier "${tier.name}" (status=${user.subscriptionStatus})${options.reason ? ` — ${options.reason}` : ''}.`
+    );
+    this.persist();
+    return toPublicUser(user);
+  }
+
+  public downgradeUserTier(
+    userId: string,
+    status: 'expired' | 'free' = 'expired',
+    reason = 'Subscription cancelled or refunded'
+  ): AuthUserPublic | null {
+    this.init();
+    const user = this.store.users.find((u) => u.id === userId);
+    if (!user) return null;
+    if (isExecutiveArchitectRecord(user) || user.role === 'admin') {
+      return toPublicUser(user);
+    }
+    const freeTier =
+      this.store.tiers.find((t) => t.id === 'tier-free') ||
+      this.store.tiers.find((t) => !t.isMonetized) ||
+      this.resolveDefaultTier();
+
+    user.tierId = freeTier?.id || 'tier-free';
+    user.tierName = freeTier?.name || 'Explorer Free';
+    user.tierBadgeColor = freeTier?.badgeColor || 'zinc';
+    user.role = freeTier ? (freeTier.baseRole === 'admin' ? 'collaborator' : freeTier.baseRole) : 'collaborator';
+    user.privileges = freeTier ? clonePrivileges(freeTier.privileges) : clonePrivileges(COLLABORATOR_PRIVILEGES);
+    user.privileges.canManageUsers = false;
+    user.privileges.canAccessSystemCore = false;
+    user.subscriptionStatus = status;
+    user.tierExpiresAt = null;
+    user.updatedAt = new Date().toISOString();
+
+    this.recordAudit(null, 'TIER_LIFECYCLE_DOWNGRADE', user.username, `${reason} → "${user.tierName}" (${status}).`);
+    this.persist();
+    return toPublicUser(user);
+  }
+}
+
+function isExecutiveArchitectUserRecord(user: {
+  isExecutiveArchitect?: boolean;
+  authProvider?: string;
+  role?: string;
+  email?: string;
+  username?: string;
+}): boolean {
+  return isExecutiveArchitectRecord(user) || user.role === 'admin';
 }
 
 export const authService = new SovereignAuthService();

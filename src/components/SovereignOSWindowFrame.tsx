@@ -97,23 +97,32 @@ export function clampWindowGeometry(
   containerW: number,
   containerH: number
 ): OSWindowGeometry {
-  const safeW = Math.max(containerW, 300);
-  const safeH = Math.max(containerH, 220);
-  const minW = Math.min(280, safeW - 8);
-  const minH = Math.min(200, safeH - 8);
-  const width = Math.max(minW, Math.min(geom.width, safeW - 8));
-  const height = Math.max(minH, Math.min(geom.height, safeH - 8));
-  // Keep at least 180px of the titlebar reachable horizontally and the full 44px titlebar visible vertically
-  const minVisibleStrip = Math.min(180, Math.max(120, width));
-  const minX = -(width - minVisibleStrip);
-  const maxX = Math.max(0, safeW - minVisibleStrip);
-  const maxY = Math.max(0, safeH - 52);
+  const safeW = Math.max(containerW || 360, 280);
+  const safeH = Math.max(containerH || 480, 220);
+  if (safeW < 768) {
+    return {
+      ...geom,
+      x: 0,
+      y: 0,
+      width: safeW,
+      height: safeH
+    };
+  }
+  const margin = 6;
+  const maxW = Math.max(260, safeW - margin * 2);
+  const maxH = Math.max(200, safeH - margin * 2);
+  const minW = Math.min(320, maxW);
+  const minH = Math.min(220, maxH);
+  const width = Math.max(minW, Math.min(geom.width, maxW));
+  const height = Math.max(minH, Math.min(geom.height, maxH));
+  const maxX = Math.max(margin, safeW - width - margin);
+  const maxY = Math.max(margin, safeH - height - margin);
   return {
     ...geom,
     width,
     height,
-    x: Math.max(minX, Math.min(geom.x, maxX)),
-    y: Math.max(0, Math.min(geom.y, maxY))
+    x: Math.max(margin, Math.min(geom.x, maxX)),
+    y: Math.max(margin, Math.min(geom.y, maxY))
   };
 }
 
@@ -123,18 +132,29 @@ export function createDefaultWindowGeometry(
   containerH: number,
   zIndex: number
 ): OSWindowGeometry {
-  const safeW = Math.max(containerW || 1200, 640);
-  const safeH = Math.max(containerH || 700, 420);
-  const width = Math.min(860, Math.max(480, Math.round(safeW * 0.62)));
-  const height = Math.min(640, Math.max(380, Math.round(safeH * 0.78)));
-  const stepX = (index % 6) * 34;
-  const stepY = (index % 5) * 28;
+  const safeW = Math.max(containerW || (typeof window !== 'undefined' ? window.innerWidth : 1200), 280);
+  const safeH = Math.max(containerH || (typeof window !== 'undefined' ? window.innerHeight - 88 : 700), 220);
+  if (safeW < 768) {
+    return {
+      x: 0,
+      y: 0,
+      width: safeW,
+      height: safeH,
+      zIndex,
+      minimized: false,
+      maximized: true
+    };
+  }
+  const width = Math.min(Math.max(360, safeW - 24), Math.min(920, Math.max(460, Math.round(safeW * 0.66))));
+  const height = Math.min(Math.max(260, safeH - 24), Math.min(680, Math.max(380, Math.round(safeH * 0.8))));
+  const stepX = (index % 6) * 28;
+  const stepY = (index % 5) * 24;
   const maxInitialX = Math.max(8, safeW - width - 8);
   const maxInitialY = Math.max(8, safeH - height - 8);
   return clampWindowGeometry(
     {
-      x: Math.min(24 + stepX, maxInitialX),
-      y: Math.min(20 + stepY, maxInitialY),
+      x: Math.min(20 + stepX, maxInitialX),
+      y: Math.min(16 + stepY, maxInitialY),
       width,
       height,
       zIndex,
@@ -228,8 +248,10 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
   }, []);
 
   const isTiled = mode === 'tiled';
+  const isCompactMobile = (containerSize.width || 0) < 768;
   const rawGeom = geometry || createDefaultWindowGeometry(0, containerSize.width, containerSize.height, 45);
   const safeGeom = clampWindowGeometry(rawGeom, containerSize.width, containerSize.height);
+  const isFullViewport = isCompactMobile || safeGeom.maximized;
   const isPipPill = mode === 'pip' && pipMinimized;
   const isHidden = isTiled
     ? !visible
@@ -249,6 +271,7 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
   };
 
   const startDrag = (e: React.PointerEvent, type: DragAction) => {
+    if (isCompactMobile) return;
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest('button, [data-window-controls="true"]')) return;
     e.preventDefault();
@@ -481,7 +504,14 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
     window.addEventListener('pointercancel', finishDrag);
   };
 
-  const windowStyle: React.CSSProperties = safeGeom.maximized
+  const windowStyle: React.CSSProperties = isCompactMobile
+    ? {
+        inset: 0,
+        width: '100%',
+        height: '100%',
+        zIndex: effectiveZ
+      }
+    : safeGeom.maximized
     ? {
         top: 4,
         left: 4,
@@ -532,7 +562,7 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
         {/* Inner Clipped Window Surface (Consistent Fiber depth across all modes so children NEVER unmount) */}
         <div
           style={
-            isTiled
+            isTiled || isCompactMobile
               ? undefined
               : {
                   borderRadius: 'var(--sovereign-window-radius, 14px)'
@@ -541,6 +571,8 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
           className={
             isTiled
               ? 'w-full h-full flex flex-col min-h-0 overflow-hidden'
+              : isCompactMobile
+              ? 'sovereign-window relative w-full h-full flex flex-col overflow-hidden bg-zinc-950 rounded-none border-0'
               : `sovereign-window relative w-full h-full flex flex-col overflow-hidden bg-zinc-950 ${
                   isInteracting
                     ? 'border-2 border-sky-400/85 shadow-[0_18px_48px_rgba(0,0,0,0.88)]'
@@ -553,28 +585,31 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
           }
         >
           {/* Subtle Visual Edge Glow When Hovering or Dragging a Resize Handle */}
-          {!isTiled && !isHidden && !safeGeom.maximized && edgeGlow('n') && (
+          {!isTiled && !isHidden && !isFullViewport && edgeGlow('n') && (
             <div className="pointer-events-none absolute top-0 inset-x-0 h-[2px] bg-sky-400 z-40" />
           )}
-          {!isTiled && !isHidden && !safeGeom.maximized && edgeGlow('s') && (
+          {!isTiled && !isHidden && !isFullViewport && edgeGlow('s') && (
             <div className="pointer-events-none absolute bottom-0 inset-x-0 h-[2px] bg-sky-400 z-40" />
           )}
-          {!isTiled && !isHidden && !safeGeom.maximized && edgeGlow('w') && (
+          {!isTiled && !isHidden && !isFullViewport && edgeGlow('w') && (
             <div className="pointer-events-none absolute left-0 inset-y-0 w-[2px] bg-sky-400 z-40" />
           )}
-          {!isTiled && !isHidden && !safeGeom.maximized && edgeGlow('e') && (
+          {!isTiled && !isHidden && !isFullViewport && edgeGlow('e') && (
             <div className="pointer-events-none absolute right-0 inset-y-0 w-[2px] bg-sky-400 z-40" />
           )}
 
-          {/* Generous 44px Window Title Bar — Easy Grab & Drag, Separated Mistake-Proof Controls */}
+          {/* Window Title Bar — Compact Full-Bleed on Mobile, Draggable on Desktop */}
           {!isTiled && !isHidden && (
             <div
               onPointerDown={(e) => startDrag(e, 'move')}
               onDoubleClick={(e) => {
+                if (isCompactMobile) return;
                 if ((e.target as HTMLElement).closest('button, [data-window-controls="true"]')) return;
                 onToggleMaximize?.();
               }}
-          className={`h-11 pl-3.5 pr-3 flex items-center justify-between gap-3 shrink-0 select-none touch-none border-b cursor-grab active:cursor-grabbing ${
+          className={`${
+            isCompactMobile ? 'h-10 px-2.5 gap-2' : 'h-11 pl-3.5 pr-3 gap-3 cursor-grab active:cursor-grabbing'
+          } flex items-center justify-between shrink-0 select-none touch-none border-b ${
             isDetached || alwaysOnTop
               ? 'bg-gradient-to-r from-zinc-900 via-amber-950/35 to-zinc-900 border-amber-500/35 text-amber-100'
               : isFocused
@@ -582,14 +617,18 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
               : 'bg-zinc-950/95 border-zinc-900 text-zinc-400'
           }`}
           title={
-            safeGeom.maximized
+            isCompactMobile
+              ? meta?.label || moduleId
+              : safeGeom.maximized
               ? 'Drag down to restore & move, or double-click to restore'
               : 'Drag to move window, or double-click to maximize'
           }
         >
           {/* Left: Drag Grip + Window Identity + Live Move/Resize Dimensions */}
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <GripHorizontal className="w-4 h-4 text-zinc-500 shrink-0 opacity-75" aria-hidden="true" />
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            {!isCompactMobile && (
+              <GripHorizontal className="w-4 h-4 text-zinc-500 shrink-0 opacity-75" aria-hidden="true" />
+            )}
             <Icon className={`w-4 h-4 shrink-0 ${meta?.accentColor || 'text-amber-400'}`} />
             <span className="text-xs font-semibold truncate">{meta?.label || moduleId}</span>
             {isInteracting ? (
@@ -663,20 +702,20 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
               <div className="hidden sm:block h-5 w-px bg-zinc-700/80 mx-0.5" aria-hidden="true" />
             )}
 
-            {/* Group 2: Minimize & Maximize/Restore with Generous Spacing */}
-            <div className="flex items-center gap-2">
+            {/* Group 2: Minimize & (Desktop-only) Maximize/Restore */}
+            <div className="flex items-center gap-1.5 sm:gap-2">
               {onMinimize && (
                 <button
                   type="button"
                   onClick={safeControlClick(onMinimize)}
-                  className="h-8 w-8 rounded-lg bg-zinc-800/75 hover:bg-amber-500/20 border border-zinc-700/80 hover:border-amber-400/50 text-zinc-300 hover:text-amber-200 flex items-center justify-center transition-colors cursor-pointer"
+                  className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-zinc-800/75 hover:bg-amber-500/20 border border-zinc-700/80 hover:border-amber-400/50 text-zinc-300 hover:text-amber-200 flex items-center justify-center transition-colors cursor-pointer"
                   title="Minimize Window to Taskbar"
                   aria-label="Minimize Window"
                 >
-                  <Minus className="w-4 h-4" />
+                  <Minus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
               )}
-              {onToggleMaximize && (
+              {!isCompactMobile && onToggleMaximize && (
                 <button
                   type="button"
                   onClick={safeControlClick(onToggleMaximize)}
@@ -690,19 +729,19 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
             </div>
 
             {/* Dedicated Safety Gap + Divider Before Destructive Close Action */}
-            {onClose && (onMinimize || onToggleMaximize) && (
-              <div className="h-5 w-px bg-zinc-700/80 mx-1" aria-hidden="true" />
+            {onClose && (onMinimize || (!isCompactMobile && onToggleMaximize)) && (
+              <div className="h-5 w-px bg-zinc-700/80 mx-0.5 sm:mx-1" aria-hidden="true" />
             )}
 
             {onClose && (
               <button
                 type="button"
                 onClick={safeControlClick(onClose)}
-                className="h-8 w-9 mr-0.5 rounded-lg bg-rose-950/50 hover:bg-rose-600 border border-rose-500/40 hover:border-rose-400 text-rose-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                className="h-7 w-8 sm:h-8 sm:w-9 mr-0.5 rounded-lg bg-rose-950/50 hover:bg-rose-600 border border-rose-500/40 hover:border-rose-400 text-rose-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
                 title={isDetached ? 'Re-Dock / Close Floating Window' : 'Close Window'}
                 aria-label="Close Window"
               >
-                <X className="w-4 h-4" />
+                <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
             )}
           </div>
@@ -727,8 +766,8 @@ const SovereignOSWindowFrameInner: React.FC<SovereignOSWindowFrameProps> = ({
         </div>
       </div>
 
-      {/* Generous Overhanging 8-Way Edge & Corner Resize Handles (Clear of Titlebar Buttons) */}
-      {!isTiled && !isHidden && !safeGeom.maximized && (
+      {/* Generous Overhanging 8-Way Edge & Corner Resize Handles (Desktop Only; Disabled on Full-Bleed Mobile) */}
+      {!isTiled && !isHidden && !isFullViewport && (
         <>
           {/* Top Edge — sits strictly above the titlebar rim so it never blocks Minimize/Maximize/Close */}
           <div

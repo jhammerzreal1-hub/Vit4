@@ -2,7 +2,7 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Authenticated user profile and custom RBAC privileges for Lysander Genesis Orchestrator",
+      "description": "Authenticated user profile, monetized tier state, and custom RBAC privileges for Lysander Genesis Orchestrator",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "maxLength": 128 },
@@ -12,6 +12,13 @@
         "photoURL": { "type": "string", "maxLength": 1024 },
         "role": { "type": "string", "enum": ["user", "admin", "operator", "collaborator", "viewer"], "maxLength": 16 },
         "status": { "type": "string", "enum": ["active", "pending", "suspended"], "maxLength": 16 },
+        "isExecutiveArchitect": { "type": "boolean" },
+        "authorityTier": { "type": "string", "enum": ["executive-architect", "entity-intelligence", "delegated-admin", "standard"], "maxLength": 32 },
+        "tierId": { "type": "string", "maxLength": 128 },
+        "tierName": { "type": "string", "maxLength": 128 },
+        "tierBadgeColor": { "type": "string", "enum": ["zinc", "emerald", "cyan", "amber", "violet", "rose"], "maxLength": 16 },
+        "subscriptionStatus": { "type": "string", "enum": ["free", "active", "lifetime", "expired", "admin-granted"], "maxLength": 24 },
+        "tierExpiresAt": { "type": "string", "maxLength": 64 },
         "privileges": {
           "type": "object",
           "properties": {
@@ -20,17 +27,76 @@
             "canUseChat": { "type": "boolean" },
             "canUseVoiceChat": { "type": "boolean" },
             "canRunAutonomousWorkflow": { "type": "boolean" },
-            "canModifyAgentSettings": { "type": "boolean" },
             "canExecuteTerminalAndTools": { "type": "boolean" },
             "canAccessSecretsAndWallets": { "type": "boolean" },
             "canModifyOSSettings": { "type": "boolean" },
-            "canManageUsers": { "type": "boolean" }
+            "canManageUsers": { "type": "boolean" },
+            "canUseBurnerMail": { "type": "boolean" },
+            "canUseInfiniteSim": { "type": "boolean" },
+            "canAccessGrantHunter": { "type": "boolean" },
+            "canBringOwnKeys": { "type": "boolean" },
+            "canAccessSystemCore": { "type": "boolean" },
+            "maxDailyAiRequests": { "type": "number" }
           }
         },
         "createdAt": { "type": "string", "maxLength": 64 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["uid", "email", "role", "createdAt"]
+    },
+    "Tier": {
+      "title": "Tier",
+      "description": "Access tier definition with pricing, project-investment positioning, Founder Wall eligibility, and RBAC privilege blueprint",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "slug": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 128 },
+        "tagline": { "type": "string", "maxLength": 256 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "badgeColor": { "type": "string", "enum": ["zinc", "emerald", "cyan", "amber", "violet", "rose"], "maxLength": 16 },
+        "rank": { "type": "number" },
+        "baseRole": { "type": "string", "enum": ["admin", "operator", "collaborator", "viewer"], "maxLength": 16 },
+        "isBuiltIn": { "type": "boolean" },
+        "isPublic": { "type": "boolean" },
+        "isMonetized": { "type": "boolean" },
+        "isFounderTier": { "type": "boolean" },
+        "billingMode": { "type": "string", "enum": ["free", "monthly", "one-time", "both"], "maxLength": 16 },
+        "monthlyUsdCents": { "type": "number" },
+        "oneTimeUsdCents": { "type": "number" },
+        "cryptoUsdAmount": { "type": "number" },
+        "features": { "type": "array", "maxItems": 24, "items": { "type": "string", "maxLength": 256 } },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "slug", "name", "rank", "baseRole", "isPublic", "isMonetized", "createdAt", "updatedAt"]
+    },
+    "SupporterBoardEntry": {
+      "title": "SupporterBoardEntry",
+      "description": "Verified project donation or Founder Tier Wall entry carrying immutable backing UTC timestamp and unfiltered feedback",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "entryKind": { "type": "string", "enum": ["donation", "founder-tier"], "maxLength": 24 },
+        "isAnonymous": { "type": "boolean" },
+        "authorDisplayName": { "type": "string", "maxLength": 48 },
+        "tierId": { "type": "string", "maxLength": 128 },
+        "tierName": { "type": "string", "maxLength": 128 },
+        "tierBadgeColor": { "type": "string", "enum": ["zinc", "emerald", "cyan", "amber", "violet", "rose"], "maxLength": 16 },
+        "amountUsd": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 16 },
+        "nativeAmount": { "type": "string", "maxLength": 64 },
+        "chain": { "type": "string", "enum": ["base", "ethereum", "polygon", "arbitrum", "base-sepolia"], "maxLength": 24 },
+        "paymentMethod": { "type": "string", "enum": ["stripe-card", "crypto-onchain", "tier-membership", "admin-grant"], "maxLength": 24 },
+        "feedbackCategory": { "type": "string", "enum": ["praise", "critique", "suggestion", "note"], "maxLength": 24 },
+        "message": { "type": "string", "maxLength": 500 },
+        "referenceId": { "type": "string", "maxLength": 128 },
+        "explorerUrl": { "type": "string", "maxLength": 256 },
+        "verified": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "entryKind", "isAnonymous", "authorDisplayName", "amountUsd", "currency", "paymentMethod", "feedbackCategory", "message", "verified", "createdAt"]
     },
     "ChatThread": {
       "title": "ChatThread",
@@ -204,6 +270,14 @@
         }
       },
       "description": "Read-only connection verification probe (/test/connection)"
+    },
+    "/tiers/{tierId}": {
+      "schema": { "$ref": "#/entities/Tier" },
+      "description": "Publicly readable tier plan definitions (admin-only writes)"
+    },
+    "/supporter_board/{entryId}": {
+      "schema": { "$ref": "#/entities/SupporterBoardEntry" },
+      "description": "Verified supporter donations and Founder Tier permanent timestamped Wall entries (server/admin-only writes, zero PII)"
     },
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },

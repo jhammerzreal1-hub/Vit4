@@ -964,8 +964,72 @@ export const SovereignCryptoWalletModule: React.FC<SovereignCryptoWalletModulePr
 
       {/* Main Content */}
       <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
-        {activeWallet && (
+        {!activeWallet && !['new-wallet', 'bootstrap', 'coinbase-cdp', 'grants'].includes(activeTab) ? (
+          <div className="max-w-3xl mx-auto py-8">
+            <div className="rounded-2xl bg-zinc-900/90 border border-zinc-800 p-6 sm:p-8 space-y-5 shadow-xl">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-xl bg-amber-500/15 border border-amber-500/35 flex items-center justify-center text-amber-400 shrink-0">
+                  <Wallet className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h2 className="text-base sm:text-lg font-bold text-white">
+                    Fresh Personal Self-Custody Vault
+                  </h2>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    Your account has its own completely isolated encrypted keystore. Zero shared owner wallets, zero preloaded seeds, and zero host credentials are present. Generate a fresh multi-chain vault, import your own private key, or link an existing MetaMask / Phantom / hardware watch address.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('new-wallet')}
+                  className="p-4 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-left space-y-1 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-200">
+                    <Plus className="w-4 h-4 text-amber-400" />
+                    <span>Create or Import Vault</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Generate a fresh BIP-39 multi-chain vault or import an existing secp256k1 key.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('bootstrap')}
+                  className="p-4 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/35 text-left space-y-1 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 text-xs font-bold text-sky-200">
+                    <ExternalLink className="w-4 h-4 text-sky-400" />
+                    <span>Link External Wallet</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Connect MetaMask, Phantom, or watch-only BTC/ETH/SOL mainnet addresses.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('coinbase-cdp')}
+                  className="p-4 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/35 text-left space-y-1 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 text-xs font-bold text-blue-200">
+                    <ShieldCheck className="w-4 h-4 text-blue-400" />
+                    <span>Coinbase CDP / Keys</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Configure your own CDP API credentials in your personal encrypted Secrets Vault.
+                  </p>
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
           <div className="max-w-7xl mx-auto space-y-6">
+            {activeWallet && (
+              <>
             {/* Top Valuation & Multi-Chain Address Summary Cards */}
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
               {/* Net Worth Card */}
@@ -1583,7 +1647,7 @@ export const SovereignCryptoWalletModule: React.FC<SovereignCryptoWalletModulePr
             {/* ============================================================= */}
             {/* TAB: SELF-CUSTODY PRIVATE KEYS & BIP-39 SEED BACKUP           */}
             {/* ============================================================= */}
-            {activeTab === 'keystore' && (
+            {activeTab === 'keystore' && activeWallet && (
               <div className="rounded-2xl bg-zinc-900/80 border border-zinc-800 p-6 space-y-5 max-w-4xl">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
@@ -1669,6 +1733,9 @@ export const SovereignCryptoWalletModule: React.FC<SovereignCryptoWalletModulePr
                   ))}
                 </div>
               </div>
+            )}
+
+            </>
             )}
 
             {/* ============================================================= */}

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-MODEL="$INSTALL_DIR/models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+MODEL="$INSTALL_DIR/models/Qwen2.5-Coder-0.5B-Instruct-abliterated-Q4_K_M.gguf"
 SERVER_BIN="$INSTALL_DIR/bin/llama-server"
 
 if [ ! -f "$SERVER_BIN" ] || [ ! -f "$MODEL" ]; then

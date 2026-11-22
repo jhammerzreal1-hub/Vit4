@@ -60,7 +60,9 @@ import {
   Award,
   ArrowUpDown,
   Target,
-  Server
+  Server,
+  GitMerge,
+  Skull
 } from 'lucide-react';
 import type { ModuleType } from '../types';
 import { SoSMeshIcon } from './SoSMeshIcon';
@@ -198,6 +200,28 @@ export const ALL_MODULES: ModuleRegistryItem[] = [
     accentColor: 'text-amber-400',
     activeBg: 'bg-amber-500/15 border-amber-500/40 text-amber-200',
     description: 'Offline Ollama/Llama fallback inference engine & systemic port control for autonomous testing'
+  },
+  {
+    id: 'swarm-consolidation',
+    label: 'Infinite Swarm Replication & Consolidation',
+    shortLabel: 'Swarm Synapse',
+    group: 'core',
+    category: 'command',
+    icon: GitMerge,
+    accentColor: 'text-purple-400',
+    activeBg: 'bg-purple-500/15 border-purple-500/40 text-purple-200',
+    description: 'Infinite recursive agent replication sharing a singular brain with recursive experience consolidation'
+  },
+  {
+    id: 'adversarial-red-team',
+    label: 'Sovereign Cyber Defense & Audit Center',
+    shortLabel: 'Cyber Defense',
+    group: 'core',
+    category: 'command',
+    icon: ShieldCheck,
+    accentColor: 'text-emerald-400',
+    activeBg: 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200',
+    description: 'Live workspace security auditing, route auth verification, secret scanning, and MITRE/OWASP defensive playbooks'
   },
   {
     id: 'emulator-modder',

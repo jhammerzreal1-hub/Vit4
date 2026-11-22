@@ -43,15 +43,22 @@ import {
   Radio,
   X
 } from 'lucide-react';
+import { apiFetch } from '../utils/authClient';
 
 export interface BurnerIdentity {
   id: string;
   address: string;
   domain: string;
-  provider: 'secmail' | 'mailtm' | 'guerrilla' | 'tempmail' | 'sovereign' | string;
+  provider: 'tempmail' | 'tinyhost' | 'gmail_alias' | 'maildrop' | 'mailtm' | 'guerrilla' | 'sovereign' | 'secmail' | string;
   token: string;
   password?: string;
   alias?: string;
+  mxVerified?: boolean;
+  primaryMx?: string | null;
+  blocklistClean?: boolean;
+  flaggedBy?: string[];
+  deliverabilityTier?: 'ZERO_403_CLEAN' | 'STEALTH_CLEAN' | 'MX_FLAGGED_DISPOSABLE' | 'STANDARD_DISPOSABLE' | string;
+  realPublicInbox?: boolean;
   createdAt: string;
   tag?: string;
 }
@@ -284,8 +291,17 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
   // Generation Controls
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationCount, setGenerationCount] = useState<number>(1);
-  const [selectedProvider, setSelectedProvider] = useState<'auto' | 'secmail' | 'mailtm' | 'tempmail' | 'guerrilla' | 'sovereign'>('auto');
+  const [selectedProvider, setSelectedProvider] = useState<'auto' | 'tempmail' | 'tinyhost' | 'gmail_alias' | 'maildrop' | 'mailtm' | 'guerrilla' | 'sovereign'>('auto');
   const [customPrefix, setCustomPrefix] = useState('');
+  const [gmailBaseAddress, setGmailBaseAddress] = useState<string>(() => {
+    try {
+      return localStorage.getItem('aurelius_burner_gmail_base_v1') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [aliasMode, setAliasMode] = useState<'dot' | 'googlemail' | 'plus'>('dot');
+  const [showAliasModal, setShowAliasModal] = useState<boolean>(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
 
   // Auto-refresh polling
@@ -403,7 +419,7 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
 
   // Load available providers and initial domains
   useEffect(() => {
-    fetch('/api/burner/providers')
+    apiFetch('/api/burner/providers')
       .then(res => res.json())
       .then(data => {
         if (data && data.providers) {
@@ -413,19 +429,29 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
       .catch(err => console.warn('Provider check error:', err));
   }, []);
 
-  // Generate Single Burner Address
-  const handleGenerateBurner = async (providerOverride?: 'auto' | 'sovereign' | 'mailtm' | 'tempmail' | 'guerrilla', prefixOverride?: string) => {
+  // Generate Single Real Burner Address
+  const handleGenerateBurner = async (
+    providerOverride?: 'auto' | 'tempmail' | 'tinyhost' | 'gmail_alias' | 'maildrop' | 'sovereign' | 'mailtm' | 'guerrilla',
+    prefixOverride?: string,
+    aliasModeOverride?: 'dot' | 'googlemail' | 'plus'
+  ) => {
+    const prov = providerOverride || selectedProvider;
+    const pref = prefixOverride !== undefined ? prefixOverride : customPrefix;
+    const modeToUse = aliasModeOverride || aliasMode;
+    if (prov === 'gmail_alias' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(gmailBaseAddress.trim())) {
+      setShowAliasModal(true);
+      showToast('Enter your base @gmail.com / @outlook.com / custom email to generate a 4/4 Zero-403 alias.');
+      return;
+    }
     setIsGenerating(true);
     try {
-      const prov = providerOverride || selectedProvider;
-      const pref = prefixOverride !== undefined ? prefixOverride : customPrefix;
-
-      const res = await fetch('/api/burner/generate', {
+      const res = await apiFetch('/api/burner/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider: prov,
-          customPrefix: pref
+          customPrefix: pref,
+          ...(prov === 'gmail_alias' ? { baseEmail: gmailBaseAddress.trim(), aliasMode: modeToUse } : {})
         })
       });
 
@@ -435,7 +461,15 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
         setInboxes(prev => [newIdent, ...prev]);
         setActiveInboxId(newIdent.id);
         setCustomPrefix('');
-        showToast(`Created ${newIdent.address}`);
+        setShowAliasModal(false);
+        const flagNote = Array.isArray(newIdent.flaggedBy) && newIdent.flaggedBy.length > 0
+          ? ` [Flagged by ${newIdent.flaggedBy.join(', ')} — use Zero-403 Alias for strict rewards WAFs]`
+          : ' [ZERO-403 4/4 CLEAN]';
+        showToast(
+          newIdent.provider === 'gmail_alias'
+            ? `Created Zero-403 Alias ${newIdent.address} (delivers straight to ${newIdent.alias || gmailBaseAddress})`
+            : `Created inbox ${newIdent.address}${flagNote}`
+        );
         // Fetch welcome or initial messages immediately
         fetchMessagesForInbox(newIdent, true);
       } else {
@@ -448,20 +482,21 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
     }
   };
 
-  // Batch Generate Multiple Addresses
+  // Batch Generate Multiple Real Addresses
   const handleBatchGenerate = async () => {
     if (generationCount <= 1) {
       return handleGenerateBurner();
     }
     setIsGenerating(true);
     try {
-      const res = await fetch('/api/burner/batch-generate', {
+      const res = await apiFetch('/api/burner/batch-generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           count: generationCount,
           provider: selectedProvider,
-          customPrefix: customPrefix
+          customPrefix: customPrefix,
+          ...(selectedProvider === 'gmail_alias' ? { baseEmail: gmailBaseAddress.trim() } : {})
         })
       });
 
@@ -472,7 +507,7 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
         setActiveInboxId(newIdentities[0].id);
         setShowBatchModal(false);
         setCustomPrefix('');
-        showToast(`Generated ${newIdentities.length} burner inboxes simultaneously!`);
+        showToast(`Generated ${newIdentities.length} MX-verified burner inboxes!`);
         // Trigger parallel fetch for all
         newIdentities.forEach(ident => fetchMessagesForInbox(ident, false));
       } else {
@@ -488,7 +523,7 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
   // Fetch messages for a specific inbox (NON-DESTRUCTIVE additive merge so upstream empty polls NEVER wipe emails!)
   const fetchMessagesForInbox = async (inbox: BurnerIdentity, notifyIfNew: boolean = false) => {
     try {
-      const res = await fetch('/api/burner/messages', {
+      const res = await apiFetch('/api/burner/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -679,7 +714,7 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
       setLoadingDetail(true);
     }
     try {
-      const res = await fetch('/api/burner/message-detail', {
+      const res = await apiFetch('/api/burner/message-detail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -731,7 +766,7 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
     deletedIdsRef.current.add(msgId);
 
     try {
-      await fetch('/api/burner/delete-message', {
+      await apiFetch('/api/burner/delete-message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -788,7 +823,7 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
     setAnalyzingAi(true);
     setDetailViewMode('ai');
     try {
-      const res = await fetch('/api/burner/ai-analyze', {
+      const res = await apiFetch('/api/burner/ai-analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -818,7 +853,7 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
     setLoadingDomainHealth(true);
     setShowDomainHealthModal(true);
     try {
-      const res = await fetch('/api/burner/domain-health');
+      const res = await apiFetch('/api/burner/domain-health');
       const data = await res.json();
       if (data.success && data.domains) {
         setDomainHealthData(data.domains);
@@ -849,7 +884,7 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
     }
     setSendingReply(true);
     try {
-      const res = await fetch('/api/burner/send-reply', {
+      const res = await apiFetch('/api/burner/send-reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -886,7 +921,7 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
 
     setIsSendingTest(true);
     try {
-      const res = await fetch('/api/burner/send-test', {
+      const res = await apiFetch('/api/burner/send-test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1088,6 +1123,23 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
             <span className="hidden md:inline">Outbound</span>
           </button>
 
+          {/* 1-Click Zero-403 Rewards/WAF Alias Button */}
+          <button
+            onClick={() => {
+              if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(gmailBaseAddress.trim())) {
+                handleGenerateBurner('gmail_alias', '', aliasMode);
+              } else {
+                setShowAliasModal(true);
+              }
+            }}
+            disabled={isGenerating}
+            title="Generate a 4/4 detector-clean @gmail.com / @googlemail.com / consumer alias that bypasses Taco Bell & strict brand HTTP 403 WAFs"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/45 font-bold text-xs font-mono transition-all disabled:opacity-50"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Zero-403 Alias</span>
+          </button>
+
           {/* Instant 1-Click New Burner Button */}
           <button
             onClick={() => handleGenerateBurner()}
@@ -1203,16 +1255,40 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
                   >
                     <div className="flex items-start justify-between gap-1.5">
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 mb-1">
+                        <div className="flex items-center gap-1.5 mb-1 flex-wrap">
                           <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono uppercase font-semibold ${
-                            inbox.provider === 'mailtm' 
+                            inbox.provider === 'gmail_alias'
+                              ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/35'
+                              : inbox.provider === 'tempmail' || inbox.provider === 'tinyhost'
+                              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/35'
+                              : inbox.provider === 'maildrop'
+                              ? 'bg-amber-500/15 text-amber-300 border border-amber-500/35'
+                              : inbox.provider === 'mailtm'
                               ? 'bg-sky-500/10 text-sky-400 border border-sky-500/30'
                               : inbox.provider === 'guerrilla'
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                              ? 'bg-teal-500/10 text-teal-300 border border-teal-500/30'
+                              : inbox.provider === 'sovereign' || (inbox.address.endsWith('.net') && inbox.address.includes('sovereign-burner'))
+                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/35'
                               : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
                           }`}>
-                            {inbox.provider}
+                            {inbox.provider === 'gmail_alias' ? 'gmail alias' : inbox.provider}
                           </span>
+                          {inbox.mxVerified && inbox.blocklistClean ? (
+                            <span className="text-[9px] font-mono text-emerald-400 font-semibold uppercase" title={`Passed 4/4 commercial anti-disposable detectors (Kickbox, DeBounce, Disify, MailCheck) · MX: ${inbox.primaryMx || inbox.domain}`}>
+                              ZERO-403
+                            </span>
+                          ) : inbox.mxVerified ? (
+                            <span
+                              className="text-[9px] font-mono text-amber-400/90 uppercase"
+                              title={`Real Public MX (${inbox.primaryMx || inbox.domain}), flagged by ${inbox.flaggedBy?.length ? inbox.flaggedBy.join(', ') : 'commercial MX reputation'} — works on normal sites; use Zero-403 Alias for strict rewards WAFs like Taco Bell`}
+                            >
+                              MX FLAGGED
+                            </span>
+                          ) : (inbox.provider === 'sovereign' || inbox.address.includes('sovereign-burner') || inbox.address.includes('1secmail')) ? (
+                            <span className="text-[9px] font-mono text-rose-400 uppercase" title="Legacy/local-only address — click New Burner or Zero-403 Alias">
+                              UNROUTABLE
+                            </span>
+                          ) : null}
                           <span className="text-[10px] text-zinc-500 font-mono truncate">
                             {new Date(inbox.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
@@ -1286,16 +1362,69 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
             )}
           </div>
 
-          {/* Left Footer: Quick Custom Generator Form */}
+          {/* Left Footer: Inline Engine & Quick Custom Generator Form */}
           <div className="p-3 border-t border-zinc-800/80 bg-zinc-900/50 space-y-2">
-            <div className="flex items-center gap-1 text-[11px] font-mono text-zinc-400">
-              <Sliders className="w-3.5 h-3.5 text-amber-400" />
-              <span>Quick Custom Prefix</span>
+            <div className="flex items-center justify-between gap-1 text-[11px] font-mono text-zinc-400">
+              <span className="flex items-center gap-1">
+                <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                <span>Engine &amp; Prefix</span>
+              </span>
+              <span className="text-[9px] text-emerald-400/90 uppercase">Anti-403 Stealth</span>
             </div>
+            <select
+              value={selectedProvider}
+              onChange={(e: any) => setSelectedProvider(e.target.value)}
+              aria-label="Burner Mail Provider Engine"
+              className="w-full bg-zinc-950 border border-zinc-700/80 rounded px-2 py-1 text-[11px] font-mono text-zinc-200 focus:outline-none focus:border-amber-500"
+            >
+              <option value="auto">Auto · Anti-403 Clean Root .com/.net</option>
+              <option value="tempmail">Stealth Root .com/.net (TempMail.lol)</option>
+              <option value="tinyhost">Clean Custom Domain (TinyHost)</option>
+              <option value="gmail_alias">Gmail Dot-Alias (Zero-403 Rewards/WAF)</option>
+              <option value="maildrop">Maildrop.cc (Standard Disposable)</option>
+              <option value="guerrilla">GuerrillaMail (Standard Disposable)</option>
+              <option value="mailtm">Mail.tm (Standard Disposable)</option>
+            </select>
+            {selectedProvider === 'gmail_alias' && (
+              <div className="space-y-1.5">
+                <input
+                  type="email"
+                  placeholder="Base @gmail.com / @outlook.com / custom"
+                  value={gmailBaseAddress}
+                  onChange={(e) => {
+                    setGmailBaseAddress(e.target.value);
+                    try {
+                      localStorage.setItem('aurelius_burner_gmail_base_v1', e.target.value);
+                    } catch {}
+                  }}
+                  className="w-full bg-zinc-950 border border-cyan-500/40 rounded px-2.5 py-1 text-xs font-mono text-cyan-100 placeholder-zinc-500 focus:outline-none focus:border-cyan-400"
+                />
+                <div className="grid grid-cols-3 gap-1">
+                  {([
+                    ['dot', 'Dot-Trick'],
+                    ['googlemail', '@googlemail'],
+                    ['plus', '+Tag']
+                  ] as const).map(([m, label]) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setAliasMode(m)}
+                      className={`py-1 rounded text-[10px] font-mono border transition-colors ${
+                        aliasMode === m
+                          ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/50 font-semibold'
+                          : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-1.5">
               <input
                 type="text"
-                placeholder="e.g. auditor_01"
+                placeholder={selectedProvider === 'gmail_alias' ? 'Optional +tag (blank = dot-trick)' : 'e.g. alexmercer'}
                 value={customPrefix}
                 onChange={(e) => setCustomPrefix(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleGenerateBurner()}
@@ -1988,10 +2117,13 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
                   onChange={(e: any) => setSelectedProvider(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-700 rounded p-2 text-zinc-200 focus:outline-none focus:border-amber-500"
                 >
-                  <option value="auto">Auto (Smart Dual-Engine with Live Public MX)</option>
-                  <option value="mailtm">Mail.tm Quantum Engine (@maxxspace.com - in.mail.tm)</option>
-                  <option value="tempmail">TempMail Rapid Cluster (@paxeluni.com, @xzcoot.com)</option>
-                  <option value="guerrilla">GuerrillaMail Engine (with Auto-Failover)</option>
+                  <option value="auto">Auto (Anti-403 Stealth Root .com/.net → TinyHost → Maildrop)</option>
+                  <option value="tempmail">Stealth Root .com/.net (TempMail.lol — Not on Blocklist)</option>
+                  <option value="tinyhost">TinyHost Clean Custom Domains (Not on Blocklist)</option>
+                  <option value="gmail_alias">Gmail Dot/Plus Alias (Zero-403 Brand/Rewards WAF Bypass)</option>
+                  <option value="maildrop">Maildrop.cc (@maildrop.cc — Standard Disposable)</option>
+                  <option value="guerrilla">GuerrillaMail (@sharklasers.com / @pokemail.net / @grr.la)</option>
+                  <option value="mailtm">Mail.tm Live Engine (Standard Disposable)</option>
                 </select>
               </div>
 
@@ -2349,13 +2481,13 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
                 onClick={async () => {
                   setIsRelaying(true);
                   try {
-                    const res = await fetch('/api/burner/relay', {
+                    const res = await apiFetch('/api/burner/relay', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
                         webhookUrl,
                         notifyTermux,
-                        address: inboxes[0]?.address || 'test@maxxspace.com',
+                        address: inboxes[0]?.address || 'relay-test@maildrop.cc',
                         subject: 'Test Handshake',
                         otpCode: '849201',
                         bodyText: 'Verification relay test from Aurelius Burner Mail.'
@@ -2479,6 +2611,90 @@ export const BurnerMailModule: React.FC<BurnerMailModuleProps> = ({
               >
                 <Send className="w-3.5 h-3.5" />
                 <span>{sendingReply ? 'Transmitting...' : 'Transmit Dispatch'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Zero-403 Real Consumer / Rewards Alias Modal */}
+      {showAliasModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-zinc-900 border border-cyan-500/40 rounded-xl shadow-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-sm font-bold font-mono text-zinc-100">ZERO-403 REWARDS &amp; WAF ALIAS</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAliasModal(false)}
+                className="text-zinc-500 hover:text-zinc-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs font-mono text-zinc-400 leading-relaxed">
+              Strict loyalty/rewards WAFs (Taco Bell, DoorDash, Starbucks) flag every free public disposable MX server via MailCheck.ai &amp; DeBounce. Enter your own real <span className="text-cyan-300">@gmail.com</span>, <span className="text-cyan-300">@outlook.com</span>, or private domain to spin unlimited 4/4 detector-clean aliases that route OTPs directly to your inbox.
+            </p>
+            <div className="space-y-2.5">
+              <div>
+                <label className="text-[11px] font-mono text-zinc-400 block mb-1">Your Base Mailbox (saved only in your browser)</label>
+                <input
+                  type="email"
+                  placeholder="yourname@gmail.com"
+                  value={gmailBaseAddress}
+                  onChange={(e) => {
+                    setGmailBaseAddress(e.target.value);
+                    try {
+                      localStorage.setItem('aurelius_burner_gmail_base_v1', e.target.value);
+                    } catch {}
+                  }}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded p-2 text-xs font-mono text-zinc-100 focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-mono text-zinc-400 block mb-1">Stealth Variant Mode</label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {([
+                    ['dot', 'Gmail Dot-Trick'],
+                    ['googlemail', '@googlemail.com'],
+                    ['plus', '+Tag Alias']
+                  ] as const).map(([m, label]) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setAliasMode(m)}
+                      className={`py-1.5 px-2 rounded text-[11px] font-mono border transition-colors ${
+                        aliasMode === m
+                          ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/50 font-semibold'
+                          : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAliasModal(false)}
+                className="px-3 py-1.5 rounded bg-zinc-800 text-zinc-300 text-xs font-mono border border-zinc-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isGenerating}
+                onClick={() => {
+                  setSelectedProvider('gmail_alias');
+                  handleGenerateBurner('gmail_alias', '', aliasMode);
+                }}
+                className="px-4 py-1.5 rounded bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-bold text-xs font-mono disabled:opacity-50"
+              >
+                {isGenerating ? 'Generating...' : 'Generate Zero-403 Alias'}
               </button>
             </div>
           </div>

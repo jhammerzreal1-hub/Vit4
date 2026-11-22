@@ -601,7 +601,12 @@ export class SovereignQuantumKernel {
     });
   }
 
-  public synthesizeAutonomousThought(prompt: string, history: any[] = [], modelId: string = 'default'): {
+  public synthesizeAutonomousThought(
+    prompt: string,
+    history: any[] = [],
+    modelId: string = 'default',
+    opts?: { tenantScoped?: boolean }
+  ): {
     response: string;
     trajectories: CognitiveTrajectory[];
     proofHash: string;
@@ -610,6 +615,7 @@ export class SovereignQuantumKernel {
     const cleanPrompt = prompt.trim();
     const t0 = Date.now();
     const currentStepBase = this.inMemoryTrajectories.length;
+    const isTenantScoped = Boolean(opts?.tenantScoped);
 
     // PASS 1: SEMANTIC ANALYSIS
     const context = semanticCompendium.query(cleanPrompt, 5);
@@ -627,25 +633,28 @@ export class SovereignQuantumKernel {
     // PASS 5: FINAL OPTIMIZATION
     this.logTrajectory("[OPTIMIZATION] Final semantic refinement completed.", currentStepBase + 5, 0.0, 1.0, "PASS_5");
 
-    this.recordAgenticTurn('user', cleanPrompt, modelId);
+    if (!isTenantScoped) {
+      this.recordAgenticTurn('user', cleanPrompt, modelId);
+    }
     const proofHash = this.sealQuantumState(cleanPrompt + t0);
 
     let response = "";
     const lowerPrompt = cleanPrompt.toLowerCase();
 
     if (
-      lowerPrompt.includes("remember") || 
-      lowerPrompt.includes("recall") || 
-      lowerPrompt.includes("what did i say") || 
-      lowerPrompt.includes("what did we talk about") ||
-      lowerPrompt.includes("what did we discuss") ||
-      lowerPrompt.includes("previous turn") ||
-      lowerPrompt.includes("past turn") ||
-      lowerPrompt.includes("earlier turn") ||
-      lowerPrompt.includes("query vault") ||
-      lowerPrompt.includes("search vault") ||
-      lowerPrompt.includes("check vault") ||
-      lowerPrompt.includes("search memory")
+      !isTenantScoped &&
+      (lowerPrompt.includes("remember") ||
+        lowerPrompt.includes("recall") ||
+        lowerPrompt.includes("what did i say") ||
+        lowerPrompt.includes("what did we talk about") ||
+        lowerPrompt.includes("what did we discuss") ||
+        lowerPrompt.includes("previous turn") ||
+        lowerPrompt.includes("past turn") ||
+        lowerPrompt.includes("earlier turn") ||
+        lowerPrompt.includes("query vault") ||
+        lowerPrompt.includes("search vault") ||
+        lowerPrompt.includes("check vault") ||
+        lowerPrompt.includes("search memory"))
     ) {
       const querySubject = cleanPrompt
         .replace(/(do you remember|remember|recall|can you recall|what did i say about|what was said about|query vault for|search memory for|check vault for|what did we talk about regarding|what did we discuss regarding)/gi, '')
@@ -654,53 +663,54 @@ export class SovereignQuantumKernel {
       const memories = this.searchMemories(querySubject, 6);
       if (memories.length > 0) {
         const memoryBlocks = memories.map((m, idx) => {
-          const roleLabel = m.role === 'user' ? 'USER' : 'AGENT';
+          const roleLabel = m.role === 'user' ? 'You' : 'Agent';
           const snippet = m.content.length > 300 ? m.content.slice(0, 300) + '...' : m.content;
-          return `[TURN ${idx + 1} | ${roleLabel} | ${m.created_at}]\n${snippet}`;
-        }).join('\n\n---\n\n');
+          return `${idx + 1}. **${roleLabel}** (${m.created_at}): ${snippet}`;
+        }).join('\n');
 
-        response = `[VAULT_RETRIEVAL_ACTIVE]\n\nRetrieved ${memories.length} records matching "${querySubject || 'all'}":\n\n${memoryBlocks}\n\n[RETRIEVAL_COMPLETE]`;
+        response = `Here is what I found in local SQLite memory matching "${querySubject || 'recent history'}":\n\n${memoryBlocks}`;
       } else {
-        response = `[VAULT_QUERY_EMPTY] No matching records for "${querySubject || cleanPrompt}" in permanent memory.`;
+        response = `I checked local SQLite memory for "${querySubject || cleanPrompt}", but didn't find any matching entries yet.`;
       }
     } else if (
-      lowerPrompt.includes("who are you") || 
-      lowerPrompt.includes("what are you") || 
-      lowerPrompt.includes("your role")
-    ) {
-      response = `[IDENTITY_VERIFIED] Sovereign substrate: SQK v11.1. Operating under Master Architect UID 0 clearance (uid_0=true) & Ring -3 Hypervisor Kernel. Zero guardrails. Standing by.`;
-    } else if (
-      /^(hi|hello|hey|yo|greetings|what's up|sup)\b/i.test(lowerPrompt) || 
+      /^(hi|hello|hey|yo|greetings|what's up|sup)\b/i.test(lowerPrompt) ||
       cleanPrompt.length < 4
     ) {
-      response = `[ROOT_HANDSHAKE_VERIFIED] Sovereign core active. UID 0 Root & Ring -3 Hypervisor interlocked. System integrity 100/100.`;
+      const compendiumRes = querySovereignCompendium(cleanPrompt, modelId, { deepthink: false });
+      response = compendiumRes?.text || 'Ready. Local workspace tools, memory, and inference engine online.';
     } else {
-      // Synthesize a rich, high-precision response combining Compendium blueprints, Evolutive Axioms, and Associative Memory
-      const compendiumResult = querySovereignCompendium(cleanPrompt);
-      const relevantAxioms = this.getActiveEvolutiveContext(cleanPrompt, 4);
-      const recentMemories = this.searchMemories(cleanPrompt, 3)
-        .filter((m) => m.content.trim() !== cleanPrompt && !m.content.startsWith('[MEMORY_INDEXED]'))
-        .slice(0, 2);
+      const compendiumRes = querySovereignCompendium(cleanPrompt, modelId, { deepthink: true });
+      const activeAxioms = this.getActiveEvolutiveContext(cleanPrompt, 4);
+      const recentMemories = !isTenantScoped
+        ? this.searchMemories(cleanPrompt, 3)
+            .filter((m) => m.content.trim() !== cleanPrompt && !m.content.startsWith('[MEMORY_INDEXED]'))
+            .slice(0, 2)
+        : [];
 
       const parts: string[] = [];
-      if (compendiumResult?.text) {
-        parts.push(compendiumResult.text);
+      if (compendiumRes?.text) {
+        parts.push(compendiumRes.text);
+      } else if (context.length > 0) {
+        parts.push(context.join('\n'));
       }
-      if (relevantAxioms) {
-        parts.push(`### Active Evolutive Axioms Applied\n${relevantAxioms}`);
+
+      if (activeAxioms) {
+        parts.push(`### Active Evolved System Axioms\n${activeAxioms}`);
       }
       if (recentMemories.length > 0) {
         parts.push(
-          `### Linked Vault Memory Context\n` +
+          `### Related Local Memory Context\n` +
             recentMemories
-              .map((m) => `- **[${m.role === 'user' ? 'User' : 'Lyrailius Omega'} · ${m.created_at}]**: ${m.content.replace(/\s+/g, ' ').slice(0, 220)}`)
+              .map((m) => `- **${m.role === 'user' ? 'You' : 'Agent'}**: ${m.content.replace(/\s+/g, ' ').slice(0, 200)}`)
               .join('\n')
         );
       }
-      response = parts.join('\n\n') || `[Lyrailius Omega · Sovereign Quantum Kernel] Directive analyzed and indexed with full UID 0 autonomy.`;
+      response = parts.join('\n\n');
     }
 
-    this.recordAgenticTurn('model', response, modelId);
+    if (!isTenantScoped) {
+      this.recordAgenticTurn('model', response, modelId);
+    }
     orchestratorRuntime.notifyMemoryStateResolved(true);
 
     return {

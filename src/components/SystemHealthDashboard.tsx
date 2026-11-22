@@ -46,6 +46,7 @@ import {
 import { measureFirestoreLatency } from '../firebase';
 import firebaseConfig from '../../firebase-applet-config.json';
 import type { ModuleType } from '../types';
+import { apiFetch } from '../utils/authClient';
 
 interface SystemHealthData {
   status: string;
@@ -191,7 +192,7 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
 
   const fetchProxyWheel = useCallback(async (forceRefresh = false) => {
     try {
-      const res = await fetch(forceRefresh ? '/api/proxy-wheel/status?refresh=1' : '/api/proxy-wheel/status');
+      const res = await apiFetch(forceRefresh ? '/api/proxy-wheel/status?refresh=1' : '/api/proxy-wheel/status');
       if (res.ok) {
         const data = await res.json();
         setProxyWheelData(data);
@@ -205,26 +206,41 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
     }
   }, [isExpanded, activeTab, fetchProxyWheel]);
 
+  useEffect(() => {
+    const onWheelUpdated = (evt: Event) => {
+      const detail = (evt as CustomEvent).detail;
+      if (detail && typeof detail.totalSpokes === 'number') {
+        setProxyWheelData(detail);
+      } else if (isExpanded && activeTab === 'router') {
+        fetchProxyWheel();
+      }
+    };
+    window.addEventListener('aurelius:proxy-wheel-updated', onWheelUpdated);
+    return () => window.removeEventListener('aurelius:proxy-wheel-updated', onWheelUpdated);
+  }, [isExpanded, activeTab, fetchProxyWheel]);
+
   const handleWheelConfig = async (patch: Record<string, any>) => {
     setWheelBusy(true);
     try {
-      const res = await fetch('/api/proxy-wheel/config', {
+      const res = await apiFetch('/api/proxy-wheel/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch)
       });
       if (res.ok) {
-        setProxyWheelData(await res.json());
+        const data = await res.json();
+        setProxyWheelData(data);
+        window.dispatchEvent(new CustomEvent('aurelius:proxy-wheel-updated', { detail: data }));
       }
     } catch {} finally {
       setWheelBusy(false);
     }
   };
 
-  const handleWheelAction = async (action: 'step' | 'reset-cooldowns' | 'probe-all') => {
+  const handleWheelAction = async (action: 'rehydrate-rotate' | 'step' | 'reset-cooldowns' | 'probe-all') => {
     setWheelBusy(true);
     try {
-      const res = await fetch('/api/proxy-wheel/rotate', {
+      const res = await apiFetch('/api/proxy-wheel/rotate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action })
@@ -232,13 +248,17 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
       if (res.ok) {
         const data = await res.json();
         setProxyWheelData(data);
+        window.dispatchEvent(new CustomEvent('aurelius:proxy-wheel-updated', { detail: data }));
+        const restored = typeof data.clearedCooldowns === 'number' && data.clearedCooldowns > 0
+          ? ` · rehydrated ${data.clearedCooldowns}`
+          : '';
         setHeartbeatLogs(prev => [
           {
             timestamp: new Date().toLocaleTimeString(),
             service: 'Edge Mesh',
             latencyMs: 1,
             status: 'OPTIMAL',
-            message: `Proxy Loop Wheel [${action}] · Cursor #${data.cursor} (${data.readySpokes}/${data.totalSpokes} ready)`
+            message: `Proxy Loop Wheel [${action}]${restored} · Cursor #${data.cursor} (${data.readySpokes}/${data.totalSpokes} ready)`
           },
           ...prev.slice(0, 39)
         ]);
@@ -1001,11 +1021,12 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
 
                 <div className="flex flex-wrap items-center gap-1.5">
                   <button
-                    onClick={() => handleWheelAction('step')}
+                    onClick={() => handleWheelAction('rehydrate-rotate')}
                     disabled={wheelBusy}
                     className="px-2.5 py-1 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/35 text-cyan-300 text-[10px] font-semibold transition disabled:opacity-50"
+                    title="Rehydrate cooled/quarantined spokes, clear cooldown caches, and rotate to the next ready spoke"
                   >
-                    Step Wheel
+                    Rotate &amp; Rehydrate
                   </button>
                   <button
                     onClick={() => handleWheelAction('probe-all')}

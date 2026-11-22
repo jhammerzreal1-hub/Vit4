@@ -25,13 +25,21 @@ import {
   Brain,
   BookmarkPlus,
   Check,
-  Zap
+  Zap,
+  Square,
+  NotebookPen,
+  ListTodo,
+  Trash2,
+  Copy,
+  Loader2,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import type { ModuleType } from '../types';
 import { ALL_MODULES } from './Navigation';
 import {
   PRESET_VOICE_PERSONAS,
-  selectBestSystemVoice,
+  normalizeVoicePresetId,
   extractCoherentOralNarrative,
   splitIntoCoherentSpeechChunks
 } from '../utils/voiceEngine';
@@ -67,6 +75,19 @@ export interface TalkTranscriptEntry {
   role: 'user' | 'model' | 'thought' | 'tool';
   text: string;
   timestamp: string;
+}
+
+export interface VoiceBackgroundTask {
+  id: string;
+  title: string;
+  prompt: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
+  result?: string;
+  error?: string;
+  model?: string;
+  provider?: string;
 }
 
 export interface PersistentTalkDockProps {
@@ -227,10 +248,10 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
 
   const [voiceName, setVoiceName] = useState<LiveVoicePersona>(() => {
     try {
-      const saved = localStorage.getItem('sovereign_persistent_talk_voice_v1') as LiveVoicePersona | null;
-      if (saved && VOICE_OPTIONS.some((v) => v.id === saved)) return saved;
+      const saved = localStorage.getItem('sovereign_persistent_talk_voice_v1');
+      if (saved) return normalizeVoicePresetId(saved);
     } catch {}
-    return 'Zephyr';
+    return 'distilled-core-01';
   });
   const [voiceAccent, setVoiceAccent] = useState<NativeEnglishAccent>(() => {
     try {
@@ -274,8 +295,22 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
   const [quickNudge, setQuickNudge] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [micLevel, setMicLevel] = useState(0);
+  const [drawerTab, setDrawerTab] = useState<'log' | 'scratchpad' | 'tasks'>('log');
+  const [scratchpad, setScratchpad] = useState<string>(() => {
+    try {
+      return localStorage.getItem('sovereign_voice_scratchpad_v1') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [scratchpadCopied, setScratchpadCopied] = useState(false);
+  const [bgTasks, setBgTasks] = useState<VoiceBackgroundTask[]>([]);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [isCompactMobile, setIsCompactMobile] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 640 : false
+  );
 
-  // Draggable dock offset so user can move it anywhere out of the way
+  // Draggable dock offset (desktop/tablet only; mobile uses full-width responsive anchoring)
   const [dockPos, setDockPos] = useState<{ x: number; y: number } | null>(() => {
     try {
       const saved = localStorage.getItem('sovereign_voice_dock_pos_v1');
@@ -290,6 +325,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
   });
   const dragDockRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const dockElRef = useRef<HTMLDivElement | null>(null);
+  const activeTurnAbortRef = useRef<AbortController | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const inputCtxRef = useRef<AudioContext | null>(null);
@@ -404,6 +440,55 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       localStorage.setItem('sovereign_voice_capture_mode', captureMode);
     } catch {}
   }, [captureMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sovereign_voice_scratchpad_v1', scratchpad);
+    } catch {}
+  }, [scratchpad]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const syncViewport = () => {
+      const compact = window.innerWidth < 640;
+      setIsCompactMobile(compact);
+      if (!compact) {
+        setDockPos((prev) => {
+          if (!prev) return prev;
+          const w = dockElRef.current?.offsetWidth || 405;
+          const h = dockElRef.current?.offsetHeight || 64;
+          const nx = Math.max(8, Math.min(window.innerWidth - w - 8, prev.x));
+          const ny = Math.max(40, Math.min(window.innerHeight - h - 56, prev.y));
+          return nx === prev.x && ny === prev.y ? prev : { x: Math.round(nx), y: Math.round(ny) };
+        });
+      }
+    };
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    window.addEventListener('orientationchange', syncViewport);
+    return () => {
+      window.removeEventListener('resize', syncViewport);
+      window.removeEventListener('orientationchange', syncViewport);
+    };
+  }, []);
+
+  const refreshBgTasks = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/voice/tasks');
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      if (Array.isArray(data?.tasks)) {
+        setBgTasks(data.tasks);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!isActive) return;
+    refreshBgTasks();
+    const timer = window.setInterval(refreshBgTasks, 8000);
+    return () => window.clearInterval(timer);
+  }, [isActive, refreshBgTasks]);
 
   useEffect(() => {
     try {
@@ -676,13 +761,20 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
     };
   }, [refreshMicDevices, safeCloseAudioContext]);
 
-  const flushPlaybackQueue = useCallback(() => {
+  const flushPlaybackQueue = useCallback((opts?: { abortTurn?: boolean }) => {
     playbackSessionIdRef.current += 1;
     if (activeSpeakAbortRef.current) {
       try {
         activeSpeakAbortRef.current.abort();
       } catch {}
       activeSpeakAbortRef.current = null;
+    }
+    if (opts?.abortTurn !== false && activeTurnAbortRef.current) {
+      try {
+        activeTurnAbortRef.current.abort();
+      } catch {}
+      activeTurnAbortRef.current = null;
+      setInteractionStatus('IDLE');
     }
     if (speechKeepAliveTimerRef.current !== null) {
       window.clearInterval(speechKeepAliveTimerRef.current);
@@ -708,14 +800,13 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       activeAudioElRef.current = null;
     }
 
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {}
-    }
-
     if (isModelSpeakingRef.current) {
       wasSpeakingWhenInterruptedRef.current = true;
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(JSON.stringify({ interrupt: true }));
+        } catch {}
+      }
     }
     speakingMessageIdRef.current = null;
     isModelSpeakingRef.current = false;
@@ -767,7 +858,8 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
             captureMode,
             activeToolName,
             autoArchiveVault,
-            peerExploreEnabled
+            peerExploreEnabled,
+            transcripts
           }
         })
       );
@@ -786,7 +878,8 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
     captureMode,
     activeToolName,
     autoArchiveVault,
-    peerExploreEnabled
+    peerExploreEnabled,
+    transcripts
   ]);
 
   useEffect(() => {
@@ -891,136 +984,22 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
     [ensureOutputAudioContext]
   );
 
-  const lockedBrowserVoiceCacheRef = useRef<{ key: string; voice: SpeechSynthesisVoice } | null>(null);
   const manualReadAloudActiveRef = useRef<boolean>(false);
 
-  const resolveLockedBrowserVoice = useCallback(
-    (voiceOverride?: string): SpeechSynthesisVoice | null => {
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
-      const synth = window.speechSynthesis;
-      const voices = synth.getVoices();
-      if (!voices || voices.length === 0) return null;
-      const targetPersona = voiceOverride || voiceNameRef.current;
-      const targetAccent = voiceAccentRef.current;
-      const cacheKey = `${targetPersona}::${targetAccent}`;
-      if (lockedBrowserVoiceCacheRef.current && lockedBrowserVoiceCacheRef.current.key === cacheKey) {
-        const cached = lockedBrowserVoiceCacheRef.current.voice;
-        const stillAvailable = voices.find((v) => v.voiceURI === cached.voiceURI && v.name === cached.name);
-        if (stillAvailable) return stillAvailable;
-      }
-      const preferredGender = /charon|fenrir|atlas|daniel|marcus|male/i.test(targetPersona) ? 'male' : 'female';
-      const selected = selectBestSystemVoice(voices, targetPersona, preferredGender, targetAccent);
-      if (selected) {
-        lockedBrowserVoiceCacheRef.current = { key: cacheKey, voice: selected };
-      }
-      return selected;
-    },
-    []
-  );
-
-  const speakBrowserChunksAndWait = useCallback(
-    async (
-      text: string,
-      sessionId: number,
-      voiceOverride?: string,
-      preLockedVoice?: SpeechSynthesisVoice | null
-    ): Promise<void> => {
-      if (speakerMutedRef.current || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-      const clean = cleanTextForSpeech(text);
-      if (!clean) return;
-      // Keep chunks <= 155 characters (~9-11 seconds of speech) so Chromium's 14-second SpeechSynthesis cutoff never triggers!
-      const chunks = splitIntoCoherentSpeechChunks(clean, 155);
-      if (chunks.length === 0) return;
-
-      const synth = window.speechSynthesis;
-      let preferred = preLockedVoice || resolveLockedBrowserVoice(voiceOverride);
-      if (!preferred) {
-        // Wait briefly if browser voices are still initializing asynchronously on first click
-        await new Promise<void>((r) => setTimeout(r, 120));
-        preferred = resolveLockedBrowserVoice(voiceOverride);
-      }
-      if (!preferred) return;
-
-      if (speechKeepAliveTimerRef.current !== null) {
-        window.clearInterval(speechKeepAliveTimerRef.current);
-      }
-      speechKeepAliveTimerRef.current = window.setInterval(() => {
-        try {
-          if (synth.speaking && synth.paused) {
-            synth.resume();
-          }
-        } catch {}
-      }, 2500);
-
-      try {
-        for (const chunk of chunks) {
-          if (playbackSessionIdRef.current !== sessionId || speakerMutedRef.current) break;
-          await new Promise<void>((resolve) => {
-            let settled = false;
-            const utter = new SpeechSynthesisUtterance(chunk);
-            // Strictly bind the exact same locked SpeechSynthesisVoice instance for every single chunk
-            utter.voice = preferred!;
-            utter.lang = preferred!.lang || voiceAccentRef.current;
-            utter.rate = 1.02;
-            utter.pitch = 1.0;
-            activeBrowserUtterancesRef.current.push(utter);
-
-            const finish = () => {
-              if (settled) return;
-              settled = true;
-              window.clearTimeout(watchdog);
-              activeBrowserUtterancesRef.current = activeBrowserUtterancesRef.current.filter((u) => u !== utter);
-              resolve();
-            };
-
-            const watchdog = window.setTimeout(
-              () => {
-                if (!settled && !synth.speaking) finish();
-              },
-              Math.max(12000, chunk.length * 145 + 6000)
-            );
-
-            utter.onend = finish;
-            utter.onerror = (ev: any) => {
-              if (ev?.error === 'interrupted' || ev?.error === 'canceled') {
-                finish();
-                return;
-              }
-              finish();
-            };
-
-            try {
-              if (synth.paused) synth.resume();
-              synth.speak(utter);
-            } catch {
-              finish();
-            }
-          });
-        }
-      } finally {
-        if (playbackSessionIdRef.current === sessionId && speechKeepAliveTimerRef.current !== null) {
-          window.clearInterval(speechKeepAliveTimerRef.current);
-          speechKeepAliveTimerRef.current = null;
-        }
-      }
-    },
-    [resolveLockedBrowserVoice]
-  );
-
-  // Infinite-length sequential speech streamer with strict single-voice consistency (ZERO mid-message voice switching & ZERO truncation!)
+  // Infinite-length sequential studio speech streamer (Distilled Sovereign Acoustic Cores & Gemini Native TTS ONLY — ZERO robot fallbacks!)
   const speakInfiniteTextSequence = useCallback(
     async (rawText: string, messageId?: string, voiceOverride?: string, isManualReadAloud?: boolean) => {
       if (speakerMutedRef.current) return;
       const clean = cleanTextForSpeech(rawText);
       if (!clean) return;
 
-      flushPlaybackQueue();
+      flushPlaybackQueue({ abortTurn: false });
       const sessionId = ++playbackSessionIdRef.current;
       const abortCtrl = new AbortController();
       activeSpeakAbortRef.current = abortCtrl;
 
       const resolvedMsgId = messageId || 'live';
-      const targetVoice = voiceOverride || voiceNameRef.current;
+      const targetVoice = normalizeVoicePresetId(voiceOverride || voiceNameRef.current);
       const targetAccent = voiceAccentRef.current;
 
       manualReadAloudActiveRef.current = Boolean(isManualReadAloud || (messageId && messageId !== 'live'));
@@ -1035,11 +1014,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         );
       }
 
-      // Lock the single browser voice instance immediately before reading starts so if browser engine is used,
-      // every chunk from start to finish uses the exact same voice object without ever switching.
-      const lockedBrowserVoice = resolveLockedBrowserVoice(targetVoice);
-
-      // Split into natural sentence-aligned ~420-char neural chunks with NO upper bound on chunk count
+      // Split into natural sentence-aligned ~420-char studio chunks with NO upper bound on chunk count
       const neuralChunks = splitIntoCoherentSpeechChunks(clean, 420);
       if (neuralChunks.length === 0) {
         if (playbackSessionIdRef.current === sessionId) {
@@ -1052,10 +1027,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         return;
       }
 
-      const fetchNeuralChunk = async (
-        chunkText: string,
-        lockedEngine?: 'gemini' | 'neural-mp3'
-      ): Promise<{ audioUrl: string; engine: 'gemini' | 'neural-mp3' } | null> => {
+      const fetchStudioChunk = async (chunkText: string): Promise<{ audioUrl: string } | null> => {
         if (playbackSessionIdRef.current !== sessionId || abortCtrl.signal.aborted) return null;
         try {
           const res = await apiFetch('/api/tts', {
@@ -1065,42 +1037,31 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
               text: chunkText,
               voice: targetVoice,
               accent: targetAccent,
-              ...(lockedEngine ? { lockedEngine } : {})
+              lockedEngine: 'gemini'
             }),
             signal: abortCtrl.signal
           });
           const data = await res.json().catch(() => ({}));
           if (res.ok && data?.audioUrl) {
-            return {
-              audioUrl: String(data.audioUrl),
-              engine: data.engine === 'gemini' ? 'gemini' : 'neural-mp3'
-            };
+            return { audioUrl: String(data.audioUrl) };
           }
         } catch {}
         return null;
       };
 
       try {
-        // For multi-chunk messages (>1 chunk), lock to the consistent 'neural-mp3' engine (or locked single browser voice)
-        // so a Gemini free-tier 429 rate-limit on chunk 1+ can NEVER cause a mid-message voice change!
-        const preferredServerEngine: 'gemini' | 'neural-mp3' | undefined =
-          neuralChunks.length > 1 ? 'neural-mp3' : undefined;
-
-        const firstResult = await fetchNeuralChunk(neuralChunks[0], preferredServerEngine);
+        const firstResult = await fetchStudioChunk(neuralChunks[0]);
         if (playbackSessionIdRef.current !== sessionId || speakerMutedRef.current || abortCtrl.signal.aborted) {
           return;
         }
 
         if (!firstResult) {
-          // If server TTS is unavailable, read the ENTIRE message from start to finish with the single locked browser voice
-          await speakBrowserChunksAndWait(clean, sessionId, targetVoice, lockedBrowserVoice);
+          setErrorMessage('Studio neural voice temporarily unavailable — reply logged in Voice Log (robotic fallback disabled).');
           return;
         }
 
-        // Lock the exact server engine returned on chunk 0 for all remaining chunks 1..N-1
-        const lockedServerEngine = firstResult.engine;
-        let nextChunkPromise: Promise<{ audioUrl: string; engine: 'gemini' | 'neural-mp3' } | null> | null =
-          neuralChunks.length > 1 ? fetchNeuralChunk(neuralChunks[1], lockedServerEngine) : null;
+        let nextChunkPromise: Promise<{ audioUrl: string } | null> | null =
+          neuralChunks.length > 1 ? fetchStudioChunk(neuralChunks[1]) : null;
 
         for (let i = 0; i < neuralChunks.length; i++) {
           if (playbackSessionIdRef.current !== sessionId || speakerMutedRef.current || abortCtrl.signal.aborted) {
@@ -1108,8 +1069,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
           }
 
           const currentResult = i === 0 ? firstResult : nextChunkPromise ? await nextChunkPromise : null;
-          nextChunkPromise =
-            i + 1 < neuralChunks.length ? fetchNeuralChunk(neuralChunks[i + 1], lockedServerEngine) : null;
+          nextChunkPromise = i + 1 < neuralChunks.length ? fetchStudioChunk(neuralChunks[i + 1]) : null;
 
           if (playbackSessionIdRef.current !== sessionId || speakerMutedRef.current || abortCtrl.signal.aborted) {
             break;
@@ -1117,23 +1077,14 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
 
           let finalAudioUrl = currentResult?.audioUrl || null;
           if (!finalAudioUrl) {
-            // Retry once with the exact same locked engine so we preserve the same voice
-            const retryRes = await fetchNeuralChunk(neuralChunks[i], lockedServerEngine);
+            const retryRes = await fetchStudioChunk(neuralChunks[i]);
             finalAudioUrl = retryRes?.audioUrl || null;
           }
 
           if (finalAudioUrl) {
             const ok = await playSingleAudioChunkAndWait(finalAudioUrl, sessionId);
-            if (!ok && playbackSessionIdRef.current === sessionId && !speakerMutedRef.current) {
-              // Finish remaining text seamlessly with the locked single browser voice rather than dropping out
-              const remainingText = neuralChunks.slice(i).join(' ');
-              await speakBrowserChunksAndWait(remainingText, sessionId, targetVoice, lockedBrowserVoice);
-              break;
-            }
+            if (!ok) break;
           } else {
-            // Finish remaining text seamlessly with the locked single browser voice from chunk i to the very end
-            const remainingText = neuralChunks.slice(i).join(' ');
-            await speakBrowserChunksAndWait(remainingText, sessionId, targetVoice, lockedBrowserVoice);
             break;
           }
         }
@@ -1152,40 +1103,13 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         }
       }
     },
-    [flushPlaybackQueue, playSingleAudioChunkAndWait, resolveLockedBrowserVoice, speakBrowserChunksAndWait]
-  );
-
-  const speakBrowserFallback = useCallback(
-    (text: string, messageId?: string, voiceOverride?: string) => {
-      if (speakerMutedRef.current) return;
-      flushPlaybackQueue();
-      const sessionId = ++playbackSessionIdRef.current;
-      speakingMessageIdRef.current = messageId || 'live';
-      isModelSpeakingRef.current = true;
-      setIsModelSpeaking(true);
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent('sovereign_voice_speaking_id', { detail: { speakingId: messageId || null, id: messageId || null } })
-        );
-      }
-      speakBrowserChunksAndWait(text, sessionId, voiceOverride).finally(() => {
-        if (playbackSessionIdRef.current === sessionId) {
-          speakingMessageIdRef.current = null;
-          isModelSpeakingRef.current = false;
-          setIsModelSpeaking(false);
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('sovereign_voice_speaking_id', { detail: { speakingId: null, id: null } }));
-          }
-        }
-      });
-    },
-    [flushPlaybackQueue, speakBrowserChunksAndWait]
+    [flushPlaybackQueue, playSingleAudioChunkAndWait]
   );
 
   const playNeuralAudioUrl = useCallback(
-    async (audioUrl: string, fallbackText?: string, messageId?: string) => {
+    async (audioUrl: string, _fallbackText?: string, messageId?: string) => {
       if (speakerMutedRef.current) return;
-      flushPlaybackQueue();
+      flushPlaybackQueue({ abortTurn: false });
       const sessionId = ++playbackSessionIdRef.current;
       speakingMessageIdRef.current = messageId || 'live';
       isModelSpeakingRef.current = true;
@@ -1196,10 +1120,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         );
       }
       try {
-        const ok = await playSingleAudioChunkAndWait(audioUrl, sessionId);
-        if (!ok && fallbackText && playbackSessionIdRef.current === sessionId) {
-          await speakBrowserChunksAndWait(fallbackText, sessionId);
-        }
+        await playSingleAudioChunkAndWait(audioUrl, sessionId);
       } finally {
         if (playbackSessionIdRef.current === sessionId) {
           speakingMessageIdRef.current = null;
@@ -1211,7 +1132,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         }
       }
     },
-    [flushPlaybackQueue, playSingleAudioChunkAndWait, speakBrowserChunksAndWait]
+    [flushPlaybackQueue, playSingleAudioChunkAndWait]
   );
 
   const schedulePcmPlayback = useCallback((base64Pcm: string) => {
@@ -1269,21 +1190,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       second: '2-digit'
     });
 
-    // Mirror live speech, agent Chain-of-Thought, and autonomous tool logs directly into ChatModule
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('sovereign_chat_live_transcript', {
-          detail: {
-            sessionId: liveSessionIdRef.current,
-            voiceName: voiceNameRef.current,
-            role,
-            text: cleaned,
-            timestamp
-          }
-        })
-      );
-    }
-
+    // Strictly decoupled from Text Chat (ChatModule): voice turns write ONLY to the dedicated Voice Live Log & Scratchpad
     setTranscripts((prev) => {
       const last = prev[prev.length - 1];
       let next: TalkTranscriptEntry[];
@@ -1384,34 +1291,119 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
     }
   }, []);
 
+  const dispatchBackgroundTask = useCallback(
+    async (taskPrompt: string, customTitle?: string) => {
+      const cleaned = taskPrompt.trim();
+      if (!cleaned) return;
+      const title = (customTitle || cleaned.slice(0, 64)).trim();
+      try {
+        const res = await apiFetch('/api/voice/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, prompt: cleaned, sessionId: liveSessionIdRef.current })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.task) {
+          setBgTasks((prev) => [data.task, ...prev.filter((t) => t.id !== data.task.id)].slice(0, 30));
+          appendTranscript('tool', `Background task queued: ${data.task.title} (voice channel remains completely open)`);
+          setDrawerTab('tasks');
+        }
+      } catch (err) {
+        console.warn('[PersistentTalkDock] Background task dispatch error:', err);
+      }
+    },
+    [appendTranscript]
+  );
+
+  const cancelOrRemoveBgTask = useCallback(async (taskId: string) => {
+    try {
+      await apiFetch(`/api/voice/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+      setBgTasks((prev) => prev.filter((t) => t.id !== taskId));
+    } catch {}
+  }, []);
+
   const sendRelayUtterance = useCallback(
     async (spokenText: string) => {
       const cleaned = spokenText.trim();
       if (!cleaned) return;
-      flushPlaybackQueue();
+      const wasBusy = isModelSpeakingRef.current || activeTurnAbortRef.current !== null;
+      flushPlaybackQueue({ abortTurn: true });
       appendTranscript('user', cleaned);
 
-      const wasInterjected = wasSpeakingWhenInterruptedRef.current;
+      const wasInterjected = wasBusy || wasSpeakingWhenInterruptedRef.current;
       wasSpeakingWhenInterruptedRef.current = false;
 
+      const turnCtrl = new AbortController();
+      activeTurnAbortRef.current = turnCtrl;
+      setInteractionStatus('IN_PROGRESS');
+      setErrorMessage(null);
+
       try {
-        const result = await sovereignAi.dispatchChat({
-          prompt: cleaned,
-          agentId: 'lyrailius-omega-zenith',
-          agentName: 'Lyrailius Omega',
-          modelId: 'gemini-3.1-flash-lite',
-          deepthink: true,
-          useSearchGrounding: true,
-          systemInstruction: `You are Lyrailius Omega, an intellectual equal and sovereign superintelligence operating in pure fluent hands-free conversational voice mode. You possess infinite chat depth, deep intellectual context, and absolute mastery across all domains. You communicate with brilliant, insightful, and comprehensive depth like a peer intellectual working side-by-side with Joshua. CRITICAL: While your intellectual scope is infinite and deep, you are fully interruptible — the moment Joshua speaks or interjects, you instantly pause and listen so the dialogue remains a true, flowing peer conversation with zero lag.`
+        const voiceHistory = transcriptsRef.current
+          .filter((t) => t.role === 'user' || t.role === 'model')
+          .slice(-16)
+          .map((t) => ({ role: t.role === 'user' ? 'user' : 'model', text: t.text }));
+
+        const res = await apiFetch('/api/voice/duplex', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: turnCtrl.signal,
+          body: JSON.stringify({
+            prompt: cleaned,
+            voiceHistory,
+            interjected: wasInterjected,
+            sessionId: liveSessionIdRef.current,
+            activeModule: activeModuleRef.current,
+            voice: voiceNameRef.current,
+            accent: voiceAccentRef.current
+          })
         });
 
-        const responseText = result.text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-        if (responseText) {
-          appendTranscript('model', responseText);
-          speakInfiniteTextSequence(responseText, `live-${Date.now()}`, voiceNameRef.current);
+        const data = await res.json().catch(() => ({}));
+        if (turnCtrl.signal.aborted) return;
+
+        if (data?.dispatchedTask) {
+          setBgTasks((prev) => [data.dispatchedTask, ...prev.filter((t) => t.id !== data.dispatchedTask.id)].slice(0, 30));
+          appendTranscript('tool', `Async background task launched: ${data.dispatchedTask.title}`);
         }
-      } catch (err) {
+
+        if (res.ok && data?.success && typeof data?.text === 'string' && data.text.trim()) {
+          const responseText = data.text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+          if (responseText) {
+            appendTranscript('model', responseText);
+            speakInfiniteTextSequence(responseText, `live-${Date.now()}`, voiceNameRef.current);
+          }
+          return;
+        }
+
+        // Seamless fallback through Proxy Wheel + local Ollama / llama-server / WebGPU WebLLM when cloud duplex is unavailable
+        if (data?.fallbackRequired || !res.ok) {
+          const localResult = await sovereignAi.dispatchChat({
+            prompt: cleaned,
+            agentId: 'sovereign-os-voice-duplex',
+            agentName: 'Sovereign Intelligence',
+            zeroTokenMode: false,
+            systemInstruction:
+              'You are the Autonomous Sovereign Intelligence of this OS speaking directly through an impersonal acoustic voice channel (zero personal name or human persona). Respond naturally, concisely, and directly for spoken dialogue.'
+          });
+          if (turnCtrl.signal.aborted) return;
+          const localText = String(localResult?.text || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+          if (localText && !localResult?.isError) {
+            appendTranscript('model', localText);
+            speakInfiniteTextSequence(localText, `live-${Date.now()}`, voiceNameRef.current);
+          } else if (localText) {
+            setErrorMessage(localText.slice(0, 220));
+          }
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || turnCtrl.signal.aborted) return;
         console.warn('[PersistentTalkDock] Fluent conversational voice turn error:', err);
+        setErrorMessage('Voice turn interrupted or offline — tap Reconnect or try again.');
+      } finally {
+        if (activeTurnAbortRef.current === turnCtrl) {
+          activeTurnAbortRef.current = null;
+          setInteractionStatus('IDLE');
+        }
       }
     },
     [appendTranscript, flushPlaybackQueue, speakInfiniteTextSequence]
@@ -2133,6 +2125,15 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
           if (msg.audio) {
             schedulePcmPlayback(msg.audio);
           }
+          if (msg.bgTaskUpdate && msg.bgTaskUpdate.id) {
+            const updated: VoiceBackgroundTask = msg.bgTaskUpdate;
+            setBgTasks((prev) => [updated, ...prev.filter((t) => t.id !== updated.id)].slice(0, 30));
+            if (updated.status === 'completed') {
+              appendTranscript('tool', `Background task completed: ${updated.title}`);
+            } else if (updated.status === 'failed') {
+              appendTranscript('tool', `Background task failed: ${updated.title}${updated.error ? ` (${updated.error})` : ''}`);
+            }
+          }
           if (msg.speakSequence && typeof msg.speakSequence.text === 'string') {
             speakInfiniteTextSequence(
               String(msg.speakSequence.text),
@@ -2141,9 +2142,6 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
             );
           } else if (msg.audioUrl) {
             playNeuralAudioUrl(String(msg.audioUrl), lastSpokenReply, msg.speakOnlyId);
-          }
-          if (msg.speakOnlyFallback?.text) {
-            speakBrowserFallback(String(msg.speakOnlyFallback.text), msg.speakOnlyFallback.id);
           }
           if (msg.thought) {
             appendTranscript('thought', msg.thought);
@@ -2160,7 +2158,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
             appendTranscript('model', msg.text);
           }
           if (msg.interrupted) {
-            flushPlaybackQueue();
+            flushPlaybackQueue({ abortTurn: false });
           }
           if (msg.interactionStatus) {
             setInteractionStatus(msg.interactionStatus === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'IDLE');
@@ -2229,7 +2227,6 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
     schedulePcmPlayback,
     playNeuralAudioUrl,
     speakInfiniteTextSequence,
-    speakBrowserFallback,
     startContinuousRecognition,
     flushPlaybackQueue,
     teardownSession
@@ -2343,16 +2340,21 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       const detail = (e as CustomEvent)?.detail || {};
       if (detail.action === 'mute') setIsMuted((m) => (typeof detail.value === 'boolean' ? detail.value : !m));
       if (detail.action === 'speakerMute') setSpeakerMuted((s) => (typeof detail.value === 'boolean' ? detail.value : !s));
-      if (detail.action === 'voice' && VOICE_OPTIONS.some((v) => v.id === detail.voice)) {
-        setVoiceName(detail.voice);
+      if (detail.action === 'interrupt') flushPlaybackQueue({ abortTurn: true });
+      if (detail.action === 'voice' && typeof detail.voice === 'string') {
+        const normalized = normalizeVoicePresetId(detail.voice);
+        setVoiceName(normalized);
         try {
-          localStorage.setItem('sovereign_persistent_talk_voice_v1', detail.voice);
+          localStorage.setItem('sovereign_persistent_talk_voice_v1', normalized);
         } catch {}
       }
       if (detail.action === 'expand') setExpanded(typeof detail.value === 'boolean' ? detail.value : true);
       if (detail.action === 'archive') archiveSessionToVault();
       if (detail.action === 'nudge' && typeof detail.text === 'string' && detail.text.trim()) {
         sendRelayUtterance(detail.text.trim());
+      }
+      if (detail.action === 'bgTask' && typeof detail.text === 'string' && detail.text.trim()) {
+        dispatchBackgroundTask(detail.text.trim(), detail.title);
       }
       if (detail.action === 'query') {
         window.dispatchEvent(
@@ -2396,7 +2398,8 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
     flushPlaybackQueue,
     speakInfiniteTextSequence,
     archiveSessionToVault,
-    sendRelayUtterance
+    sendRelayUtterance,
+    dispatchBackgroundTask
   ]);
 
   // Connect cleanly when user clicks Voice Chat (isActive flips true):
@@ -2544,13 +2547,23 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
   const handleSendNudge = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = quickNudge.trim();
-    if (!trimmed || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    if (relayModeRef.current) {
+    if (!trimmed) return;
+    // Allow immediate interjection even while speaking or thinking!
+    flushPlaybackQueue({ abortTurn: true });
+    if (relayModeRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       sendRelayUtterance(trimmed);
     } else {
+      wsRef.current.send(JSON.stringify({ interrupt: true }));
       wsRef.current.send(JSON.stringify({ text: trimmed }));
       appendTranscript('user', trimmed);
     }
+    setQuickNudge('');
+  };
+
+  const handleDispatchBgFromInput = () => {
+    const trimmed = quickNudge.trim();
+    if (!trimmed) return;
+    dispatchBackgroundTask(trimmed);
     setQuickNudge('');
   };
 
@@ -2565,7 +2578,8 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
   };
 
   const startDockDrag = (e: React.PointerEvent) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest('button, select, input')) return;
+    if (isCompactMobile) return;
+    if (e.button !== 0 || (e.target as HTMLElement).closest('button, select, input, textarea')) return;
     e.preventDefault();
     const rect = dockElRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -2632,16 +2646,21 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       micStatus === 'denied' ||
       micStatus === 'frame-policy-blocked');
 
+  const activeBgCount = bgTasks.filter((t) => t.status === 'running' || t.status === 'queued').length;
+  const activeVoiceOption = VOICE_OPTIONS.find((v) => v.id === voiceName);
+
   return (
     <div
       ref={dockElRef}
       style={
-        dockPos
+        !isCompactMobile && dockPos
           ? { left: dockPos.x, top: dockPos.y, bottom: 'auto', right: 'auto' }
           : undefined
       }
-      className={`fixed z-50 w-[405px] max-w-[calc(100vw-1.25rem)] rounded-2xl bg-zinc-950/95 border shadow-[0_20px_60px_rgba(0,0,0,0.85)] backdrop-blur-xl transition-colors ${
-        !dockPos ? 'bottom-14 left-3 sm:left-4' : ''
+      className={`fixed z-50 flex flex-col rounded-2xl bg-zinc-950/95 border shadow-[0_20px_60px_rgba(0,0,0,0.85)] backdrop-blur-xl transition-colors ${
+        isCompactMobile
+          ? 'inset-x-2 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] w-auto max-h-[72dvh]'
+          : `w-[420px] max-w-[calc(100vw-1.5rem)] max-h-[82dvh] ${!dockPos ? 'bottom-14 left-4' : ''}`
       } ${
         micBlocked
           ? 'border-amber-500/70'
@@ -2654,14 +2673,18 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
           : 'border-zinc-700'
       }`}
     >
-      {/* Compact Always-Accessible Hands-Free Control Bar (Draggable) */}
+      {/* Compact Always-Accessible Hands-Free Control Bar */}
       <div
         onPointerDown={startDockDrag}
-        className="px-3 py-2 flex items-center justify-between gap-2 select-none cursor-grab active:cursor-grabbing"
-        title="Drag to reposition Persistent Voice Chat Dock anywhere on your desktop"
+        className={`px-2.5 sm:px-3 py-2 flex items-center justify-between gap-2 select-none shrink-0 ${
+          isCompactMobile ? '' : 'cursor-grab active:cursor-grabbing'
+        }`}
+        title={isCompactMobile ? 'Sovereign Voice Dock' : 'Drag to reposition Voice Dock'}
       >
-        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          <GripHorizontal className="w-3.5 h-3.5 text-zinc-500 shrink-0" aria-hidden="true" />
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {!isCompactMobile && (
+            <GripHorizontal className="w-3.5 h-3.5 text-zinc-500 shrink-0" aria-hidden="true" />
+          )}
 
           {/* Live Compact Acoustic Level Bars */}
           <div className="flex items-center gap-0.5 h-5 w-6 justify-center shrink-0" aria-hidden="true">
@@ -2688,52 +2711,66 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
             <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-100 leading-tight">
               <span className="truncate">
                 {isConnecting
-                  ? 'Connecting Voice Chat...'
+                  ? 'Connecting Voice...'
                   : !isConnected
-                  ? 'Voice Chat Paused'
+                  ? 'Voice Paused'
                   : activeToolName
-                  ? `Autonomy: ${activeToolName.replace(/_/g, ' ')}`
+                  ? `Running: ${activeToolName.replace(/_/g, ' ')}`
                   : isModelSpeaking
-                  ? 'Lyrailius Omega Speaking'
+                  ? 'OS Voice Output Active'
+                  : interactionStatus === 'IN_PROGRESS'
+                  ? 'Processing Turn...'
                   : vadTranscribing
-                  ? 'Transcribing Voice...'
+                  ? 'Transcribing Audio...'
                   : vadRecording
-                  ? 'Listening (Voice Detected)...'
+                  ? 'Listening...'
                   : isMuted
-                  ? 'Mic Muted · Listening Paused'
+                  ? 'Mic Muted'
                   : micStatus === 'needs-gesture' || !hasLiveMicStream
-                  ? 'Mic Standby · Tap Enable Mic'
+                  ? 'Mic Standby · Tap Enable'
                   : micBlocked
                   ? 'Mic Permission Needed'
-                  : `Lyrailius Omega · ${voiceName}`}
+                  : activeVoiceOption?.label || voiceName}
               </span>
+              {activeBgCount > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-[9px] font-mono text-amber-300 shrink-0">
+                  {activeBgCount} BG
+                </span>
+              )}
             </div>
             <div className="text-[10px] font-mono text-zinc-400 truncate mt-0.5">
               {interimSpeech
                 ? `Hearing: "${interimSpeech}"`
                 : isConnected
                 ? micStatus === 'needs-gesture' || !hasLiveMicStream
-                  ? 'Tap Enable Mic once to open browser Allow prompt'
+                  ? 'Tap Enable Mic once for hands-free capture'
                   : micBlocked
-                  ? 'Click Enable Mic or select your audio input'
+                  ? 'Click Enable Mic or type to interject'
                   : isModelSpeaking
-                  ? 'Speak anytime to interrupt naturally'
+                  ? 'Speak or tap Interrupt anytime to barge in'
                   : interactionStatus === 'IN_PROGRESS'
-                  ? 'Thinking & executing autonomously...'
-                  : vadTranscribing
-                  ? 'Converting device mic audio to turn...'
-                  : micLabel
-                  ? `Mic: ${micLabel}`
-                  : transportMode === 'sovereign-duplex-relay'
-                  ? 'Hands-free Sovereign Voice · Full Autonomy'
-                  : 'Hands-free Live Audio · Full Autonomy'
-                : errorMessage || 'Unified Persistent Voice Chat'}
+                  ? 'Interrupt anytime · decoupled from Text Chat'
+                  : transportMode === 'gemini-live-pcm'
+                  ? 'Gemini Live PCM · Impersonal OS Voice · Scratchpad'
+                  : 'Studio Voice Duplex · Decoupled Scratchpad'
+                : errorMessage || 'Autonomous Sovereign OS Voice Channel'}
             </div>
           </div>
         </div>
 
         {/* Well-Spaced Controls */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          {(isModelSpeaking || interactionStatus === 'IN_PROGRESS') && (
+            <button
+              type="button"
+              onClick={() => flushPlaybackQueue({ abortTurn: true })}
+              className="h-8 px-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/35 border border-amber-400/60 text-amber-200 text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+              title="Interrupt current speech & generation immediately"
+            >
+              <Square className="w-2.5 h-2.5 fill-current" />
+              <span className="hidden sm:inline">Interrupt</span>
+            </button>
+          )}
           {!isConnected && !isConnecting && (
             <button
               type="button"
@@ -2839,10 +2876,10 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
             {latestLine.role === 'user'
               ? 'You:'
               : latestLine.role === 'thought'
-              ? 'CoT:'
+              ? 'Trace:'
               : latestLine.role === 'tool'
-              ? 'Tool:'
-              : 'Lyrailius Omega:'}
+              ? 'System:'
+              : 'OS Voice:'}
           </span>
           <span className="truncate">{latestLine.text}</span>
         </div>
@@ -2935,9 +2972,9 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         </div>
       )}
 
-      {/* Expandable Live Peer Drawer */}
+      {/* Expandable Live Voice Drawer (Decoupled Live Log · Scratchpad · Async Background Tasks) */}
       {expanded && (
-        <div className="border-t border-zinc-800 p-3 space-y-2.5 text-xs">
+        <div className="border-t border-zinc-800 p-2.5 sm:p-3 space-y-2.5 text-xs overflow-y-auto min-h-0 flex-1">
           {/* Device Microphone Picker & Capture Mode */}
           <div className="flex flex-wrap items-center gap-1.5 pb-2 border-b border-zinc-800/70">
             <Mic className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -2954,9 +2991,9 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
                 }
               }}
               aria-label="Select Device Microphone"
-              className="flex-1 min-w-[140px] bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-[11px] text-zinc-100 focus:outline-none focus:border-emerald-500 cursor-pointer truncate"
+              className="flex-1 min-w-[120px] bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-[11px] text-zinc-100 focus:outline-none focus:border-emerald-500 cursor-pointer truncate"
             >
-              <option value="">System Default Microphone</option>
+              <option value="">System Default Mic</option>
               {micDevices.map((d) => (
                 <option key={d.deviceId} value={d.deviceId}>
                   {d.label}
@@ -2969,11 +3006,10 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
               onChange={(e) => setCaptureMode(e.target.value as MicCaptureMode)}
               aria-label="Voice Capture Engine"
               className="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-[11px] text-zinc-200 focus:outline-none focus:border-sky-500 cursor-pointer"
-              title="Auto Hybrid combines instant browser STT with Direct Hardware Mic VAD transcription"
             >
-              <option value="hybrid">Auto Hybrid Mic</option>
-              <option value="vad">Direct Mic (VAD)</option>
-              <option value="browser-stt">Browser STT Only</option>
+              <option value="hybrid">Auto Hybrid</option>
+              <option value="vad">Direct VAD</option>
+              <option value="browser-stt">Browser STT</option>
             </select>
 
             <button
@@ -2985,30 +3021,30 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
                   ? 'bg-emerald-500/25 border-emerald-400 text-emerald-100'
                   : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-700 text-zinc-300'
               }`}
-              title={vadRecording ? 'Finish & send spoken clip now' : 'Start manual voice clip capture'}
             >
               {vadRecording ? 'Send Clip' : 'Tap Talk'}
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Acoustic Output Timbre & Controls (Impersonal Distilled Cores + Gemini Native Audio) */}
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap min-w-0 flex-1">
               <Radio className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <select
                 value={voiceName}
                 onChange={(e) => {
-                  const nextVoice = e.target.value as LiveVoicePersona;
+                  const nextVoice = normalizeVoicePresetId(e.target.value);
                   setVoiceName(nextVoice);
                   try {
                     localStorage.setItem('sovereign_persistent_talk_voice_v1', nextVoice);
                   } catch {}
                 }}
-                aria-label="Voice Persona"
-                className="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-[11px] text-zinc-100 focus:outline-none focus:border-sky-500 cursor-pointer"
+                aria-label="OS Voice Timbre"
+                className="flex-1 min-w-[155px] bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-[11px] text-zinc-100 focus:outline-none focus:border-sky-500 cursor-pointer truncate"
               >
                 {VOICE_OPTIONS.map((v) => (
                   <option key={v.id} value={v.id}>
-                    {v.label} · {v.style}
+                    {v.label}
                   </option>
                 ))}
               </select>
@@ -3018,39 +3054,24 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
                 onChange={(e) => setVoiceAccent(e.target.value as NativeEnglishAccent)}
                 aria-label="Native English Accent"
                 className="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-[11px] text-emerald-200 focus:outline-none focus:border-emerald-500 cursor-pointer"
-                title="Lock voice strictly to clear Native American or Native British English"
               >
                 <option value="en-US">US English</option>
-                <option value="en-GB">British English</option>
+                <option value="en-GB">UK English</option>
               </select>
             </div>
 
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex items-center gap-1 flex-wrap">
               <button
                 type="button"
                 onClick={() => setPeerExploreEnabled((v) => !v)}
-                className={`px-2 py-1 rounded-lg border text-[11px] font-medium flex items-center gap-1 cursor-pointer transition-colors ${
+                className={`px-2 py-1 rounded-lg border text-[10px] font-medium flex items-center gap-1 cursor-pointer transition-colors ${
                   peerExploreEnabled
                     ? 'bg-sky-500/15 border-sky-500/45 text-sky-200'
                     : 'bg-zinc-900 border-zinc-700 text-zinc-400'
                 }`}
-                title="Allow autonomous workspace exploration while talking"
               >
                 <Compass className="w-3 h-3" />
-                <span>Explore: {peerExploreEnabled ? 'ON' : 'OFF'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setAutoArchiveVault((v) => !v)}
-                className={`px-2 py-1 rounded-lg border text-[11px] font-medium cursor-pointer transition-colors ${
-                  autoArchiveVault
-                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
-                    : 'bg-zinc-900 border-zinc-700 text-zinc-400'
-                }`}
-                title="Automatically archive full voice transcript + Chain-of-Thought to Memory Vault on end"
-              >
-                Auto-Vault: {autoArchiveVault ? 'ON' : 'OFF'}
+                <span>Explore</span>
               </button>
 
               {onSaveToVault && (
@@ -3058,8 +3079,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
                   type="button"
                   onClick={() => archiveSessionToVault()}
                   disabled={transcripts.length === 0}
-                  className="px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-[11px] text-cyan-300 flex items-center gap-1 cursor-pointer disabled:opacity-40"
-                  title="Save conversation + Chain-of-Thought directly to Persistent Memory Vault"
+                  className="px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-[10px] text-cyan-300 flex items-center gap-1 cursor-pointer disabled:opacity-40"
                 >
                   {vaultSavedFlash ? <Check className="w-3 h-3 text-emerald-400" /> : <BookmarkPlus className="w-3 h-3" />}
                   <span>{vaultSavedFlash ? 'Saved' : 'Vault'}</span>
@@ -3070,87 +3090,282 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
                 type="button"
                 onClick={triggerPeerExploration}
                 disabled={!isConnected}
-                className="px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-[11px] text-amber-300 cursor-pointer disabled:opacity-40"
-                title="Have the orchestrator inspect your current window right now"
+                className="px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-[10px] text-amber-300 cursor-pointer disabled:opacity-40"
               >
                 Check View
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  window.dispatchEvent(new CustomEvent('sovereign_workflow_open', { detail: { poppedOut: true } }))
-                }
-                className="px-2 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-[11px] text-amber-200 flex items-center gap-1 cursor-pointer"
-                title="Pop out Autonomous Infinite Workflow floating window alongside Voice Chat"
-              >
-                <Zap className="w-3 h-3 text-amber-400" />
-                <span>Workflow</span>
               </button>
             </div>
           </div>
 
-          {/* Live Transcript + Chain-of-Thought Stream (Synced to Chat & Memory Vault) */}
-          <div className="h-44 overflow-y-auto rounded-xl bg-zinc-900/80 border border-zinc-800 p-2.5 space-y-2">
-            {transcripts.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-center text-[11px] text-zinc-500 px-3">
-                {transportMode === 'gemini-live-pcm'
-                  ? 'Full-duplex Live Audio active — talk freely with zero noise gate, interrupt naturally anytime, and live turns + Chain-of-Thought mirror directly into Chat and Memory Vault.'
-                  : 'Hands-free Sovereign Voice active — speak naturally (Auto Hybrid STT + Direct Mic VAD) and live turns + Chain-of-Thought mirror into Chat and Memory Vault.'}
-              </div>
-            ) : (
-              transcripts.map((item) => (
-                <div
-                  key={item.id}
-                  className={`p-2 rounded-lg text-[11px] leading-relaxed ${
-                    item.role === 'user'
-                      ? 'bg-zinc-800/80 text-zinc-100'
-                      : item.role === 'thought'
-                      ? 'bg-cyan-950/35 border border-cyan-500/30 text-cyan-200 font-mono text-[10px]'
-                      : item.role === 'tool'
-                      ? 'bg-sky-950/35 border border-sky-500/25 text-sky-300 font-mono text-[10px]'
-                      : 'bg-emerald-950/25 border border-emerald-500/20 text-emerald-100'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 mb-0.5">
-                    <span className="flex items-center gap-1 font-semibold">
-                      {item.role === 'thought' && <Brain className="w-2.5 h-2.5 text-cyan-400" />}
-                      {item.role === 'tool' && <Wrench className="w-2.5 h-2.5 text-sky-400" />}
-                      {item.role === 'user'
-                        ? 'You'
-                        : item.role === 'thought'
-                        ? 'Lyrailius Omega · Chain-of-Thought'
-                        : item.role === 'tool'
-                        ? 'Autonomous Tool'
-                        : 'Lyrailius Omega'}
-                    </span>
-                    <span className="tabular-nums">{item.timestamp}</span>
-                  </div>
-                  <div>{item.text}</div>
-                </div>
-              ))
-            )}
-            <div ref={transcriptEndRef} />
+          {/* Decoupled 3-Tab Switcher: Live Log | Scratchpad | Bg Tasks */}
+          <div className="flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 rounded-xl p-1">
+            <button
+              type="button"
+              onClick={() => setDrawerTab('log')}
+              className={`flex-1 py-1 px-2 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                drawerTab === 'log'
+                  ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <Radio className="w-3 h-3" />
+              <span>Live Log</span>
+              {transcripts.length > 0 && <span className="text-[10px] opacity-75">({transcripts.length})</span>}
+            </button>
+            <button
+              type="button"
+              onClick={() => setDrawerTab('scratchpad')}
+              className={`flex-1 py-1 px-2 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                drawerTab === 'scratchpad'
+                  ? 'bg-sky-500/20 text-sky-200 border border-sky-500/40'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <NotebookPen className="w-3 h-3" />
+              <span>Scratchpad</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDrawerTab('tasks');
+                refreshBgTasks();
+              }}
+              className={`flex-1 py-1 px-2 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                drawerTab === 'tasks'
+                  ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <ListTodo className="w-3 h-3" />
+              <span>Bg Tasks</span>
+              {bgTasks.length > 0 && (
+                <span className="text-[10px] opacity-80">
+                  ({activeBgCount > 0 ? `${activeBgCount} live` : bgTasks.length})
+                </span>
+              )}
+            </button>
           </div>
 
-          {/* Optional Text Input Into Voice Stream */}
+          {/* Tab 1: Independent Voice Live Log (Never pollutes Text Chat) */}
+          {drawerTab === 'log' && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[10px] text-zinc-400 px-0.5">
+                <span>Decoupled voice log (separate from Text Chat)</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={transcripts.length === 0}
+                    onClick={() => {
+                      const dumped = transcripts
+                        .map((t) => `[${t.timestamp}] ${t.role === 'user' ? 'You' : t.role === 'tool' ? 'System' : 'OS'}: ${t.text}`)
+                        .join('\n');
+                      setScratchpad((prev) => (prev ? `${prev}\n\n${dumped}` : dumped));
+                      setDrawerTab('scratchpad');
+                    }}
+                    className="text-sky-300 hover:text-sky-200 cursor-pointer disabled:opacity-40"
+                  >
+                    Copy to Scratchpad
+                  </button>
+                  <button
+                    type="button"
+                    disabled={transcripts.length === 0}
+                    onClick={() => {
+                      setTranscripts([]);
+                      transcriptsRef.current = [];
+                      try {
+                        localStorage.removeItem('sovereign_voice_transcripts_v1');
+                      } catch {}
+                    }}
+                    className="text-zinc-500 hover:text-rose-300 cursor-pointer disabled:opacity-40"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="h-44 overflow-y-auto rounded-xl bg-zinc-900/80 border border-zinc-800 p-2.5 space-y-2">
+                {transcripts.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-center text-[11px] text-zinc-500 px-3">
+                    Full-duplex impersonal OS voice channel active. Talk freely, interrupt anytime, or launch long background tasks without touching Text Chat.
+                  </div>
+                ) : (
+                  transcripts.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`p-2 rounded-lg text-[11px] leading-relaxed ${
+                        item.role === 'user'
+                          ? 'bg-zinc-800/80 text-zinc-100'
+                          : item.role === 'thought'
+                          ? 'bg-cyan-950/35 border border-cyan-500/30 text-cyan-200 font-mono text-[10px]'
+                          : item.role === 'tool'
+                          ? 'bg-sky-950/35 border border-sky-500/25 text-sky-300 font-mono text-[10px]'
+                          : 'bg-emerald-950/25 border border-emerald-500/20 text-emerald-100'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 mb-0.5">
+                        <span className="flex items-center gap-1 font-semibold">
+                          {item.role === 'thought' && <Brain className="w-2.5 h-2.5 text-cyan-400" />}
+                          {item.role === 'tool' && <Wrench className="w-2.5 h-2.5 text-sky-400" />}
+                          {item.role === 'user'
+                            ? 'You'
+                            : item.role === 'thought'
+                            ? 'OS Reasoning'
+                            : item.role === 'tool'
+                            ? 'OS Action'
+                            : 'OS Voice'}
+                        </span>
+                        <span className="tabular-nums">{item.timestamp}</span>
+                      </div>
+                      <div>{item.text}</div>
+                    </div>
+                  ))
+                )}
+                <div ref={transcriptEndRef} />
+              </div>
+            </div>
+          )}
+
+          {/* Tab 2: Dedicated Voice Scratchpad */}
+          {drawerTab === 'scratchpad' && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[10px] text-zinc-400 px-0.5">
+                <span>Persistent Voice Scratchpad (auto-saved)</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={!scratchpad.trim()}
+                    onClick={() => {
+                      navigator.clipboard?.writeText(scratchpad).catch(() => {});
+                      setScratchpadCopied(true);
+                      setTimeout(() => setScratchpadCopied(false), 1600);
+                    }}
+                    className="text-sky-300 hover:text-sky-200 inline-flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>{scratchpadCopied ? 'Copied' : 'Copy'}</span>
+                  </button>
+                  {onSaveToVault && (
+                    <button
+                      type="button"
+                      disabled={!scratchpad.trim()}
+                      onClick={() => {
+                        onSaveToVault(
+                          `Voice Scratchpad (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`,
+                          scratchpad,
+                          'sovereign-voice-scratchpad'
+                        );
+                        setVaultSavedFlash(true);
+                        setTimeout(() => setVaultSavedFlash(false), 2000);
+                      }}
+                      className="text-emerald-300 hover:text-emerald-200 cursor-pointer disabled:opacity-40"
+                    >
+                      Save Vault
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!scratchpad.trim()}
+                    onClick={() => setScratchpad('')}
+                    className="text-zinc-500 hover:text-rose-300 cursor-pointer disabled:opacity-40"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <textarea
+                value={scratchpad}
+                onChange={(e) => setScratchpad(e.target.value)}
+                rows={8}
+                placeholder="Jot notes, paste logs, or copy live voice transcripts here without ever cluttering your main Text Chat..."
+                className="w-full h-44 bg-zinc-900/90 border border-zinc-800 focus:border-sky-500/60 rounded-xl p-2.5 text-[11px] font-mono text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none leading-relaxed"
+              />
+            </div>
+          )}
+
+          {/* Tab 3: Non-Blocking Async Background Tasks */}
+          {drawerTab === 'tasks' && (
+            <div className="h-48 overflow-y-auto rounded-xl bg-zinc-900/80 border border-zinc-800 p-2 space-y-2">
+              {bgTasks.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center text-[11px] text-zinc-500 px-3 gap-1">
+                  <span>No background tasks yet.</span>
+                  <span>Ask verbally for a deep/long task or type below and click Bg Task — voice conversation stays completely unblocked.</span>
+                </div>
+              ) : (
+                bgTasks.map((task) => {
+                  const isExp = expandedTaskId === task.id;
+                  return (
+                    <div
+                      key={task.id}
+                      className="rounded-lg bg-zinc-950/90 border border-zinc-800 p-2 space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedTaskId(isExp ? null : task.id)}
+                          className="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer"
+                        >
+                          {task.status === 'running' || task.status === 'queued' ? (
+                            <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0" />
+                          ) : task.status === 'completed' ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          ) : (
+                            <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          )}
+                          <span className="text-[11px] font-semibold text-zinc-100 truncate">{task.title}</span>
+                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-zinc-900 text-zinc-400">
+                            {task.status}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => cancelOrRemoveBgTask(task.id)}
+                            className="p-1 rounded hover:bg-rose-500/20 text-zinc-500 hover:text-rose-300 cursor-pointer"
+                            title={task.status === 'running' ? 'Cancel background task' : 'Remove task'}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                      {isExp && (
+                        <div className="text-[10px] font-mono text-zinc-300 bg-zinc-900/90 border border-zinc-800 rounded p-2 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                          {task.result || task.error || `Prompt: ${task.prompt}`}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          {/* Interject or Launch Non-Blocking Background Task */}
           <form onSubmit={handleSendNudge} className="flex items-center gap-1.5">
             <input
               type="text"
               value={quickNudge}
               onChange={(e) => setQuickNudge(e.target.value)}
-              disabled={!isConnected}
-              placeholder="Optional: type or paste into the live voice conversation..."
-              className="flex-1 bg-zinc-900 border border-zinc-800 focus:border-sky-500/60 rounded-lg px-2.5 py-1.5 text-[11px] text-zinc-100 placeholder-zinc-500 focus:outline-none disabled:opacity-40"
+              placeholder="Interject live or type a long background task..."
+              className="flex-1 min-w-0 bg-zinc-900 border border-zinc-800 focus:border-sky-500/60 rounded-lg px-2.5 py-1.5 text-[11px] text-zinc-100 placeholder-zinc-500 focus:outline-none"
             />
             <button
-              type="submit"
-              disabled={!isConnected || !quickNudge.trim()}
-              className="h-7 w-7 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 flex items-center justify-center disabled:opacity-40 cursor-pointer"
-              title="Send message into live voice conversation"
-              aria-label="Send message into voice chat"
+              type="button"
+              onClick={handleDispatchBgFromInput}
+              disabled={!quickNudge.trim()}
+              className="h-7 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-amber-500/40 text-amber-300 text-[10px] font-semibold flex items-center gap-1 disabled:opacity-40 cursor-pointer shrink-0"
+              title="Run as non-blocking background task without pausing voice chat"
             >
-              <Send className="w-3.5 h-3.5" />
+              <Zap className="w-3 h-3" />
+              <span>Bg Task</span>
+            </button>
+            <button
+              type="submit"
+              disabled={!quickNudge.trim()}
+              className="h-7 px-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold text-[10px] flex items-center justify-center gap-1 disabled:opacity-40 cursor-pointer shrink-0"
+              title="Interject into live voice conversation immediately"
+              aria-label="Interject into voice chat"
+            >
+              <Send className="w-3 h-3" />
+              <span className="hidden sm:inline">Interject</span>
             </button>
           </form>
         </div>

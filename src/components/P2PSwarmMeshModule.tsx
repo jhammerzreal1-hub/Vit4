@@ -5,139 +5,251 @@
  * Licensed under the MIT License & JHammerZ Custom Sovereign Licenses
  */
 
-import React, { useState, useEffect } from 'react';
-import { Network, Server, Globe, Radio, Shield, Zap, CheckCircle2, RefreshCw } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { RefreshCw, Radio, Plus, Server, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../utils/authClient';
 
-interface SwarmNode {
+interface MeshNodeItem {
   id: string;
   name: string;
   role: string;
-  status: 'SYNCHRONIZED' | 'ACTIVE_TRAINING' | 'RELAY_NODE';
+  status: 'SYNCHRONIZED' | 'ACTIVE_AGENT' | 'RELAY_NODE';
   latencyMs: number;
-  teraflops: number;
-  ip: string;
+  endpoint: string;
+  radioSummary: string;
+  isLocal: boolean;
+}
+
+interface MeshStatusPayload {
+  localMeshId: string;
+  consensusHash: string;
+  merkleRoot: string;
+  totalNodes: number;
+  federatedPeerCount: number;
+  serversCount: number;
+  channelsCount: number;
+  recentMessagesCount: number;
+  activeDaemonsCount: number;
+  nodes: MeshNodeItem[];
+  servers: Array<{
+    id: string;
+    name: string;
+    region: string;
+    frequencyMhz: number;
+    spreadingFactor: number;
+  }>;
 }
 
 export const P2PSwarmMeshModule: React.FC = () => {
-  const [nodes, setNodes] = useState<SwarmNode[]>([
-    { id: 'node-alpha', name: 'Alpha Prime Node', role: 'Primary Orchestrator & Weights Registry', status: 'SYNCHRONIZED', latencyMs: 12, teraflops: 1420, ip: '127.0.0.1:3000' },
-    { id: 'node-beta', name: 'Beta Autonomous Worker', role: 'Distributed AST Mutator & Linter', status: 'ACTIVE_TRAINING', latencyMs: 24, teraflops: 980, ip: '10.8.0.2:4001' },
-    { id: 'node-gamma', name: 'Gamma Deep Resonance Node', role: 'Multimodal Audio & Vision Synthesis', status: 'SYNCHRONIZED', latencyMs: 31, teraflops: 1150, ip: '10.8.0.3:4002' },
-    { id: 'node-omega', name: 'Omega Sovereign Gateway', role: 'Encrypted P2P Federation & Vault Sync', status: 'RELAY_NODE', latencyMs: 18, teraflops: 890, ip: '10.8.0.4:4003' }
-  ]);
-  const [meshSyncRate, setMeshSyncRate] = useState('99.999%');
+  const [mesh, setMesh] = useState<MeshStatusPayload | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [peerLabel, setPeerLabel] = useState('');
+  const [peerUrl, setPeerUrl] = useState('');
+  const [isAddingPeer, setIsAddingPeer] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const triggerMeshSync = async () => {
+  const loadMesh = async () => {
+    try {
+      const res = await apiFetch('/api/singularity/mesh/status');
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setMesh(data);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to load LoRa & P2P mesh status.');
+    }
+  };
+
+  useEffect(() => {
+    loadMesh();
+  }, []);
+
+  const syncMesh = async () => {
     setIsSyncing(true);
+    setErrorMsg(null);
     try {
       const res = await apiFetch('/api/singularity/mesh/sync', { method: 'POST' });
-      await res.json().catch(() => ({}));
-    } catch {}
-    setTimeout(() => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Mesh sync failed.');
+      if (data.status) setMesh(data.status);
+      setLastSyncedAt(data.timestamp || new Date().toISOString());
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Unable to synchronize mesh.');
+    } finally {
       setIsSyncing(false);
-      setMeshSyncRate('100.000%');
-    }, 1200);
+    }
+  };
+
+  const addFederatedPeer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!peerLabel.trim() || !peerUrl.trim()) return;
+    setIsAddingPeer(true);
+    setErrorMsg(null);
+    try {
+      const res = await apiFetch('/api/singularity/mesh/peers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: peerLabel, baseUrl: peerUrl })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not register federated peer.');
+      if (data.status) setMesh(data.status);
+      setPeerLabel('');
+      setPeerUrl('');
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to add peer.');
+    } finally {
+      setIsAddingPeer(false);
+    }
   };
 
   return (
-    <div className="h-full flex flex-col bg-slate-950 text-slate-100 p-6 overflow-y-auto">
-      <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+    <div className="h-full flex flex-col bg-slate-950 text-slate-100 overflow-y-auto">
+      <div className="px-6 py-5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="p-2 rounded-xl bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">
-              <Network className="w-6 h-6 animate-pulse" />
+          <h1 className="text-xl font-semibold text-slate-50 tracking-tight">
+            Distributed P2P & LoRa Swarm Mesh Federation
+          </h1>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            <span className="font-mono">{mesh ? `Mesh ${mesh.localMeshId}` : 'Loading topology…'}</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono">
+              {mesh ? `SHA-256 ${mesh.consensusHash.slice(0, 14)}…` : ''}
             </span>
-            <h1 className="text-2xl font-black tracking-wider bg-gradient-to-r from-indigo-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent">
-              Distributed P2P Swarm Mesh Federation
-            </h1>
+            {lastSyncedAt && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>Synced {new Date(lastSyncedAt).toLocaleTimeString()}</span>
+              </>
+            )}
           </div>
-          <p className="text-sm text-slate-400 mt-1">
-            Decentralized node federation, shared memory graphs, and synchronized distributed weights.
-          </p>
         </div>
         <button
-          onClick={triggerMeshSync}
+          onClick={syncMesh}
           disabled={isSyncing}
-          className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-bold flex items-center gap-2 shadow-lg shadow-indigo-500/20 disabled:opacity-50 transition-all cursor-pointer"
+          className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-50 cursor-pointer"
         >
-          <RefreshCw className={`w-5 h-5 ${isSyncing ? 'animate-spin' : ''}`} />
-          {isSyncing ? 'Synchronizing Mesh...' : 'Sync P2P Mesh'}
+          <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+          {isSyncing ? 'Syncing Topology…' : 'Sync Mesh State'}
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Federated Nodes</span>
-          <span className="text-3xl font-black text-indigo-400 mt-2">{nodes.length} Nodes</span>
-          <span className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
-            <CheckCircle2 className="w-3.5 h-3.5" /> All Nodes Healthy
-          </span>
-        </div>
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Cluster Compute</span>
-          <span className="text-3xl font-black text-cyan-400 mt-2">4,440 TFLOPS</span>
-          <span className="text-xs text-slate-400 mt-1">Distributed tensor execution</span>
-        </div>
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Mesh Consensus Sync</span>
-          <span className="text-3xl font-black text-teal-400 mt-2">{meshSyncRate}</span>
-          <span className="text-xs text-emerald-400 mt-1">Zero partition drift</span>
-        </div>
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Encryption Protocol</span>
-          <span className="text-3xl font-black text-amber-400 mt-2">HEO / H-FID</span>
-          <span className="text-xs text-amber-300 mt-1">End-to-end cryptographic proofs</span>
-        </div>
-      </div>
+      <div className="p-6 space-y-6 flex-1">
+        {errorMsg && (
+          <div className="p-3.5 rounded-lg bg-red-950/60 border border-red-800/70 text-red-200 text-xs flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1">
-        <div className="flex flex-col bg-slate-900/80 border border-slate-800 rounded-2xl p-5">
-          <h2 className="text-base font-bold text-slate-200 mb-4 flex items-center gap-2">
-            <Server className="w-5 h-5 text-indigo-400" /> Federated Node Registry
-          </h2>
-          <div className="space-y-3 flex-1 overflow-y-auto">
-            {nodes.map(node => (
-              <div key={node.id} className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <h3 className="text-sm font-bold text-slate-200">{node.name}</h3>
-                    <span className="text-xs font-mono text-cyan-400">({node.ip})</span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Active Mesh Nodes</div>
+            <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-indigo-400">
+              {mesh ? mesh.totalNodes : '—'}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {mesh ? `${mesh.federatedPeerCount} external peer(s)` : 'Inspecting loraMeshService…'}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Mesh Channels & Servers</div>
+            <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-cyan-400">
+              {mesh ? `${mesh.serversCount} / ${mesh.channelsCount}` : '—'}
+            </div>
+            <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
+              {mesh ? `${mesh.recentMessagesCount} recent mesh packets` : ''}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Active OS Daemons</div>
+            <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-emerald-400">
+              {mesh ? mesh.activeDaemonsCount : '—'}
+            </div>
+            <div className="mt-1 text-xs text-slate-400">Background OS supervisors</div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/70 border border-slate-800">
+            <div className="text-xs text-slate-400">Merkle State Anchor</div>
+            <div className="mt-2 text-base font-semibold font-mono text-slate-100 truncate">
+              {mesh ? `${mesh.merkleRoot.slice(0, 14)}…` : '—'}
+            </div>
+            <div className="mt-1 text-xs text-slate-400">Verified SHA-256 project root</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 rounded-xl bg-slate-900/60 border border-slate-800 divide-y divide-slate-800/80">
+            <div className="p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                <Server className="w-4 h-4 text-indigo-400" />
+                Live Local Host, Resident Agents & Federated Peers
+              </div>
+              <span className="text-xs font-mono tabular-nums text-slate-400">{mesh?.nodes.length || 0} entries</span>
+            </div>
+            {(mesh?.nodes || []).map((node) => (
+              <div key={node.id} className="p-3.5 flex items-center justify-between gap-3 hover:bg-slate-900">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-slate-100 truncate">{node.name}</div>
+                  <div className="text-xs text-slate-400 mt-0.5 truncate">{node.role}</div>
+                  <div className="text-xs font-mono text-slate-500 mt-0.5">
+                    {node.endpoint} · {node.radioSummary}
                   </div>
-                  <p className="text-xs text-slate-400 mt-1">{node.role}</p>
                 </div>
-                <div className="text-right">
-                  <div className="text-xs font-bold text-indigo-300">{node.teraflops} TFLOPS</div>
-                  <div className="text-xs text-slate-400 mt-0.5">{node.latencyMs}ms latency</div>
+                <div className="text-right shrink-0 text-xs font-mono tabular-nums">
+                  <div className="text-emerald-400">
+                    {node.status === 'SYNCHRONIZED' ? 'Synced' : node.status === 'ACTIVE_AGENT' ? 'Resident' : 'Relay'}
+                  </div>
+                  <div className="text-slate-400">{node.latencyMs}ms</div>
                 </div>
               </div>
             ))}
           </div>
-        </div>
 
-        <div className="flex flex-col bg-slate-900/80 border border-slate-800 rounded-2xl p-5">
-          <h2 className="text-base font-bold text-slate-200 mb-4 flex items-center gap-2">
-            <Radio className="w-5 h-5 text-teal-400" /> Mesh Topology & Telemetry
-          </h2>
-          <div className="flex-1 bg-slate-950 rounded-xl p-4 font-mono text-xs text-indigo-300/90 flex flex-col justify-center space-y-3 border border-slate-800">
-            <div className="flex justify-between items-center border-b border-slate-900 pb-2">
-              <span className="text-slate-400">Consensus Protocol:</span>
-              <span className="text-emerald-400 font-bold">Proof of Sovereign Attestation</span>
+          <div className="space-y-6">
+            <div className="rounded-xl bg-slate-900/60 border border-slate-800 divide-y divide-slate-800/80">
+              <div className="p-4 flex items-center gap-2 text-sm font-semibold text-slate-100">
+                <Radio className="w-4 h-4 text-teal-400" />
+                LoRa Radio Profiles
+              </div>
+              {(mesh?.servers || []).map((srv) => (
+                <div key={srv.id} className="p-3.5 text-xs space-y-1">
+                  <div className="font-medium text-slate-100">{srv.name}</div>
+                  <div className="font-mono text-slate-400 tabular-nums">
+                    {srv.region} · {srv.frequencyMhz} MHz · SF{srv.spreadingFactor}
+                  </div>
+                </div>
+              ))}
             </div>
-            <div className="flex justify-between items-center border-b border-slate-900 pb-2">
-              <span className="text-slate-400">Gossip Broadcast Interval:</span>
-              <span className="text-cyan-400">250ms</span>
-            </div>
-            <div className="flex justify-between items-center border-b border-slate-900 pb-2">
-              <span className="text-slate-400">Shared Vector Memory:</span>
-              <span className="text-teal-400">100% Synchronized (1.4M Embeddings)</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-slate-400">Fault Tolerance Threshold:</span>
-              <span className="text-amber-400">BFT (Byzantine Fault Tolerant up to f=3)</span>
-            </div>
+
+            <form onSubmit={addFederatedPeer} className="rounded-xl bg-slate-900/60 border border-slate-800 p-4 space-y-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-100">
+                <Plus className="w-3.5 h-3.5 text-indigo-400" />
+                Register Federated Mesh Peer
+              </div>
+              <input
+                value={peerLabel}
+                onChange={(e) => setPeerLabel(e.target.value)}
+                placeholder="Peer label (e.g. Home Workstation)"
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+              <input
+                value={peerUrl}
+                onChange={(e) => setPeerUrl(e.target.value)}
+                placeholder="https://peer-node.example.com"
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+              <button
+                type="submit"
+                disabled={isAddingPeer}
+                className="w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium disabled:opacity-50 cursor-pointer"
+              >
+                {isAddingPeer ? 'Registering…' : 'Add Federated Peer'}
+              </button>
+            </form>
           </div>
         </div>
       </div>

@@ -26,7 +26,7 @@
       "applicationUrl": "https://docs.cdp.coinbase.com/",
       "source": "VERIFIED_CURATED",
       "matchScore": 99,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-nlnet-ngi0-commons",
@@ -42,7 +42,7 @@
       "applicationUrl": "https://nlnet.nl/commonsfund/",
       "source": "VERIFIED_CURATED",
       "matchScore": 98,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-solana-foundation-ai",
@@ -58,7 +58,7 @@
       "applicationUrl": "https://solana.org/grants-funding",
       "source": "VERIFIED_CURATED",
       "matchScore": 97,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-google-cloud-startups",
@@ -74,7 +74,7 @@
       "applicationUrl": "https://cloud.google.com/startup",
       "source": "VERIFIED_CURATED",
       "matchScore": 97,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-ms-founders-hub",
@@ -90,7 +90,7 @@
       "applicationUrl": "https://www.microsoft.com/en-us/startups",
       "source": "VERIFIED_CURATED",
       "matchScore": 96,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-base-builder-grants",
@@ -106,7 +106,7 @@
       "applicationUrl": "https://www.base.org/builders",
       "source": "VERIFIED_CURATED",
       "matchScore": 95,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-aws-activate-founders",
@@ -122,7 +122,7 @@
       "applicationUrl": "https://aws.amazon.com/activate/activate-landing/",
       "source": "VERIFIED_CURATED",
       "matchScore": 95,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-ethereum-esp",
@@ -138,7 +138,7 @@
       "applicationUrl": "https://esp.ethereum.foundation/",
       "source": "VERIFIED_CURATED",
       "matchScore": 94,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-opensats-bitcoin",
@@ -154,7 +154,7 @@
       "applicationUrl": "https://opensats.org/apply/grant",
       "source": "VERIFIED_CURATED",
       "matchScore": 93,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-emergent-ventures",
@@ -170,7 +170,7 @@
       "applicationUrl": "https://www.mercatus.org/emergent-ventures",
       "source": "VERIFIED_CURATED",
       "matchScore": 92,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grant-sovereign-tech-fund",
@@ -186,7 +186,7 @@
       "applicationUrl": "https://www.sovereign.tech/programs/fund",
       "source": "VERIFIED_CURATED",
       "matchScore": 91,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "live-web-superteam-earn-grants",
@@ -986,7 +986,7 @@
       "applicationUrl": "https://www.1517fund.com/medici-project",
       "source": "VERIFIED_CURATED",
       "matchScore": 89,
-      "discoveredAt": "2026-11-22T04:17:39.748Z"
+      "discoveredAt": "2026-11-22T18:36:21.726Z"
     },
     {
       "id": "grants-gov-361333",
@@ -1192,7 +1192,7 @@
       ]
     }
   ],
-  "lastAutonomousScanAt": "2026-11-22T04:17:39.748Z",
-  "lastScanSummary": "Live autonomous grant scan completed: 72 total non-reciprocal opportunities (6 live Grants.gov federal listings, 6 live Google Search Grounded programs, 3 newly added).",
+  "lastAutonomousScanAt": "2026-11-22T18:36:21.726Z",
+  "lastScanSummary": "Live autonomous grant scan completed: 72 total non-reciprocal opportunities (6 live Grants.gov federal listings, 0 live Google Search Grounded programs, 0 newly added).",
   "autoScanEnabled": true
 }

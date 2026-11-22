@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { internalSecretsHandler } from './internalSecretsHandler';
+import { userSecretsVault } from './userSecretsVault';
 
 export type CdpEnvironmentMode = 'sandbox' | 'live';
 export type CdpEvmNetwork = 'base' | 'base-sepolia' | 'ethereum';
@@ -97,29 +98,57 @@ export const CDP_ETH_TOKENS: Record<string, CdpTokenInfo> = {
 
 const CDP_API_HOST = 'api.cdp.coinbase.com';
 const CDP_SANDBOX_HOST = 'sandbox.cdp.coinbase.com';
-const CONFIG_FILE = path.join(process.cwd(), 'data', 'cdp_config.json');
+const OWNER_CONFIG_FILE = path.join(process.cwd(), 'data', 'cdp_config.json');
+const USER_WORKSPACES_DIR = path.join(process.cwd(), 'data', 'user_workspaces');
+
+function normalizeCdpScope(scopeId?: string): string | undefined {
+  const cleaned = String(scopeId || '').trim();
+  if (!cleaned || cleaned === '__owner__') return undefined;
+  const safe = cleaned.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 96);
+  return safe && safe !== '.' && safe !== '..' ? safe : undefined;
+}
+
+function getConfigFileForScope(scopeId?: string): string {
+  const safe = normalizeCdpScope(scopeId);
+  if (!safe) return OWNER_CONFIG_FILE;
+  const dir = path.resolve(USER_WORKSPACES_DIR, safe);
+  const root = path.resolve(USER_WORKSPACES_DIR);
+  if (!dir.startsWith(root + path.sep)) {
+    throw new Error('Invalid CDP workspace scope');
+  }
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return path.join(dir, 'cdp_config.json');
+}
+
+function readScopedSecret(envVar: string, scopeId?: string): string {
+  const safe = normalizeCdpScope(scopeId);
+  if (safe) {
+    return (userSecretsVault.getSecret(safe, envVar) || '').trim();
+  }
+  return (internalSecretsHandler.getSecret(envVar) || '').trim();
+}
 
 function base64UrlEncode(input: Buffer | string): string {
   const buf = typeof input === 'string' ? Buffer.from(input, 'utf8') : input;
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-function loadConfig(): CdpStoredConfig {
-  const envDefault: CdpEnvironmentMode =
-    String(internalSecretsHandler.getSecret('CDP_ENV') || process.env.CDP_ENV || 'sandbox')
-      .trim()
-      .toLowerCase() === 'live'
-      ? 'live'
-      : 'sandbox';
+function loadConfig(scopeId?: string): CdpStoredConfig {
+  const safe = normalizeCdpScope(scopeId);
+  const envRaw = safe
+    ? readScopedSecret('CDP_ENV', safe) || 'sandbox'
+    : internalSecretsHandler.getSecret('CDP_ENV') || process.env.CDP_ENV || 'sandbox';
+  const envDefault: CdpEnvironmentMode = String(envRaw).trim().toLowerCase() === 'live' ? 'live' : 'sandbox';
   const fallback: CdpStoredConfig = {
     environment: envDefault,
     defaultNetwork: envDefault === 'live' ? 'base' : 'base-sepolia',
     defaultAccountName: 'sovereign-trader',
     updatedAt: new Date().toISOString()
   };
+  const cfgFile = getConfigFileForScope(scopeId);
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    if (fs.existsSync(cfgFile)) {
+      const parsed = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
       if (parsed && typeof parsed === 'object') {
         return {
           environment: parsed.environment === 'live' ? 'live' : 'sandbox',
@@ -141,22 +170,22 @@ function loadConfig(): CdpStoredConfig {
   return fallback;
 }
 
-function saveConfig(next: CdpStoredConfig): CdpStoredConfig {
+function saveConfig(next: CdpStoredConfig, scopeId?: string): CdpStoredConfig {
   try {
-    fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-    const tmp = `${CONFIG_FILE}.tmp.${process.pid}`;
+    const cfgFile = getConfigFileForScope(scopeId);
+    fs.mkdirSync(path.dirname(cfgFile), { recursive: true });
+    const tmp = `${cfgFile}.tmp.${process.pid}`;
     fs.writeFileSync(tmp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, CONFIG_FILE);
+    fs.renameSync(tmp, cfgFile);
   } catch {}
   return next;
 }
 
-function getCdpCredentials() {
-  const apiKeyId = (internalSecretsHandler.getSecret('CDP_API_KEY_ID') || '').trim();
-  const apiKeySecretRaw = (internalSecretsHandler.getSecret('CDP_API_KEY_SECRET') || '').trim();
-  const walletSecretRaw = (internalSecretsHandler.getSecret('CDP_WALLET_SECRET') || '').trim();
+function getCdpCredentials(scopeId?: string) {
+  const apiKeyId = readScopedSecret('CDP_API_KEY_ID', scopeId);
+  const apiKeySecretRaw = readScopedSecret('CDP_API_KEY_SECRET', scopeId);
+  const walletSecretRaw = readScopedSecret('CDP_WALLET_SECRET', scopeId);
 
-  // Support escaped newlines in PEM keys pasted into env/secrets
   const apiKeySecret = apiKeySecretRaw.includes('\\n')
     ? apiKeySecretRaw.replace(/\\n/g, '\n')
     : apiKeySecretRaw;
@@ -261,12 +290,13 @@ function buildCdpApiJwt(
 async function advancedTradeApiRequest<T>(
   method: 'GET' | 'POST',
   requestPath: string,
-  body?: Record<string, unknown>
+  body?: Record<string, unknown>,
+  scopeId?: string
 ): Promise<T> {
-  const creds = getCdpCredentials();
+  const creds = getCdpCredentials(scopeId);
   if (!creds.hasApiKey) {
     throw new Error(
-      'Coinbase CDP Secret API Key is not configured yet. Add CDP_API_KEY_ID and CDP_API_KEY_SECRET in Settings -> Secrets or the API Keys Vault.'
+      'Coinbase CDP Secret API Key is not configured yet. Add CDP_API_KEY_ID and CDP_API_KEY_SECRET in your personal API Keys Vault.'
     );
   }
   const jwt = buildCdpApiJwt(method, requestPath, creds.apiKeyId, creds.apiKeySecret, 'api.coinbase.com', true);
@@ -353,16 +383,16 @@ function sortObjectKeys(val: unknown): unknown {
 async function cdpApiRequest<T>(
   method: 'GET' | 'POST',
   requestPath: string,
-  options?: { body?: Record<string, unknown>; requiresWalletAuth?: boolean; useSandboxHost?: boolean }
+  options?: { body?: Record<string, unknown>; requiresWalletAuth?: boolean; useSandboxHost?: boolean; scopeId?: string }
 ): Promise<T> {
-  const creds = getCdpCredentials();
+  const creds = getCdpCredentials(options?.scopeId);
   if (!creds.hasApiKey) {
     throw new Error(
-      'Coinbase CDP API credentials are not configured yet. Add CDP_API_KEY_ID and CDP_API_KEY_SECRET in Settings -> Secrets or the API Keys Vault.'
+      'Coinbase CDP API credentials are not configured yet. Add CDP_API_KEY_ID and CDP_API_KEY_SECRET in your personal API Keys Vault.'
     );
   }
 
-  const cfg = loadConfig();
+  const cfg = loadConfig(options?.scopeId);
   const targetHost =
     options?.useSandboxHost === true
       ? CDP_SANDBOX_HOST
@@ -468,9 +498,9 @@ function fromBaseUnits(rawUnits: string, decimals: number): string {
 }
 
 class CoinbaseCdpService {
-  public getStatus() {
-    const cfg = loadConfig();
-    const creds = getCdpCredentials();
+  public getStatus(scopeId?: string) {
+    const cfg = loadConfig(scopeId);
+    const creds = getCdpCredentials(scopeId);
     return {
       configured: creds.hasApiKey,
       hasApiKey: creds.hasApiKey,
@@ -544,8 +574,8 @@ class CoinbaseCdpService {
     };
   }
 
-  public updateConfig(patch: Partial<CdpStoredConfig>): CdpStoredConfig {
-    const cur = loadConfig();
+  public updateConfig(patch: Partial<CdpStoredConfig>, scopeId?: string): CdpStoredConfig {
+    const cur = loadConfig(scopeId);
     const next: CdpStoredConfig = {
       environment: patch.environment === 'live' ? 'live' : patch.environment === 'sandbox' ? 'sandbox' : cur.environment,
       defaultNetwork:
@@ -560,11 +590,11 @@ class CoinbaseCdpService {
           : cur.defaultAccountName,
       updatedAt: new Date().toISOString()
     };
-    return saveConfig(next);
+    return saveConfig(next, scopeId);
   }
 
-  public async listEvmAccounts(): Promise<CdpEvmAccountSummary[]> {
-    const data = await cdpApiRequest<{ accounts?: any[] }>('GET', '/platform/v2/evm/accounts');
+  public async listEvmAccounts(scopeId?: string): Promise<CdpEvmAccountSummary[]> {
+    const data = await cdpApiRequest<{ accounts?: any[] }>('GET', '/platform/v2/evm/accounts', { scopeId });
     const raw = Array.isArray(data?.accounts) ? data.accounts : [];
     return raw.map((a) => ({
       address: String(a.address || ''),
@@ -573,12 +603,13 @@ class CoinbaseCdpService {
     }));
   }
 
-  public async createEvmAccount(name?: string): Promise<CdpEvmAccountSummary> {
+  public async createEvmAccount(name?: string, scopeId?: string): Promise<CdpEvmAccountSummary> {
     const cleanName = typeof name === 'string' ? name.trim().replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 36) : '';
     const body: Record<string, unknown> = cleanName ? { name: cleanName } : {};
     const created = await cdpApiRequest<any>('POST', '/platform/v2/evm/accounts', {
       body,
-      requiresWalletAuth: true
+      requiresWalletAuth: true,
+      scopeId
     });
     return {
       address: String(created?.address || ''),
@@ -587,11 +618,14 @@ class CoinbaseCdpService {
     };
   }
 
-  public async requestTestnetFaucet(input: {
-    address: string;
-    network?: 'base-sepolia' | 'ethereum-sepolia';
-    token?: 'eth' | 'usdc';
-  }) {
+  public async requestTestnetFaucet(
+    input: {
+      address: string;
+      network?: 'base-sepolia' | 'ethereum-sepolia';
+      token?: 'eth' | 'usdc';
+    },
+    scopeId?: string
+  ) {
     const address = String(input.address || '').trim();
     if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
       throw new Error('Valid 0x EVM wallet address is required for faucet funding.');
@@ -599,7 +633,8 @@ class CoinbaseCdpService {
     const network = input.network === 'ethereum-sepolia' ? 'ethereum-sepolia' : 'base-sepolia';
     const token = input.token === 'usdc' ? 'usdc' : 'eth';
     const data = await cdpApiRequest<any>('POST', '/platform/v2/evm/faucet', {
-      body: { address, network, token }
+      body: { address, network, token },
+      scopeId
     });
     return {
       transactionHash: data?.transactionHash || data?.txHash || null,
@@ -612,12 +647,12 @@ class CoinbaseCdpService {
     };
   }
 
-  public async getTokenBalances(network: CdpEvmNetwork, address: string) {
+  public async getTokenBalances(network: CdpEvmNetwork, address: string, scopeId?: string) {
     if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
       throw new Error('Valid 0x EVM address is required.');
     }
     const safeNet = network === 'ethereum' ? 'ethereum' : network === 'base' ? 'base' : 'base-sepolia';
-    const data = await cdpApiRequest<any>('GET', `/platform/v2/evm/token-balances/${safeNet}/${address}`);
+    const data = await cdpApiRequest<any>('GET', `/platform/v2/evm/token-balances/${safeNet}/${address}`, { scopeId });
     return {
       network: safeNet,
       address,
@@ -625,14 +660,17 @@ class CoinbaseCdpService {
     };
   }
 
-  public async getTradeQuote(input: {
-    network: CdpEvmNetwork;
-    fromSymbol: string;
-    toSymbol: string;
-    fromAmount: string;
-    takerAddress?: string;
-    slippageBps?: number;
-  }) {
+  public async getTradeQuote(
+    input: {
+      network: CdpEvmNetwork;
+      fromSymbol: string;
+      toSymbol: string;
+      fromAmount: string;
+      takerAddress?: string;
+      slippageBps?: number;
+    },
+    scopeId?: string
+  ) {
     const net: CdpEvmNetwork =
       input.network === 'ethereum' ? 'ethereum' : input.network === 'base' ? 'base' : 'base-sepolia';
     const tokenTable = net === 'ethereum' ? CDP_ETH_TOKENS : CDP_BASE_TOKENS;
@@ -646,7 +684,7 @@ class CoinbaseCdpService {
       throw new Error('Trade amount must be greater than zero.');
     }
 
-    const creds = getCdpCredentials();
+    const creds = getCdpCredentials(scopeId);
     const fromAmountBase = toBaseUnits(String(input.fromAmount), fromToken.decimals);
     const slippageBps = Math.min(500, Math.max(10, Number(input.slippageBps || 100)));
 
@@ -666,7 +704,8 @@ class CoinbaseCdpService {
             fromAmount: fromAmountBase,
             taker: input.takerAddress,
             slippageBps
-          }
+          },
+          scopeId
         });
         const toAmountFormatted = quote?.toAmount
           ? fromBaseUnits(String(quote.toAmount), toToken.decimals)
@@ -737,14 +776,17 @@ class CoinbaseCdpService {
     };
   }
 
-  public async executeTradeSwap(input: {
-    network: 'base' | 'ethereum';
-    accountAddress: string;
-    fromSymbol: string;
-    toSymbol: string;
-    fromAmount: string;
-    slippageBps?: number;
-  }) {
+  public async executeTradeSwap(
+    input: {
+      network: 'base' | 'ethereum';
+      accountAddress: string;
+      fromSymbol: string;
+      toSymbol: string;
+      fromAmount: string;
+      slippageBps?: number;
+    },
+    scopeId?: string
+  ) {
     const net = input.network === 'ethereum' ? 'ethereum' : 'base';
     if (!/^0x[a-fA-F0-9]{40}$/.test(String(input.accountAddress || '').trim())) {
       throw new Error('Valid 0x CDP EVM account address is required to execute a trade.');
@@ -768,7 +810,8 @@ class CoinbaseCdpService {
         taker: input.accountAddress,
         slippageBps
       },
-      requiresWalletAuth: true
+      requiresWalletAuth: true,
+      scopeId
     });
 
     const tx = swapOrder?.transaction;
@@ -789,7 +832,8 @@ class CoinbaseCdpService {
             value: tx.value || '0'
           }
         },
-        requiresWalletAuth: true
+        requiresWalletAuth: true,
+        scopeId
       }
     );
 
@@ -809,8 +853,13 @@ class CoinbaseCdpService {
     };
   }
 
-  public async listAdvancedTradeAccounts() {
-    const data = await advancedTradeApiRequest<{ accounts?: any[] }>('GET', '/api/v3/brokerage/accounts?limit=50');
+  public async listAdvancedTradeAccounts(scopeId?: string) {
+    const data = await advancedTradeApiRequest<{ accounts?: any[] }>(
+      'GET',
+      '/api/v3/brokerage/accounts?limit=50',
+      undefined,
+      scopeId
+    );
     const raw = Array.isArray(data?.accounts) ? data.accounts : [];
     return raw.map((a) => ({
       uuid: String(a.uuid || ''),
@@ -822,14 +871,17 @@ class CoinbaseCdpService {
     }));
   }
 
-  public async placeAdvancedTradeOrder(input: {
-    productId: string;
-    side: 'BUY' | 'SELL';
-    orderType: 'MARKET' | 'LIMIT';
-    quoteSizeUsd?: string;
-    baseSize?: string;
-    limitPrice?: string;
-  }) {
+  public async placeAdvancedTradeOrder(
+    input: {
+      productId: string;
+      side: 'BUY' | 'SELL';
+      orderType: 'MARKET' | 'LIMIT';
+      quoteSizeUsd?: string;
+      baseSize?: string;
+      limitPrice?: string;
+    },
+    scopeId?: string
+  ) {
     const productId = String(input.productId || 'BTC-USD').trim().toUpperCase();
     if (!/^[A-Z0-9]{2,12}-[A-Z0-9]{2,12}$/.test(productId)) {
       throw new Error('Invalid Advanced Trade product ID (expected format like BTC-USD or ETH-USD).');
@@ -874,12 +926,17 @@ class CoinbaseCdpService {
       };
     }
 
-    const result = await advancedTradeApiRequest<any>('POST', '/api/v3/brokerage/orders', {
-      client_order_id: clientOrderId,
-      product_id: productId,
-      side,
-      order_configuration: orderConfiguration
-    });
+    const result = await advancedTradeApiRequest<any>(
+      'POST',
+      '/api/v3/brokerage/orders',
+      {
+        client_order_id: clientOrderId,
+        product_id: productId,
+        side,
+        order_configuration: orderConfiguration
+      },
+      scopeId
+    );
 
     if (result?.success === false) {
       throw new Error(

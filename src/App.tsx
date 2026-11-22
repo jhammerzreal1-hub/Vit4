@@ -62,15 +62,19 @@ import {
 } from './utils/continuityClient';
 import { markVoiceUserGesture } from './utils/mediaPermissions';
 import { AuthGateModal } from './components/AuthGateModal';
+import { BillingUpgradeModal } from './components/BillingUpgradeModal';
 import { PersistentTalkDock } from './components/PersistentTalkDock';
 import {
   apiFetch,
   fetchAuthSession,
   loginWithGoogleToken,
-  logoutSession
+  logoutSession,
+  verifyStripeSession
 } from './utils/authClient';
+import { syncUserLocalStorageScope } from './utils/userStorageIsolation';
 import {
   COLLABORATOR_PRIVILEGES,
+  SYSTEM_CORE_ONLY_MODULES,
   canUserAccessModule,
   isExecutiveArchitectUser,
   type AuthPolicySettings,
@@ -138,6 +142,8 @@ const SingularitySelfImprovementModule = lazyWithRetry(() => import('./component
 const P2PSwarmMeshModule = lazyWithRetry(() => import('./components/P2PSwarmMeshModule').then(m => ({ default: m.P2PSwarmMeshModule })), 'P2PSwarmMeshModule');
 const AutonomousGoalEngineModule = lazyWithRetry(() => import('./components/AutonomousGoalEngineModule').then(m => ({ default: m.AutonomousGoalEngineModule })), 'AutonomousGoalEngineModule');
 const LocalLlamaEngineModule = lazyWithRetry(() => import('./components/LocalLlamaEngineModule').then(m => ({ default: m.LocalLlamaEngineModule })), 'LocalLlamaEngineModule');
+const SwarmConsolidationModule = lazyWithRetry(() => import('./components/SwarmConsolidationModule').then(m => ({ default: m.SwarmConsolidationModule })), 'SwarmConsolidationModule');
+const AdversarialRedTeamModule = lazyWithRetry(() => import('./components/AdversarialRedTeamModule').then(m => ({ default: m.AdversarialRedTeamModule })), 'AdversarialRedTeamModule');
 
 
 const ModuleLoadingFallback: React.FC<{ label?: string }> = ({ label = 'Loading module...' }) => (
@@ -213,7 +219,7 @@ export default function App() {
       const saved = localStorage.getItem('aurelius_dev_mode');
       return saved !== null ? saved === 'true' : true;
     })(),
-    activeAccountEmail: localStorage.getItem('aurelius_active_account') || 'joshualhamilton17@gmail.com',
+    activeAccountEmail: localStorage.getItem('aurelius_active_account') || '',
     uiMutation: (() => {
       try {
         const saved = localStorage.getItem('sovereign_ui_mutation_v1');
@@ -242,19 +248,33 @@ export default function App() {
   });
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showUserPrivilegesModal, setShowUserPrivilegesModal] = useState(false);
+  const [showBillingModal, setShowBillingModal] = useState(false);
+  const [billingHighlightModule, setBillingHighlightModule] = useState<string | null>(null);
   const authUserRef = useRef<AuthUserPublic | null>(null);
   authUserRef.current = authUser;
 
   const applyAuthSessionResponse = useCallback((res: AuthSessionResponse) => {
-    setAuthUser(res.user || null);
+    const nextUser = res.user || null;
+    syncUserLocalStorageScope(nextUser?.id || null);
+    setAuthUser(nextUser);
     setAuthAdminClaimed(res.adminClaimed !== false);
     setAuthEnvAdminConfigured(Boolean(res.envAdminConfigured));
     if (res.policy) setAuthPolicy(res.policy);
+    if (nextUser) {
+      const nextEmail = nextUser.email || '';
+      switchAccountEmail(nextEmail);
+      try {
+        if (nextEmail) localStorage.setItem('aurelius_active_account', nextEmail);
+        else localStorage.removeItem('aurelius_active_account');
+      } catch {}
+    } else {
+      switchAccountEmail('');
+    }
     setAuthLoaded(true);
-    if (res.user && res.user.status === 'active') {
+    if (nextUser && nextUser.status === 'active') {
       setShowLoginModal(false);
     }
-  }, []);
+  }, [switchAccountEmail]);
 
   const refreshAuthSession = useCallback(async () => {
     try {
@@ -268,10 +288,13 @@ export default function App() {
   const handleLogoutAccount = useCallback(async () => {
     await logoutSession().catch(() => {});
     await signOut(auth).catch(() => {});
+    syncUserLocalStorageScope(null);
+    switchAccountEmail('');
     setAuthUser(null);
     setShowUserPrivilegesModal(false);
+    setShowBillingModal(false);
     await refreshAuthSession();
-  }, [refreshAuthSession]);
+  }, [refreshAuthSession, switchAccountEmail]);
 
   useEffect(() => {
     refreshAuthSession();
@@ -868,6 +891,7 @@ export default function App() {
     vv?.addEventListener('resize', scheduleSync);
     vv?.addEventListener('scroll', scheduleSync);
     window.addEventListener('resize', scheduleSync);
+    window.addEventListener('orientationchange', scheduleSync);
     document.addEventListener('focusin', scheduleSync, true);
     document.addEventListener('focusout', scheduleSync, true);
     return () => {
@@ -875,6 +899,7 @@ export default function App() {
       vv?.removeEventListener('resize', scheduleSync);
       vv?.removeEventListener('scroll', scheduleSync);
       window.removeEventListener('resize', scheduleSync);
+      window.removeEventListener('orientationchange', scheduleSync);
       document.removeEventListener('focusin', scheduleSync, true);
       document.removeEventListener('focusout', scheduleSync, true);
       root.removeAttribute('data-keyboard-open');
@@ -887,7 +912,7 @@ export default function App() {
     let rafId = 0;
     const applySize = () => {
       rafId = 0;
-      const nextWidth = Math.max(el.clientWidth, 300);
+      const nextWidth = Math.max(el.clientWidth, 280);
       const nextHeight = Math.max(el.clientHeight, 220);
       const activeTag = document.activeElement?.tagName;
       const isEditableFocused =
@@ -914,11 +939,37 @@ export default function App() {
     applySize();
     const ro = new ResizeObserver(updateSize);
     ro.observe(el);
+    window.addEventListener('orientationchange', updateSize);
+    window.addEventListener('resize', updateSize);
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
       ro.disconnect();
+      window.removeEventListener('orientationchange', updateSize);
+      window.removeEventListener('resize', updateSize);
     };
   }, []);
+
+  useEffect(() => {
+    if (!desktopSize.width || !desktopSize.height) return;
+    setWindowStates((prev) => {
+      let changed = false;
+      const next: Partial<Record<ModuleType, OSWindowGeometry>> = {};
+      for (const [k, geom] of Object.entries(prev)) {
+        if (!geom) continue;
+        const clamped = clampWindowGeometry(geom, desktopSize.width, desktopSize.height);
+        if (
+          clamped.x !== geom.x ||
+          clamped.y !== geom.y ||
+          clamped.width !== geom.width ||
+          clamped.height !== geom.height
+        ) {
+          changed = true;
+        }
+        next[k as ModuleType] = clamped;
+      }
+      return changed ? next : prev;
+    });
+  }, [desktopSize.width, desktopSize.height]);
 
   useEffect(() => {
     const el = mainAreaRef.current;
@@ -1413,9 +1464,43 @@ export default function App() {
     requestAnimationFrame(focusNow);
   }, []);
 
+  // Auto-verify returning Stripe Checkout session once authenticated
+  useEffect(() => {
+    if (!authUser?.id) return;
+    try {
+      const url = new URL(window.location.href);
+      const sessionId = url.searchParams.get('billing_session_id');
+      if (!sessionId) return;
+      url.searchParams.delete('billing_session_id');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+      verifyStripeSession(sessionId)
+        .then((res) => {
+          if (res?.settled) {
+            if (res.entryType === 'donation') {
+              showOsToast('Thank you for backing the project! Your timestamped receipt & note are live on the Supporter Wall.');
+            } else {
+              showOsToast(`Thank you for investing in the project! Tier upgraded to ${res.user?.tierName || 'your new plan'}.`);
+            }
+            void refreshAuthSession();
+          } else {
+            showOsToast(`Stripe session status: ${res?.paymentStatus || 'pending'}`);
+          }
+        })
+        .catch((err: any) => {
+          showOsToast(`Billing verification notice: ${err?.message || 'check status in Billing modal'}`);
+        });
+    } catch {}
+  }, [authUser?.id, refreshAuthSession]);
+
   const handleSelectOSModule = (mod: ModuleType) => {
     if (authUser && !canUserAccessModule(authUser, mod)) {
-      showOsToast(`Access restricted: your account does not have permission for "${mod}".`);
+      if (!SYSTEM_CORE_ONLY_MODULES.includes(mod) && mod !== 'admin-command') {
+        setBillingHighlightModule(mod);
+        setShowBillingModal(true);
+        showOsToast(`Upgrade your access tier to unlock "${mod}".`);
+      } else {
+        showOsToast(`Access restricted: your account does not have permission for "${mod}".`);
+      }
       return;
     }
     if (mod === 'chat') {
@@ -2526,6 +2611,10 @@ export default function App() {
         return <AutonomousGoalEngineModule />;
       case 'local-llama-engine':
         return <LocalLlamaEngineModule />;
+      case 'swarm-consolidation':
+        return <SwarmConsolidationModule />;
+      case 'adversarial-red-team':
+        return <AdversarialRedTeamModule />;
       case 'world-start':
         return (
           <WorldLoadStartScreen
@@ -2739,6 +2828,10 @@ export default function App() {
         authUser={authUser}
         onOpenAuth={() => setShowLoginModal(true)}
         onOpenUserPrivileges={() => setShowUserPrivilegesModal(true)}
+        onOpenBilling={() => {
+          setBillingHighlightModule(null);
+          setShowBillingModal(true);
+        }}
         onLogoutAccount={handleLogoutAccount}
         firebaseOnline={firebaseOnline}
         onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
@@ -2757,7 +2850,7 @@ export default function App() {
 
       {!desktopActive && osBarNode}
 
-      <div className="flex-1 flex min-h-0 overflow-hidden">
+      <div key={`workspace-scope-${authUser?.id || 'guest'}`} className="flex-1 flex min-h-0 overflow-hidden">
         <Navigation
           activeModule={activeModule}
           onSelectModule={handleSelectOSModule}
@@ -3206,6 +3299,20 @@ export default function App() {
             />
           </Suspense>
         )}
+
+      {/* Plans, Custom Tiers & Real Fiat / On-Chain Crypto Upgrade Modal */}
+      {authUser && showBillingModal && (
+        <BillingUpgradeModal
+          isOpen={showBillingModal}
+          currentUser={authUser}
+          highlightModule={billingHighlightModule}
+          onClose={() => {
+            setShowBillingModal(false);
+            setBillingHighlightModule(null);
+          }}
+          onUpgraded={refreshAuthSession}
+        />
+      )}
 
       <OfflineIndicator />
     </div>

@@ -32,12 +32,19 @@ import {
   X,
   Radio,
   Cpu,
-  Ban
+  Ban,
+  CreditCard,
+  Layers,
+  Plus,
+  Wallet,
+  Coins,
+  Receipt
 } from 'lucide-react';
 import type { ModuleType } from '../types';
 import {
   ADMIN_PRIVILEGES,
   ALL_SOVEREIGN_MODULES,
+  COLLABORATOR_PRIVILEGES,
   PRIVILEGE_PRESETS,
   canAccessAdminCommandCenter,
   clonePrivileges,
@@ -48,10 +55,29 @@ import {
   type AuthPolicySettings,
   type AuthRole,
   type AuthUserPublic,
-  type UserPrivileges
+  type BillingConfigPublic,
+  type BillingLedgerRecord,
+  type SupporterBoardEntry,
+  type SupporterBoardSummary,
+  type SupportedBillingChain,
+  type SupportedBillingCryptoToken,
+  type TierBadgeColor,
+  type TierBillingMode,
+  type UserPrivileges,
+  type UserTierDefinition
 } from '../types/auth';
 import { AdminCommandIcon } from './AdminCommandIcon';
-import { buildAuthHeaders } from '../utils/authClient';
+import {
+  adminAssignUserTier,
+  adminCreateTier,
+  adminDeleteSupporterBoardEntry,
+  adminDeleteTier,
+  adminFetchBillingLedger,
+  adminUpdateBillingConfig,
+  adminUpdateTier,
+  buildAuthHeaders,
+  fetchSupporterBoard
+} from '../utils/authClient';
 
 interface AdminSovereignCommandCenterProps {
   currentUser: AuthUserPublic | null;
@@ -63,6 +89,8 @@ interface CommandCenterPayload {
   actor: AuthUserPublic;
   policy: AuthPolicySettings;
   users: AuthUserPublic[];
+  tiers?: UserTierDefinition[];
+  billingConfig?: BillingConfigPublic;
   sessions: ActiveSessionSummary[];
   auditLog: AdminAuditEntry[];
   architectCharter: {
@@ -101,7 +129,7 @@ interface CommandCenterPayload {
   };
 }
 
-type CommandTab = 'overview' | 'users' | 'sessions' | 'entity' | 'policy' | 'audit';
+type CommandTab = 'overview' | 'users' | 'tiers' | 'billing' | 'sessions' | 'entity' | 'policy' | 'audit';
 
 async function adminApi<T = any>(url: string, options: RequestInit = {}): Promise<T> {
   const extraHeaders: Record<string, string> = {
@@ -122,15 +150,38 @@ async function adminApi<T = any>(url: string, options: RequestInit = {}): Promis
   return data as T;
 }
 
-const CAPABILITY_LABELS: Array<{ key: keyof Omit<UserPrivileges, 'allModules' | 'allowedModules'>; label: string }> = [
+type BooleanPrivilegeKey =
+  | 'canUseChat'
+  | 'canUseVoiceChat'
+  | 'canRunAutonomousWorkflow'
+  | 'canExecuteTerminalAndTools'
+  | 'canAccessSecretsAndWallets'
+  | 'canBringOwnKeys'
+  | 'canUseBurnerMail'
+  | 'canUseInfiniteSim'
+  | 'canAccessGrantHunter'
+  | 'canModifyOSSettings'
+  | 'canAccessSystemCore'
+  | 'canManageUsers';
+
+const CAPABILITY_LABELS: Array<{ key: BooleanPrivilegeKey; label: string }> = [
   { key: 'canUseChat', label: 'AI Chat & Orchestration' },
   { key: 'canUseVoiceChat', label: 'Voice & SoS Mesh Calls' },
   { key: 'canRunAutonomousWorkflow', label: 'Autonomous Workflows' },
   { key: 'canExecuteTerminalAndTools', label: 'Root Terminal & Tools' },
   { key: 'canAccessSecretsAndWallets', label: 'Secrets Vault & Crypto Wallets' },
+  { key: 'canBringOwnKeys', label: 'Bring Your Own API Keys' },
+  { key: 'canUseBurnerMail', label: 'Burner Mail Access' },
+  { key: 'canUseInfiniteSim', label: 'Infinite SIM & eSIM' },
+  { key: 'canAccessGrantHunter', label: 'Grant Hunter Engine' },
   { key: 'canModifyOSSettings', label: 'Modify OS Settings' },
+  { key: 'canAccessSystemCore', label: 'System Core Modules' },
   { key: 'canManageUsers', label: 'User & Admin Governance' }
 ];
+
+const SUPPORTED_BILLING_CHAINS: SupportedBillingChain[] = ['base', 'ethereum', 'polygon', 'arbitrum', 'base-sepolia'];
+const SUPPORTED_BILLING_TOKENS: SupportedBillingCryptoToken[] = ['USDC', 'ETH'];
+const TIER_BADGE_COLORS: TierBadgeColor[] = ['zinc', 'emerald', 'cyan', 'amber', 'violet', 'rose'];
 
 export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterProps> = ({
   currentUser,
@@ -172,6 +223,7 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
   const [editStatus, setEditStatus] = useState<AuthAccountStatus>('active');
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editPrivileges, setEditPrivileges] = useState<UserPrivileges | null>(null);
+  const [editTierId, setEditTierId] = useState<string>('');
   const [resetPasswordDraft, setResetPasswordDraft] = useState('');
 
   // Create user modal
@@ -182,6 +234,47 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<AuthRole>('collaborator');
+  const [newUserTierId, setNewUserTierId] = useState<string>('');
+
+  // Custom Tier Editor state
+  const [selectedTierId, setSelectedTierId] = useState<string | 'new'>('new');
+  const [tierName, setTierName] = useState('');
+  const [tierTagline, setTierTagline] = useState('');
+  const [tierDescription, setTierDescription] = useState('');
+  const [tierBadgeColor, setTierBadgeColor] = useState<TierBadgeColor>('cyan');
+  const [tierRank, setTierRank] = useState<number>(25);
+  const [tierBaseRole, setTierBaseRole] = useState<AuthRole>('operator');
+  const [tierIsPublic, setTierIsPublic] = useState<boolean>(true);
+  const [tierIsMonetized, setTierIsMonetized] = useState<boolean>(true);
+  const [tierIsFounder, setTierIsFounder] = useState<boolean>(false);
+  const [tierBillingMode, setTierBillingMode] = useState<TierBillingMode>('both');
+  const [tierMonthlyUsd, setTierMonthlyUsd] = useState<string>('29');
+  const [tierOneTimeUsd, setTierOneTimeUsd] = useState<string>('149');
+  const [tierCryptoUsd, setTierCryptoUsd] = useState<string>('29');
+  const [tierStripePriceId, setTierStripePriceId] = useState<string>('');
+  const [tierCryptoChains, setTierCryptoChains] = useState<SupportedBillingChain[]>(['base', 'ethereum', 'polygon', 'arbitrum']);
+  const [tierCryptoTokens, setTierCryptoTokens] = useState<SupportedBillingCryptoToken[]>(['USDC', 'ETH']);
+  const [tierPrivileges, setTierPrivileges] = useState<UserPrivileges>(() => clonePrivileges(COLLABORATOR_PRIVILEGES));
+  const [tierFeaturesText, setTierFeaturesText] = useState<string>('Isolated Workspace\nPriority AI Routing');
+  const [tierSyncExistingUsers, setTierSyncExistingUsers] = useState<boolean>(true);
+
+  // Monetization & Billing config + ledger + Supporter Wall state
+  const [billingLedger, setBillingLedger] = useState<{
+    records: BillingLedgerRecord[];
+    totalRevenueUsd: number;
+    fiatRevenueUsd: number;
+    cryptoRevenueUsd: number;
+    settledCount: number;
+  }>({ records: [], totalRevenueUsd: 0, fiatRevenueUsd: 0, cryptoRevenueUsd: 0, settledCount: 0 });
+  const [supporterBoardEntries, setSupporterBoardEntries] = useState<SupporterBoardEntry[]>([]);
+  const [supporterBoardSummary, setSupporterBoardSummary] = useState<SupporterBoardSummary | null>(null);
+  const [editFiatStripeEnabled, setEditFiatStripeEnabled] = useState(false);
+  const [editCryptoEnabled, setEditCryptoEnabled] = useState(false);
+  const [editTreasuryAddress, setEditTreasuryAddress] = useState('');
+  const [editBillingChains, setEditBillingChains] = useState<SupportedBillingChain[]>(['base', 'ethereum', 'polygon', 'arbitrum']);
+  const [editBillingTokens, setEditBillingTokens] = useState<SupportedBillingCryptoToken[]>(['USDC', 'ETH']);
+  const [editStripeSecretInput, setEditStripeSecretInput] = useState('');
+  const [editStripeWebhookSecretInput, setEditStripeWebhookSecretInput] = useState('');
 
   // Audit filter
   const [auditFilter, setAuditFilter] = useState('');
@@ -201,12 +294,34 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
     setLoading(true);
     setLoadError(null);
     try {
-      const [res, sqlRes] = await Promise.all([
+      const [res, sqlRes, ledgerRes, boardRes] = await Promise.all([
         adminApi<CommandCenterPayload>('/api/auth/admin/command-center'),
-        adminApi<any>('/api/user-memory/admin/consolidated').catch(() => null)
+        adminApi<any>('/api/user-memory/admin/consolidated').catch(() => null),
+        adminFetchBillingLedger().catch(() => null),
+        fetchSupporterBoard().catch(() => null)
       ]);
       setData(res);
       if (sqlRes) setSqlOverview(sqlRes);
+      if (ledgerRes) {
+        setBillingLedger({
+          records: (ledgerRes as any).records || ledgerRes.ledger || [],
+          totalRevenueUsd: Number((ledgerRes as any).totalRevenueUsd || 0),
+          fiatRevenueUsd: Number((ledgerRes as any).fiatRevenueUsd || 0),
+          cryptoRevenueUsd: Number((ledgerRes as any).cryptoRevenueUsd || 0),
+          settledCount: Number((ledgerRes as any).settledCount || ledgerRes.count || 0)
+        });
+      }
+      if (boardRes) {
+        setSupporterBoardEntries(boardRes.entries || []);
+        setSupporterBoardSummary(boardRes.summary || null);
+      }
+      if (res.billingConfig) {
+        setEditFiatStripeEnabled(Boolean(res.billingConfig.fiatStripeEnabled));
+        setEditCryptoEnabled(Boolean(res.billingConfig.cryptoEnabled));
+        setEditTreasuryAddress(res.billingConfig.treasuryEvmAddress || '');
+        setEditBillingChains(res.billingConfig.enabledChains || ['base', 'ethereum']);
+        setEditBillingTokens(res.billingConfig.enabledTokens || ['USDC', 'ETH']);
+      }
       setLoadError(null);
     } catch (err: any) {
       const msg = err?.message || 'Failed to load Sovereign Command Center';
@@ -232,7 +347,52 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
     setEditStatus(u.status);
     setEditDisplayName(u.displayName);
     setEditPrivileges(clonePrivileges(u.privileges));
+    setEditTierId(u.tierId || data?.policy.defaultTierId || '');
     setResetPasswordDraft('');
+  };
+
+  const startNewTierDraft = () => {
+    setSelectedTierId('new');
+    setTierName('');
+    setTierTagline('');
+    setTierDescription('');
+    setTierBadgeColor('cyan');
+    setTierRank(25);
+    setTierBaseRole('operator');
+    setTierIsPublic(true);
+    setTierIsMonetized(true);
+    setTierIsFounder(false);
+    setTierBillingMode('both');
+    setTierMonthlyUsd('29');
+    setTierOneTimeUsd('149');
+    setTierCryptoUsd('29');
+    setTierStripePriceId('');
+    setTierCryptoChains(['base', 'ethereum', 'polygon', 'arbitrum']);
+    setTierCryptoTokens(['USDC', 'ETH']);
+    setTierPrivileges(clonePrivileges(COLLABORATOR_PRIVILEGES));
+    setTierFeaturesText('Isolated Workspace\nCustom Capability Access');
+  };
+
+  const openTierEditor = (t: UserTierDefinition) => {
+    setSelectedTierId(t.id);
+    setTierName(t.name);
+    setTierTagline(t.tagline || '');
+    setTierDescription(t.description || '');
+    setTierBadgeColor(t.badgeColor || 'cyan');
+    setTierRank(t.rank ?? 25);
+    setTierBaseRole(t.baseRole);
+    setTierIsPublic(Boolean(t.isPublic));
+    setTierIsMonetized(Boolean(t.isMonetized));
+    setTierIsFounder(Boolean(t.isFounderTier || t.rank >= 3));
+    setTierBillingMode(t.pricing?.billingMode || (t.isMonetized ? 'both' : 'free'));
+    setTierMonthlyUsd(((t.pricing?.monthlyUsdCents || 0) / 100).toString());
+    setTierOneTimeUsd(((t.pricing?.oneTimeUsdCents || 0) / 100).toString());
+    setTierCryptoUsd(String(t.pricing?.cryptoUsdAmount ?? 0));
+    setTierStripePriceId(t.pricing?.stripePriceId || '');
+    setTierCryptoChains(t.pricing?.acceptedCryptoChains || ['base', 'ethereum']);
+    setTierCryptoTokens(t.pricing?.acceptedCryptoTokens || ['USDC', 'ETH']);
+    setTierPrivileges(clonePrivileges(t.privileges));
+    setTierFeaturesText((t.features || []).join('\n'));
   };
 
   const filteredUsers = useMemo(() => {
@@ -297,7 +457,8 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
           email: newEmail.trim(),
           password: newPassword,
           role: newRole,
-          status: 'active'
+          status: 'active',
+          ...(newUserTierId ? { tierId: newUserTierId } : {})
         })
       });
       setNewUsername('');
@@ -305,6 +466,7 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
       setNewEmail('');
       setNewPassword('');
       setNewRole('collaborator');
+      setNewUserTierId('');
       setCreateUserError(null);
       setShowCreateUser(false);
       notify(true, 'New user account created & provisioned.');
@@ -316,6 +478,168 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
     } finally {
       setBusy(null);
     }
+  };
+
+  const handleAssignUserTierQuick = async () => {
+    if (!selectedUser || !editTierId) return;
+    setBusy(`tier:${selectedUser.id}`);
+    try {
+      const res = await adminAssignUserTier(selectedUser.id, {
+        tierId: editTierId,
+        subscriptionStatus: 'admin-granted'
+      });
+      setEditRole(res.user.role);
+      setEditPrivileges(clonePrivileges(res.user.privileges));
+      notify(true, `Assigned "${res.tier.name}" tier to @${selectedUser.username}.`);
+      await loadCommandCenter();
+      onRefreshSession?.();
+    } catch (err: any) {
+      notify(false, err?.message || 'Failed to assign tier');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleSaveTier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tierName.trim()) {
+      notify(false, 'Tier name is required.');
+      return;
+    }
+    setBusy('save-tier');
+    try {
+      const features = tierFeaturesText
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const pricing = {
+        billingMode: tierIsMonetized ? tierBillingMode : ('free' as TierBillingMode),
+        monthlyUsdCents: tierIsMonetized ? Math.max(0, Math.round((parseFloat(tierMonthlyUsd) || 0) * 100)) : 0,
+        oneTimeUsdCents: tierIsMonetized ? Math.max(0, Math.round((parseFloat(tierOneTimeUsd) || 0) * 100)) : 0,
+        cryptoUsdAmount: tierIsMonetized ? Math.max(0, parseFloat(tierCryptoUsd) || 0) : 0,
+        acceptedCryptoChains: tierCryptoChains,
+        acceptedCryptoTokens: tierCryptoTokens,
+        ...(tierStripePriceId.trim() ? { stripePriceId: tierStripePriceId.trim() } : {})
+      };
+      if (selectedTierId === 'new') {
+        const res = await adminCreateTier({
+          name: tierName.trim(),
+          tagline: tierTagline.trim(),
+          description: tierDescription.trim(),
+          badgeColor: tierBadgeColor,
+          rank: tierRank,
+          baseRole: tierBaseRole,
+          isPublic: tierIsPublic,
+          isMonetized: tierIsMonetized,
+          isFounderTier: tierIsFounder,
+          pricing,
+          privileges: clonePrivileges(tierPrivileges),
+          features
+        });
+        setSelectedTierId(res.tier.id);
+        notify(true, `Created custom tier "${res.tier.name}".`);
+      } else {
+        const res = await adminUpdateTier(selectedTierId, {
+          name: tierName.trim(),
+          tagline: tierTagline.trim(),
+          description: tierDescription.trim(),
+          badgeColor: tierBadgeColor,
+          rank: tierRank,
+          baseRole: tierBaseRole,
+          isPublic: tierIsPublic,
+          isMonetized: tierIsMonetized,
+          isFounderTier: tierIsFounder,
+          pricing,
+          privileges: clonePrivileges(tierPrivileges),
+          features,
+          syncExistingUsers: tierSyncExistingUsers
+        });
+        notify(true, `Updated tier "${res.tier.name}".`);
+      }
+      await loadCommandCenter();
+      onRefreshSession?.();
+    } catch (err: any) {
+      notify(false, err?.message || 'Failed to save tier');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleDeleteCustomTier = async (tier: UserTierDefinition) => {
+    setBusy(`del-tier:${tier.id}`);
+    try {
+      await adminDeleteTier(tier.id);
+      if (selectedTierId === tier.id) startNewTierDraft();
+      notify(true, `Deleted tier "${tier.name}".`);
+      await loadCommandCenter();
+    } catch (err: any) {
+      notify(false, err?.message || 'Failed to delete tier');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleSaveBillingConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy('save-billing');
+    try {
+      await adminUpdateBillingConfig({
+        fiatStripeEnabled: editFiatStripeEnabled,
+        cryptoEnabled: editCryptoEnabled,
+        treasuryEvmAddress: editTreasuryAddress.trim(),
+        enabledChains: editBillingChains,
+        enabledTokens: editBillingTokens,
+        ...(editStripeSecretInput.trim() ? { stripeSecretKey: editStripeSecretInput.trim() } : {}),
+        ...(editStripeWebhookSecretInput.trim() ? { stripeWebhookSecret: editStripeWebhookSecretInput.trim() } : {})
+      });
+      setEditStripeSecretInput('');
+      setEditStripeWebhookSecretInput('');
+      notify(true, 'Monetization, vault keys & settlement configuration saved.');
+      await loadCommandCenter();
+    } catch (err: any) {
+      notify(false, err?.message || 'Failed to save billing configuration');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleExportBillingLedger = (format: 'json' | 'csv') => {
+    const records = billingLedger.records;
+    let content = '';
+    let mime = 'application/json';
+    let ext = 'json';
+    if (format === 'csv') {
+      const header = ['id', 'createdAt', 'username', 'tierName', 'method', 'billingCycle', 'amountUsd', 'currency', 'chain', 'status', 'referenceId'];
+      const rows = records.map((r) =>
+        [
+          r.id,
+          r.createdAt,
+          r.username,
+          r.tierName,
+          r.method,
+          r.billingCycle,
+          r.amountUsd.toFixed(2),
+          r.currency,
+          r.chain || '',
+          r.status,
+          r.referenceId
+        ]
+          .map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`)
+          .join(',')
+      );
+      content = [header.join(','), ...rows].join('\n');
+      mime = 'text/csv;charset=utf-8';
+      ext = 'csv';
+    } else {
+      content = JSON.stringify(billingLedger, null, 2);
+    }
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sovereign-billing-ledger-${new Date().toISOString().slice(0, 10)}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleSaveUserEdits = async () => {
@@ -518,6 +842,8 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
           [
             { id: 'overview', label: 'Executive Overview', icon: ShieldCheck },
             { id: 'users', label: `Users & Privileges (${data?.users.length ?? 0})`, icon: Users },
+            { id: 'tiers', label: `Tiers & Permissions (${data?.tiers?.length ?? 0})`, icon: Layers },
+            { id: 'billing', label: 'Monetization & Billing', icon: CreditCard },
             { id: 'sessions', label: `Active Sessions (${data?.sessions.length ?? 0})`, icon: KeyRound },
             { id: 'entity', label: 'Entity Intelligence Charter', icon: Bot },
             { id: 'policy', label: 'Global Security Policy', icon: Sliders },
@@ -932,17 +1258,17 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
                               </div>
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold ${
-                                  targetIsArchitect
-                                    ? 'bg-amber-500/25 text-amber-200 border border-amber-400/45'
-                                    : u.role === 'admin'
-                                    ? 'bg-cyan-500/20 text-cyan-200'
-                                    : 'bg-zinc-800 text-zinc-300'
-                                }`}
-                              >
-                                {targetIsArchitect ? 'ARCHITECT' : u.role}
-                              </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold ${
+                                    targetIsArchitect
+                                      ? 'bg-amber-500/25 text-amber-200 border border-amber-400/45'
+                                      : u.role === 'admin'
+                                      ? 'bg-cyan-500/20 text-cyan-200'
+                                      : 'bg-zinc-800 text-zinc-300'
+                                  }`}
+                                >
+                                  {targetIsArchitect ? 'ARCHITECT' : u.tierName || u.role}
+                                </span>
                               <span
                                 className={`px-1.5 py-0.5 rounded text-[9px] font-mono uppercase ${
                                   u.status === 'active'
@@ -1060,9 +1386,57 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
                         </div>
                       </div>
 
+                      {/* Assign Custom Tier */}
+                      {!isExecutiveArchitectUser(selectedUser) && (data.tiers?.length || 0) > 0 && (
+                        <div className="p-3 rounded-xl bg-zinc-950/90 border border-cyan-500/25 flex flex-wrap items-end gap-2.5">
+                          <div className="flex-1 min-w-[200px]">
+                            <label className="block text-[10px] text-cyan-300 font-semibold mb-1">
+                              Assigned Access Tier ({selectedUser.tierName || selectedUser.role} · {selectedUser.subscriptionStatus || 'free'})
+                            </label>
+                            <select
+                              value={editTierId}
+                              onChange={(e) => setEditTierId(e.target.value)}
+                              className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-xs text-white"
+                            >
+                              {(data.tiers || []).map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name} ({t.isMonetized ? `$${((t.pricing.monthlyUsdCents || t.pricing.oneTimeUsdCents) / 100).toFixed(0)}` : 'Free'})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={!editTierId || busy === `tier:${selectedUser.id}`}
+                            onClick={handleAssignUserTierQuick}
+                            className="px-3.5 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-zinc-950 text-xs font-bold cursor-pointer disabled:opacity-40"
+                          >
+                            {busy === `tier:${selectedUser.id}` ? 'Applying...' : 'Apply Tier & Privileges'}
+                          </button>
+                        </div>
+                      )}
+
                       {/* Capabilities Checklist */}
                       <div className="space-y-2">
-                        <div className="text-[11px] font-bold text-zinc-300">OS Capabilities &amp; Permissions</div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-[11px] font-bold text-zinc-300">OS Capabilities &amp; Permissions</div>
+                          <label className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                            <span>Max Daily AI Requests (0 = unlimited):</span>
+                            <input
+                              type="number"
+                              min={0}
+                              disabled={isExecutiveArchitectUser(selectedUser)}
+                              value={editPrivileges.maxDailyAiRequests ?? 0}
+                              onChange={(e) =>
+                                setEditPrivileges({
+                                  ...editPrivileges,
+                                  maxDailyAiRequests: Math.max(0, parseInt(e.target.value || '0', 10) || 0)
+                                })
+                              }
+                              className="w-20 px-2 py-1 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-white font-mono"
+                            />
+                          </label>
+                        </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {CAPABILITY_LABELS.map((cap) => {
                             const lockedCap =
@@ -1170,6 +1544,829 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
                           {busy === `save:${selectedUser.id}` ? 'Saving...' : 'Save Privileges & Changes'}
                         </button>
                       </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* === TAB 2B: CUSTOM USER TIERS & PERMISSIONS === */}
+            {tab === 'tiers' && (
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+                <div className="xl:col-span-5 space-y-3">
+                  <div className="rounded-xl bg-zinc-900/80 border border-zinc-800 p-3.5 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-white">Default Signup Tier</span>
+                      <button
+                        type="button"
+                        onClick={startNewTierDraft}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 text-[11px] font-bold cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>New Tier</span>
+                      </button>
+                    </div>
+                    <select
+                      value={data.policy.defaultTierId || ''}
+                      onChange={(e) => handleUpdatePolicy({ defaultTierId: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-white"
+                    >
+                      {(data.tiers || []).map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name} ({t.isPublic ? 'Public' : 'Hidden'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    {(data.tiers || []).map((t) => (
+                      <div
+                        key={t.id}
+                        onClick={() => openTierEditor(t)}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition-colors ${
+                          selectedTierId === t.id
+                            ? 'bg-amber-500/12 border-amber-400/50'
+                            : 'bg-zinc-900/75 border-zinc-800 hover:border-zinc-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-white truncate">{t.name}</span>
+                              {t.isBuiltIn && (
+                                <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-[9px] font-mono text-zinc-400">
+                                  BUILT-IN
+                                </span>
+                              )}
+                              {data.policy.defaultTierId === t.id && (
+                                <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-[9px] font-mono text-emerald-300">
+                                  DEFAULT
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-zinc-400 truncate mt-0.5">{t.tagline || t.slug}</div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-xs font-mono font-bold text-cyan-300">
+                              {t.isMonetized
+                                ? `$${((t.pricing.monthlyUsdCents || t.pricing.oneTimeUsdCents) / 100).toFixed(0)}`
+                                : 'FREE'}
+                            </div>
+                            <div className="text-[10px] font-mono text-zinc-500">
+                              {t.isPublic ? 'Public' : 'Private'} · Rank {t.rank}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <form
+                  onSubmit={handleSaveTier}
+                  className="xl:col-span-7 rounded-2xl bg-zinc-900/85 border border-zinc-800 p-5 space-y-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-zinc-800">
+                    <h3 className="text-sm font-bold text-white">
+                      {selectedTierId === 'new' ? 'Create Custom Access Tier' : `Editing Tier: ${tierName}`}
+                    </h3>
+                    {selectedTierId !== 'new' &&
+                      !(data.tiers || []).find((x) => x.id === selectedTierId)?.isBuiltIn && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const target = (data.tiers || []).find((x) => x.id === selectedTierId);
+                            if (target) handleDeleteCustomTier(target);
+                          }}
+                          disabled={busy === `del-tier:${selectedTierId}`}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-200 hover:text-white text-xs font-bold cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete Tier</span>
+                        </button>
+                      )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10px] text-zinc-400 mb-1">Tier Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={tierName}
+                        onChange={(e) => setTierName(e.target.value)}
+                        placeholder="e.g. Sovereign Pro, Quant Lab, Enterprise"
+                        className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-zinc-400 mb-1">Base Role</label>
+                      <select
+                        value={tierBaseRole}
+                        onChange={(e) => setTierBaseRole(e.target.value as AuthRole)}
+                        className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white"
+                      >
+                        <option value="viewer">Viewer</option>
+                        <option value="collaborator">Collaborator</option>
+                        <option value="operator">Operator</option>
+                        {isArchitect && <option value="admin">Delegated Admin</option>}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10px] text-zinc-400 mb-1">Tagline</label>
+                      <input
+                        type="text"
+                        value={tierTagline}
+                        onChange={(e) => setTierTagline(e.target.value)}
+                        placeholder="Short summary displayed on upgrade cards"
+                        className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] text-zinc-400 mb-1">Badge</label>
+                        <select
+                          value={tierBadgeColor}
+                          onChange={(e) => setTierBadgeColor(e.target.value as TierBadgeColor)}
+                          className="w-full px-2 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white"
+                        >
+                          {TIER_BADGE_COLORS.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-zinc-400 mb-1">Rank</label>
+                        <input
+                          type="number"
+                          value={tierRank}
+                          onChange={(e) => setTierRank(parseInt(e.target.value || '0', 10) || 0)}
+                          className="w-full px-2 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] text-zinc-400 mb-1">Full Tier Description</label>
+                    <textarea
+                      rows={2}
+                      value={tierDescription}
+                      onChange={(e) => setTierDescription(e.target.value)}
+                      placeholder="Detailed scope & permission summary shown in plan comparisons..."
+                      className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-4 text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer text-zinc-200">
+                      <input
+                        type="checkbox"
+                        checked={tierIsPublic}
+                        onChange={(e) => setTierIsPublic(e.target.checked)}
+                        className="accent-cyan-500"
+                      />
+                      <span>Visible on Public Plans &amp; Upgrade Modal</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer text-zinc-200">
+                      <input
+                        type="checkbox"
+                        checked={tierIsMonetized}
+                        onChange={(e) => setTierIsMonetized(e.target.checked)}
+                        className="accent-amber-500"
+                      />
+                      <span>Monetized (Paid Fiat / Crypto Upgrade)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer text-amber-200">
+                      <input
+                        type="checkbox"
+                        checked={tierIsFounder}
+                        onChange={(e) => setTierIsFounder(e.target.checked)}
+                        className="accent-amber-400"
+                      />
+                      <span>Founder Tier (Grants Supporter Wall Posting Seat)</span>
+                    </label>
+                    {selectedTierId !== 'new' && (
+                      <label className="flex items-center gap-2 cursor-pointer text-zinc-200">
+                        <input
+                          type="checkbox"
+                          checked={tierSyncExistingUsers}
+                          onChange={(e) => setTierSyncExistingUsers(e.target.checked)}
+                          className="accent-emerald-500"
+                        />
+                        <span>Sync Changes to Current Subscribers</span>
+                      </label>
+                    )}
+                  </div>
+
+                  {tierIsMonetized && (
+                    <div className="rounded-xl bg-zinc-950 border border-zinc-800 p-3.5 space-y-3">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                        <div>
+                          <label className="block text-[10px] text-zinc-400 mb-1">Billing Mode</label>
+                          <select
+                            value={tierBillingMode}
+                            onChange={(e) => setTierBillingMode(e.target.value as TierBillingMode)}
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-xs text-white"
+                          >
+                            <option value="both">Monthly + Lifetime</option>
+                            <option value="monthly">Monthly Only</option>
+                            <option value="one-time">One-Time Only</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-zinc-400 mb-1">Monthly (USD $)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={tierMonthlyUsd}
+                            onChange={(e) => setTierMonthlyUsd(e.target.value)}
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-xs text-white font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-zinc-400 mb-1">One-Time (USD $)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={tierOneTimeUsd}
+                            onChange={(e) => setTierOneTimeUsd(e.target.value)}
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-xs text-white font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-zinc-400 mb-1">Crypto Base (USD $)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={tierCryptoUsd}
+                            onChange={(e) => setTierCryptoUsd(e.target.value)}
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-xs text-white font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-zinc-800/80">
+                        <div>
+                          <label className="block text-[10px] text-zinc-400 mb-1">
+                            Optional Stripe Price ID (monthly)
+                          </label>
+                          <input
+                            type="text"
+                            value={tierStripePriceId}
+                            onChange={(e) => setTierStripePriceId(e.target.value)}
+                            placeholder="price_1... (optional)"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-xs text-white font-mono"
+                          />
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-zinc-400 mb-1">Tier Accepted EVM Chains</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {SUPPORTED_BILLING_CHAINS.map((ch) => {
+                              const on = tierCryptoChains.includes(ch);
+                              return (
+                                <label
+                                  key={ch}
+                                  className={`px-2 py-1 rounded border text-[11px] cursor-pointer ${
+                                    on
+                                      ? 'bg-amber-500/15 border-amber-400/45 text-amber-200'
+                                      : 'bg-zinc-900 border-zinc-800 text-zinc-500'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={on}
+                                    onChange={(e) =>
+                                      setTierCryptoChains((prev) =>
+                                        e.target.checked ? [...prev, ch] : prev.filter((x) => x !== ch)
+                                      )
+                                    }
+                                    className="mr-1 accent-amber-500"
+                                  />
+                                  {ch}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-zinc-400 mb-1">Tier Accepted Crypto Tokens</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {SUPPORTED_BILLING_TOKENS.map((tok) => {
+                              const on = tierCryptoTokens.includes(tok);
+                              return (
+                                <label
+                                  key={tok}
+                                  className={`px-2 py-1 rounded border text-[11px] cursor-pointer ${
+                                    on
+                                      ? 'bg-emerald-500/15 border-emerald-400/45 text-emerald-200'
+                                      : 'bg-zinc-900 border-zinc-800 text-zinc-500'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={on}
+                                    onChange={(e) =>
+                                      setTierCryptoTokens((prev) =>
+                                        e.target.checked ? [...prev, tok] : prev.filter((x) => x !== tok)
+                                      )
+                                    }
+                                    className="mr-1 accent-emerald-500"
+                                  />
+                                  {tok}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-zinc-300">Tier OS Capabilities</span>
+                      <label className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                        <span>Daily AI Cap (0 = ∞):</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={tierPrivileges.maxDailyAiRequests ?? 0}
+                          onChange={(e) =>
+                            setTierPrivileges({
+                              ...tierPrivileges,
+                              maxDailyAiRequests: Math.max(0, parseInt(e.target.value || '0', 10) || 0)
+                            })
+                          }
+                          className="w-20 px-2 py-1 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-white font-mono"
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {CAPABILITY_LABELS.map((cap) => (
+                        <label
+                          key={cap.key}
+                          className={`flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl border text-xs ${
+                            tierPrivileges[cap.key]
+                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-100'
+                              : 'bg-zinc-950 border-zinc-800 text-zinc-400'
+                          }`}
+                        >
+                          <span>{cap.label}</span>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(tierPrivileges[cap.key])}
+                            onChange={(e) =>
+                              setTierPrivileges({ ...tierPrivileges, [cap.key]: e.target.checked })
+                            }
+                            className="accent-emerald-500"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-zinc-300">
+                        Tier Modules ({tierPrivileges.allModules ? 'ALL 49 MODULES' : `${tierPrivileges.allowedModules.length} selected`})
+                      </span>
+                      <label className="flex items-center gap-1.5 text-xs text-amber-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={tierPrivileges.allModules}
+                          onChange={(e) =>
+                            setTierPrivileges({ ...tierPrivileges, allModules: e.target.checked })
+                          }
+                          className="accent-amber-500"
+                        />
+                        <span>All Modules</span>
+                      </label>
+                    </div>
+                    {!tierPrivileges.allModules && (
+                      <div className="max-h-36 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-1.5 p-2 rounded-xl bg-zinc-950 border border-zinc-800">
+                        {ALL_SOVEREIGN_MODULES.filter((m) => m !== 'admin-command').map((mod) => {
+                          const checked = tierPrivileges.allowedModules.includes(mod);
+                          return (
+                            <label
+                              key={mod}
+                              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] cursor-pointer ${
+                                checked ? 'bg-cyan-500/15 text-cyan-200' : 'text-zinc-500 hover:text-zinc-300'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  const next = e.target.checked
+                                    ? [...tierPrivileges.allowedModules, mod]
+                                    : tierPrivileges.allowedModules.filter((x) => x !== mod);
+                                  setTierPrivileges({ ...tierPrivileges, allowedModules: next });
+                                }}
+                                className="accent-cyan-500"
+                              />
+                              <span className="truncate font-mono">{mod}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] text-zinc-400 mb-1">Feature Highlights (one per line)</label>
+                    <textarea
+                      rows={3}
+                      value={tierFeaturesText}
+                      onChange={(e) => setTierFeaturesText(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs text-white"
+                    />
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={busy === 'save-tier'}
+                      className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      {busy === 'save-tier' ? 'Saving Tier...' : selectedTierId === 'new' ? 'Create Custom Tier' : 'Update Tier Definition'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* === TAB 2C: MONETIZATION, STRIPE & CRYPTO TREASURY === */}
+            {tab === 'billing' && (
+              <div className="space-y-5">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="rounded-xl bg-zinc-900/80 border border-zinc-800 p-4">
+                    <div className="text-[11px] text-zinc-400 flex items-center justify-between">
+                      <span>Total Revenue</span>
+                      <CreditCard className="w-4 h-4 text-emerald-400" />
+                    </div>
+                    <div className="text-2xl font-bold text-white tabular-nums mt-1">
+                      ${billingLedger.totalRevenueUsd.toFixed(2)}
+                    </div>
+                    <div className="text-[11px] text-zinc-400 mt-1">{billingLedger.settledCount} settled receipts</div>
+                  </div>
+                  <div className="rounded-xl bg-zinc-900/80 border border-zinc-800 p-4">
+                    <div className="text-[11px] text-zinc-400 flex items-center justify-between">
+                      <span>Fiat (Stripe Card)</span>
+                      <Receipt className="w-4 h-4 text-cyan-400" />
+                    </div>
+                    <div className="text-2xl font-bold text-white tabular-nums mt-1">
+                      ${billingLedger.fiatRevenueUsd.toFixed(2)}
+                    </div>
+                    <div className="text-[11px] mt-1 font-mono text-zinc-400">
+                      {data.billingConfig?.stripeSecretConfigured ? 'STRIPE KEY READY' : 'ENV STRIPE_SECRET_KEY NEEDED'}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-zinc-900/80 border border-zinc-800 p-4">
+                    <div className="text-[11px] text-zinc-400 flex items-center justify-between">
+                      <span>On-Chain Crypto</span>
+                      <Coins className="w-4 h-4 text-amber-400" />
+                    </div>
+                    <div className="text-2xl font-bold text-white tabular-nums mt-1">
+                      ${billingLedger.cryptoRevenueUsd.toFixed(2)}
+                    </div>
+                    <div className="text-[11px] text-zinc-400 mt-1">Verified EVM JSON-RPC receipts</div>
+                  </div>
+                  <div className="rounded-xl bg-zinc-900/80 border border-zinc-800 p-4">
+                    <div className="text-[11px] text-zinc-400 flex items-center justify-between">
+                      <span>Treasury Wallet</span>
+                      <Wallet className="w-4 h-4 text-violet-400" />
+                    </div>
+                    <div className="text-xs font-mono text-white truncate mt-2">
+                      {editTreasuryAddress || 'Not configured'}
+                    </div>
+                    <div className="text-[11px] text-zinc-400 mt-1">Direct non-custodial settlement</div>
+                  </div>
+                </div>
+
+                <form
+                  onSubmit={handleSaveBillingConfig}
+                  className="rounded-2xl bg-zinc-900/85 border border-zinc-800 p-5 space-y-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-zinc-800">
+                    <div>
+                      <h3 className="text-sm font-bold text-white">Real Fiat (Stripe) &amp; On-Chain Crypto Treasury</h3>
+                      <p className="text-xs text-zinc-400 mt-0.5">
+                        Configure real payment rails. Upgrades never bypass cryptographic Stripe webhook/session checks or real EVM transaction verification.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 cursor-pointer">
+                      <div>
+                        <div className="text-xs font-bold text-white">Enable Stripe Fiat Checkout</div>
+                        <div className="text-[11px] text-zinc-400">
+                          Secret: {data.billingConfig?.stripeSecretConfigured ? 'Configured' : 'Missing STRIPE_SECRET_KEY'} · Webhook: {data.billingConfig?.stripeWebhookSecretConfigured ? 'Configured' : 'Optional'}
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={editFiatStripeEnabled}
+                        onChange={(e) => setEditFiatStripeEnabled(e.target.checked)}
+                        className="accent-cyan-500 w-4 h-4"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 cursor-pointer">
+                      <div>
+                        <div className="text-xs font-bold text-white">Enable Direct EVM Crypto Settlement</div>
+                        <div className="text-[11px] text-zinc-400">
+                          Users pay USDC or ETH directly to your Treasury address and verify txHash on-chain.
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={editCryptoEnabled}
+                        onChange={(e) => setEditCryptoEnabled(e.target.checked)}
+                        className="accent-amber-500 w-4 h-4"
+                      />
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] text-zinc-400 mb-1">
+                      Receiving EVM Treasury Address (0x...)
+                    </label>
+                    <input
+                      type="text"
+                      value={editTreasuryAddress}
+                      onChange={(e) => setEditTreasuryAddress(e.target.value)}
+                      placeholder="0x..."
+                      className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs font-mono text-white"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] font-bold text-zinc-300">Accepted EVM Chains</div>
+                      <div className="flex flex-wrap gap-2">
+                        {SUPPORTED_BILLING_CHAINS.map((ch) => {
+                          const on = editBillingChains.includes(ch);
+                          return (
+                            <label
+                              key={ch}
+                              className={`px-2.5 py-1 rounded-lg border text-xs cursor-pointer ${
+                                on
+                                  ? 'bg-amber-500/15 border-amber-400/45 text-amber-200'
+                                  : 'bg-zinc-950 border-zinc-800 text-zinc-400'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                onChange={(e) => {
+                                  setEditBillingChains((prev) =>
+                                    e.target.checked ? [...prev, ch] : prev.filter((x) => x !== ch)
+                                  );
+                                }}
+                                className="mr-1.5 accent-amber-500"
+                              />
+                              {ch}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] font-bold text-zinc-300">Accepted Tokens</div>
+                      <div className="flex flex-wrap gap-2">
+                        {SUPPORTED_BILLING_TOKENS.map((tok) => {
+                          const on = editBillingTokens.includes(tok);
+                          return (
+                            <label
+                              key={tok}
+                              className={`px-2.5 py-1 rounded-lg border text-xs cursor-pointer ${
+                                on
+                                  ? 'bg-emerald-500/15 border-emerald-400/45 text-emerald-200'
+                                  : 'bg-zinc-950 border-zinc-800 text-zinc-400'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                onChange={(e) => {
+                                  setEditBillingTokens((prev) =>
+                                    e.target.checked ? [...prev, tok] : prev.filter((x) => x !== tok)
+                                  );
+                                }}
+                                className="mr-1.5 accent-emerald-500"
+                              />
+                              {tok}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-zinc-800/80">
+                    <div>
+                      <label className="block text-[10px] text-zinc-400 mb-1">
+                        Update STRIPE_SECRET_KEY in AES-256-GCM Vault ({data.billingConfig?.stripeSecretConfigured ? 'Configured — enter new key to rotate' : 'Not configured'})
+                      </label>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={editStripeSecretInput}
+                        onChange={(e) => setEditStripeSecretInput(e.target.value)}
+                        placeholder="sk_live_... or sk_test_... (write-only)"
+                        className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs font-mono text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-zinc-400 mb-1">
+                        Update STRIPE_WEBHOOK_SECRET in Vault ({data.billingConfig?.stripeWebhookSecretConfigured ? 'Configured — enter new secret to rotate' : 'Not configured'})
+                      </label>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={editStripeWebhookSecretInput}
+                        onChange={(e) => setEditStripeWebhookSecretInput(e.target.value)}
+                        placeholder="whsec_... (write-only)"
+                        className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-xs font-mono text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <div className="text-zinc-400">
+                      Stripe Webhook Endpoint:{' '}
+                      <code className="text-cyan-300 font-mono">
+                        {typeof window !== 'undefined' ? `${window.location.origin}/api/billing/stripe/webhook` : '/api/billing/stripe/webhook'}
+                      </code>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const url = `${window.location.origin}/api/billing/stripe/webhook`;
+                        navigator.clipboard?.writeText(url).catch(() => {});
+                        notify(true, 'Copied Stripe webhook URL to clipboard.');
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 cursor-pointer"
+                    >
+                      Copy Webhook URL
+                    </button>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={busy === 'save-billing'}
+                      className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      {busy === 'save-billing' ? 'Saving...' : 'Save Monetization Config'}
+                    </button>
+                  </div>
+                </form>
+
+                {/* Settled Payment Ledger */}
+                <div className="rounded-2xl bg-zinc-900/80 border border-zinc-800 p-5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300">
+                      Settled Upgrade &amp; Payment Ledger ({billingLedger.records.length})
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleExportBillingLedger('csv')}
+                        disabled={billingLedger.records.length === 0}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-zinc-700 text-[11px] text-zinc-200 cursor-pointer disabled:opacity-40"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Export CSV</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleExportBillingLedger('json')}
+                        disabled={billingLedger.records.length === 0}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-950 hover:bg-zinc-800 border border-zinc-700 text-[11px] text-zinc-200 cursor-pointer disabled:opacity-40"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Export JSON</span>
+                      </button>
+                    </div>
+                  </div>
+                  {billingLedger.records.length === 0 ? (
+                    <div className="text-xs text-zinc-500 py-4 text-center">
+                      No billing transactions or tier grants recorded yet.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b border-zinc-800 text-[10px] font-mono uppercase text-zinc-400">
+                            <th className="py-2 pr-3">Date</th>
+                            <th className="py-2 pr-3">Account</th>
+                            <th className="py-2 pr-3">Tier</th>
+                            <th className="py-2 pr-3">Rail</th>
+                            <th className="py-2 pr-3">Amount</th>
+                            <th className="py-2 pr-3">Status</th>
+                            <th className="py-2">Reference</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-800/70">
+                          {billingLedger.records.map((rec) => (
+                            <tr key={rec.id} className="hover:bg-zinc-800/40">
+                              <td className="py-2 pr-3 font-mono text-[11px] text-zinc-400">
+                                {new Date(rec.createdAt).toLocaleString()}
+                              </td>
+                              <td className="py-2 pr-3 font-semibold text-white">@{rec.username}</td>
+                              <td className="py-2 pr-3 text-cyan-300">{rec.tierName}</td>
+                              <td className="py-2 pr-3 font-mono text-[11px] text-zinc-300">{rec.method}</td>
+                              <td className="py-2 pr-3 font-mono text-emerald-300 tabular-nums">
+                                ${rec.amountUsd.toFixed(2)} {rec.nativeAmount ? `(${rec.nativeAmount} ${rec.currency})` : ''}
+                              </td>
+                              <td className="py-2 pr-3 font-mono text-[10px] uppercase text-zinc-300">
+                                {rec.status}
+                              </td>
+                              <td className="py-2 font-mono text-[10px] text-zinc-400 truncate max-w-[180px]">
+                                {rec.referenceId}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Supporter & Founder Wall Moderation & Feedback Triage */}
+                <div className="rounded-2xl bg-zinc-900/80 border border-zinc-800 p-5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300">
+                        Supporter &amp; Founder Wall Feed ({supporterBoardEntries.length})
+                      </h3>
+                      <p className="text-[11px] text-zinc-400 mt-0.5">
+                        Verified donations ({supporterBoardSummary?.donationCount || 0} · ${(supporterBoardSummary?.totalDonationsUsd || 0).toFixed(2)}) &amp; Founder entries · {supporterBoardSummary?.critiqueCount || 0} critiques · {supporterBoardSummary?.suggestionCount || 0} suggestions
+                      </p>
+                    </div>
+                  </div>
+                  {supporterBoardEntries.length === 0 ? (
+                    <div className="text-xs text-zinc-500 py-4 text-center">
+                      No supporter or founder wall messages posted yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                      {supporterBoardEntries.map((entry) => (
+                        <div
+                          key={entry.id}
+                          className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex items-start justify-between gap-3 text-xs"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-white">
+                                {entry.isAnonymous ? 'Anonymous Backer' : entry.authorDisplayName}
+                              </span>
+                              <span className="font-mono text-[11px] text-amber-300 tabular-nums">
+                                {entry.entryKind === 'donation' ? `Donation $${entry.amountUsd.toFixed(2)}` : entry.tierName || 'Founder Tier'}
+                              </span>
+                              <span className="font-mono text-[11px] uppercase text-zinc-400">
+                                {entry.feedbackCategory}
+                              </span>
+                              <span className="font-mono text-[10px] text-zinc-500">
+                                {new Date(entry.createdAt).toUTCString()}
+                              </span>
+                            </div>
+                            <p className="text-zinc-300 break-words whitespace-pre-wrap">{entry.message || '(no message)'}</p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={busy === `del-wall:${entry.id}`}
+                            onClick={async () => {
+                              setBusy(`del-wall:${entry.id}`);
+                              try {
+                                await adminDeleteSupporterBoardEntry(entry.id);
+                                notify(true, 'Removed Supporter Wall entry.');
+                                await loadCommandCenter();
+                              } catch (err: any) {
+                                notify(false, err?.message || 'Failed to remove entry');
+                              } finally {
+                                setBusy(null);
+                              }
+                            }}
+                            className="p-1.5 rounded-lg bg-zinc-900 hover:bg-rose-900/40 text-zinc-400 hover:text-rose-200 border border-zinc-800 shrink-0 cursor-pointer"
+                            title="Remove entry (preserves payment ledger & audit trail)"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -1529,6 +2726,20 @@ export const AdminSovereignCommandCenter: React.FC<AdminSovereignCommandCenterPr
               <option value="collaborator">Collaborator</option>
               <option value="viewer">Viewer</option>
             </select>
+            {(data?.tiers?.length || 0) > 0 && (
+              <select
+                value={newUserTierId}
+                onChange={(e) => setNewUserTierId(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-700 text-xs text-white"
+              >
+                <option value="">Use Default Tier ({data?.tiers?.find((t) => t.id === data.policy.defaultTierId)?.name || 'Standard'})</option>
+                {(data?.tiers || []).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    Tier: {t.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"

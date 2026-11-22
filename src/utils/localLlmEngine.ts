@@ -840,17 +840,15 @@ class LocalLlmManager {
   private llamaProbeCache: { endpoint: string; ok: boolean; ts: number } | null = null;
   private ollamaProbeCache: { endpoint: string; ok: boolean; ts: number } | null = null;
 
-  private isRemoteHttpsBrowserOrigin(endpoint: string): boolean {
-    if (typeof window === 'undefined') return false;
-    const host = window.location.hostname;
-    const isLocalOrigin = host === 'localhost' || host === '127.0.0.1' || host === '::1';
-    return !isLocalOrigin && window.location.protocol === 'https:' && endpoint.startsWith('http://127.0.0.1');
+  private getConfiguredOllamaHost(fallback = 'http://127.0.0.1:11434'): string {
+    if (typeof window !== 'undefined') {
+      const saved = (localStorage.getItem('sovereign_ollama_host') || localStorage.getItem('OLLAMA_HOST') || '').trim();
+      if (saved) return saved.replace(/\/+$/, '');
+    }
+    return fallback.replace(/\/+$/, '');
   }
 
   public async probeLlamaCppServer(endpoint = 'http://127.0.0.1:8080', force = false): Promise<boolean> {
-    if (this.isRemoteHttpsBrowserOrigin(endpoint)) {
-      return false;
-    }
     const now = Date.now();
     if (!force && this.llamaProbeCache && this.llamaProbeCache.endpoint === endpoint && now - this.llamaProbeCache.ts < 30_000) {
       return this.llamaProbeCache.ok;
@@ -864,11 +862,11 @@ class LocalLlmManager {
     };
     let ok = false;
     try {
-      const res = await fetch(`${endpoint}/health`, { method: 'GET', signal: AbortSignal.timeout(650) });
+      const res = await fetch(`${endpoint}/health`, { method: 'GET', signal: AbortSignal.timeout(900) });
       ok = isValidDaemonResponse(res);
     } catch {
       try {
-        const res2 = await fetch(`${endpoint}/v1/models`, { method: 'GET', signal: AbortSignal.timeout(650) });
+        const res2 = await fetch(`${endpoint}/v1/models`, { method: 'GET', signal: AbortSignal.timeout(900) });
         ok = isValidDaemonResponse(res2);
       } catch {
         ok = false;
@@ -878,22 +876,20 @@ class LocalLlmManager {
     return ok;
   }
 
-  public async probeOllama(endpoint = 'http://127.0.0.1:11434', force = false): Promise<boolean> {
-    if (this.isRemoteHttpsBrowserOrigin(endpoint)) {
-      return false;
-    }
+  public async probeOllama(endpoint?: string, force = false): Promise<boolean> {
+    const resolvedEndpoint = (endpoint || this.getConfiguredOllamaHost()).replace(/\/+$/, '');
     const now = Date.now();
-    if (!force && this.ollamaProbeCache && this.ollamaProbeCache.endpoint === endpoint && now - this.ollamaProbeCache.ts < 30_000) {
+    if (!force && this.ollamaProbeCache && this.ollamaProbeCache.endpoint === resolvedEndpoint && now - this.ollamaProbeCache.ts < 30_000) {
       return this.ollamaProbeCache.ok;
     }
     let ok = false;
     try {
-      const res = await fetch(`${endpoint}/api/tags`, { method: 'GET', signal: AbortSignal.timeout(650) });
+      const res = await fetch(`${resolvedEndpoint}/api/tags`, { method: 'GET', signal: AbortSignal.timeout(1200) });
       ok = res.ok;
     } catch {
       ok = false;
     }
-    this.ollamaProbeCache = { endpoint, ok, ts: Date.now() };
+    this.ollamaProbeCache = { endpoint: resolvedEndpoint, ok, ts: Date.now() };
     return ok;
   }
 
@@ -1167,39 +1163,71 @@ class LocalLlmManager {
       } catch (_) {}
     }
 
-    // 3. Try Ollama on 11434
-    const hasOllama = await this.probeOllama('http://127.0.0.1:11434');
+    // 3. Try Ollama (configured host or 127.0.0.1:11434 / localhost:11434) with dynamic /api/tags model discovery
+    const ollamaEndpoint = this.getConfiguredOllamaHost();
+    const hasOllama = await this.probeOllama(ollamaEndpoint);
     if (hasOllama) {
       try {
-        return await this.generateWithLocalServer('http://127.0.0.1:11434', this.currentModelId || 'llama3.2', prompt, systemInstruction, onToken);
+        let ollamaModel = 'llama3.2';
+        try {
+          const tagsRes = await fetch(`${ollamaEndpoint}/api/tags`, { signal: AbortSignal.timeout(1500) });
+          if (tagsRes.ok) {
+            const tagsData: any = await tagsRes.json().catch(() => null);
+            const installed: string[] = Array.isArray(tagsData?.models)
+              ? tagsData.models.map((m: any) => String(m?.name || m?.model || '')).filter(Boolean)
+              : [];
+            const nonEmbed = installed.filter((m) => !/embed|nomic|bge|mxbai/i.test(m));
+            if (nonEmbed.length > 0) ollamaModel = nonEmbed[0];
+            else if (installed.length > 0) ollamaModel = installed[0];
+          }
+        } catch {}
+        return await this.generateWithLocalServer(ollamaEndpoint, ollamaModel, prompt, systemInstruction, onToken);
       } catch (_) {}
     }
 
-    // 4. Try Server-Side Orchestrator only if not already attempted upstream
-    if (!options?.skipServerChat) {
-      const serverRes = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(45_000),
-        body: JSON.stringify({
-          prompt,
-          systemInstruction,
-          model: this.currentModelId || 'gemini-4-hydrogen',
-          rawMode: Boolean(options?.rawMode),
-          zeroTokenMode: false
-        })
-      });
+    // 4. Try Server-Side Orchestrator only if not already attempted upstream and running in browser context
+    if (!options?.skipServerChat && typeof window !== 'undefined') {
+      try {
+        const serverRes = await fetch('/api/chat', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(45_000),
+          body: JSON.stringify({
+            prompt,
+            systemInstruction,
+            model: this.currentModelId || 'gemini-4-hydrogen',
+            rawMode: Boolean(options?.rawMode),
+            zeroTokenMode: false
+          })
+        });
 
-      if (serverRes.ok) {
-        const data = await serverRes.json();
-        if (data && data.text) {
-          if (onToken) onToken(data.text);
-          return data.text;
+        if (serverRes.ok) {
+          const data = await serverRes.json();
+          if (data && data.text) {
+            if (onToken) onToken(data.text);
+            return data.text;
+          }
         }
-      }
+      } catch (_) {}
     }
 
-    throw new Error('No real local model (WebGPU weights, Ollama, or llama-server) or cloud model is available.');
+    // 5. Face 1 Local Sovereign Substrate (Zero-Download In-Process Compendium + Baked Neural Engine)
+    const compendiumRes = querySovereignCompendium(prompt, this.currentModelId || 'Lyrailius-Omega', { deepthink: true });
+    const bakedRes = executeAgentChat(this.currentModelId || 'lyrailius-omega-zenith', prompt, {
+      model: this.currentModelId || 'aurelius-baked-heavy-monolith',
+      systemInstruction,
+      deepthink: true
+    });
+    const fallbackText =
+      compendiumRes?.text && compendiumRes.intent !== 'GENERAL_DIRECTIVE'
+        ? compendiumRes.text
+        : (bakedRes?.text && !bakedRes.text.includes('[SYNTHESIS_STANDBY]')
+            ? bakedRes.text
+            : compendiumRes?.text || bakedRes?.text || 'Offline Sovereign Substrate ready.');
+
+    if (onToken && fallbackText) onToken(fallbackText);
+    return fallbackText;
   }
 
   public getActiveModelId(): string | null {

@@ -35,7 +35,8 @@ import {
   Scale,
   Copy,
   Download,
-  Sliders
+  Sliders,
+  CreditCard
 } from 'lucide-react';
 import { auth, googleProvider, signInWithPopup, signOut, measureFirestoreLatency, type User } from '../firebase';
 import { SystemManualModal } from './SystemManualModal';
@@ -50,7 +51,7 @@ import {
   JHAMMERZ_COMBINED_FULL_LICENSE
 } from '../constants/jhammerzLicense';
 import type { ModuleType } from '../types';
-import type { AuthUserPublic } from '../types/auth';
+import { isExecutiveArchitectUser, type AuthUserPublic } from '../types/auth';
 
 export interface ConnectedAccount {
   email: string;
@@ -89,6 +90,7 @@ interface HeaderProps {
   authUser?: AuthUserPublic | null;
   onOpenAuth?: () => void;
   onOpenUserPrivileges?: () => void;
+  onOpenBilling?: () => void;
   onLogoutAccount?: () => void;
   firebaseOnline: boolean;
   onOpenCommandPalette?: () => void;
@@ -110,6 +112,7 @@ export const Header: React.FC<HeaderProps> = ({
   authUser = null,
   onOpenAuth,
   onOpenUserPrivileges,
+  onOpenBilling,
   onLogoutAccount,
   firebaseOnline,
   onOpenCommandPalette,
@@ -117,7 +120,7 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleDevMode,
   onSelectModule,
   activeModule = 'chat',
-  activeAccountEmail = 'joshualhamilton17@gmail.com',
+  activeAccountEmail = '',
   onSwitchAccountEmail,
   onToggleMobileNav,
   isTelemetryOpen = false,
@@ -270,8 +273,15 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
+  const isArchitect = isExecutiveArchitectUser(authUser);
   const canManageUsers = Boolean(authUser && (authUser.role === 'admin' || authUser.privileges?.canManageUsers));
-  const accountShortName = authUser?.displayName || authUser?.username || user?.displayName || activeAccountEmail.split('@')[0];
+  const resolvedEmail = authUser?.email || activeAccountEmail || '';
+  const accountShortName =
+    authUser?.displayName ||
+    authUser?.username ||
+    user?.displayName ||
+    (resolvedEmail ? resolvedEmail.split('@')[0] : 'Account');
+  const activeTierLabel = authUser?.tierName || (isArchitect ? 'Executive Architect' : authUser?.role || 'Standard');
 
   return (
     <header
@@ -314,11 +324,11 @@ export const Header: React.FC<HeaderProps> = ({
               <Cpu className={compactOsTopBar ? 'w-3 h-3' : 'w-3.5 h-3.5 sm:w-4 sm:h-4'} />
             </div>
             <span
-              className={`font-bold tracking-tight text-zinc-100 truncate ${
+              className={`font-bold tracking-tight text-zinc-100 truncate max-w-[130px] sm:max-w-none ${
                 compactOsTopBar ? 'text-[11px] sm:text-xs' : 'text-xs sm:text-sm'
               }`}
             >
-              {compactOsTopBar ? 'Lysander Sovereign OS' : 'Lysander Genesis Orchestrator'}
+              {compactOsTopBar ? 'Lysander OS' : 'Lysander Genesis Orchestrator'}
             </span>
           </button>
 
@@ -467,6 +477,22 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </div>
 
+          {/* Tier / Billing Upgrade CTA for standard users or when Billing modal wired */}
+          {authUser && onOpenBilling && (
+            <button
+              type="button"
+              onClick={onOpenBilling}
+              className={`flex items-center gap-1 border border-cyan-500/35 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-200 transition-colors cursor-pointer whitespace-nowrap ${
+                compactOsTopBar ? 'rounded-md px-1.5 py-0.5 text-[10px]' : 'rounded-lg px-2 sm:px-2.5 py-1.5 text-xs gap-1.5'
+              }`}
+              title={`Current Plan: ${activeTierLabel} · Invest, Donate & Supporter Wall`}
+              aria-label="Plans, Donations and Supporter Wall"
+            >
+              <CreditCard className={`${compactOsTopBar ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-cyan-400 shrink-0`} />
+              <span className="hidden md:inline font-semibold">{activeTierLabel}</span>
+            </button>
+          )}
+
           {/* Admin User & Custom Privileges Manager Shortcut */}
           {canManageUsers && onOpenUserPrivileges && (
             <button
@@ -520,8 +546,8 @@ export const Header: React.FC<HeaderProps> = ({
               aria-label="Toggle System Telemetry HUD"
             >
               <Activity className={`${compactOsTopBar ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-emerald-400 shrink-0`} />
-              <span className="font-semibold tabular-nums">
-                UID 0<span className="hidden sm:inline"> · Ring -3</span>
+              <span className="hidden xs:inline sm:inline font-semibold tabular-nums">
+                UID 0<span className="hidden md:inline"> · Ring -3</span>
               </span>
             </button>
           )}
@@ -568,7 +594,7 @@ export const Header: React.FC<HeaderProps> = ({
             title="Official MIT & JHammerZ Custom Sovereign License Charter (jhammerz.github.io)"
           >
             <Scale className={`${compactOsTopBar ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-amber-400 shrink-0`} />
-            <span className="font-semibold">MIT + JHammerZ License</span>
+            <span className="hidden sm:inline font-semibold">MIT + JHammerZ License</span>
           </button>
 
           {!compactOsTopBar && (
@@ -648,9 +674,9 @@ export const Header: React.FC<HeaderProps> = ({
                     </div>
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-zinc-400">
-                    <span className="truncate font-mono">{activeAccountEmail}</span>
+                    <span className="truncate font-mono">{resolvedEmail || `@${authUser?.username || 'local'}`}</span>
                     <span className={firebaseOnline ? 'text-emerald-400' : 'text-amber-400'}>
-                      {firebaseOnline ? 'Synced' : 'Local'}
+                      {activeTierLabel}
                     </span>
                   </div>
                 </div>
@@ -713,23 +739,43 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 )}
 
-                {/* Federated Accounts Modal */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAccountMenu(false);
-                    setShowAccountsModal(true);
-                  }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs text-zinc-200 hover:bg-zinc-800 transition-colors cursor-pointer"
-                >
-                  <span className="flex items-center gap-2">
-                    <Users className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Federated Identities</span>
-                  </span>
-                  <span className="font-mono text-[10px] text-cyan-400 tabular-nums">
-                    {FEDERATED_ACCOUNTS.length}
-                  </span>
-                </button>
+                {/* Billing & Plan Tier Modal */}
+                {onOpenBilling && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAccountMenu(false);
+                      onOpenBilling();
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs text-cyan-200 hover:bg-zinc-800 transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2">
+                      <CreditCard className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Plans, Donations &amp; Wall</span>
+                    </span>
+                    <span className="font-mono text-[10px] text-cyan-400">{activeTierLabel}</span>
+                  </button>
+                )}
+
+                {/* Federated Accounts Modal (Strictly Executive Architect Only — never leaked to standard users) */}
+                {isArchitect && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAccountMenu(false);
+                      setShowAccountsModal(true);
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs text-zinc-200 hover:bg-zinc-800 transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Users className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Federated Identities</span>
+                    </span>
+                    <span className="font-mono text-[10px] text-cyan-400 tabular-nums">
+                      {FEDERATED_ACCOUNTS.length}
+                    </span>
+                  </button>
+                )}
 
                 {/* JHammerZ MIT + Custom Sovereign License Modal */}
                 <button
@@ -815,8 +861,8 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Sovereign Federated Accounts Modal */}
-      {showAccountsModal && (
+      {/* Sovereign Federated Accounts Modal (Executive Architect Only) */}
+      {isArchitect && showAccountsModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4"
           onClick={(e) => {
