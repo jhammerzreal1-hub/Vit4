@@ -840,7 +840,17 @@ class LocalLlmManager {
   private llamaProbeCache: { endpoint: string; ok: boolean; ts: number } | null = null;
   private ollamaProbeCache: { endpoint: string; ok: boolean; ts: number } | null = null;
 
+  private isRemoteHttpsBrowserOrigin(endpoint: string): boolean {
+    if (typeof window === 'undefined') return false;
+    const host = window.location.hostname;
+    const isLocalOrigin = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+    return !isLocalOrigin && window.location.protocol === 'https:' && endpoint.startsWith('http://127.0.0.1');
+  }
+
   public async probeLlamaCppServer(endpoint = 'http://127.0.0.1:8080', force = false): Promise<boolean> {
+    if (this.isRemoteHttpsBrowserOrigin(endpoint)) {
+      return false;
+    }
     const now = Date.now();
     if (!force && this.llamaProbeCache && this.llamaProbeCache.endpoint === endpoint && now - this.llamaProbeCache.ts < 30_000) {
       return this.llamaProbeCache.ok;
@@ -869,6 +879,9 @@ class LocalLlmManager {
   }
 
   public async probeOllama(endpoint = 'http://127.0.0.1:11434', force = false): Promise<boolean> {
+    if (this.isRemoteHttpsBrowserOrigin(endpoint)) {
+      return false;
+    }
     const now = Date.now();
     if (!force && this.ollamaProbeCache && this.ollamaProbeCache.endpoint === endpoint && now - this.ollamaProbeCache.ts < 30_000) {
       return this.ollamaProbeCache.ok;
@@ -888,8 +901,8 @@ class LocalLlmManager {
     modelId: string,
     onProgress?: (report: ModelProgressReport) => void
   ): Promise<any> {
-    if ((this.engine || this.isFallbackEngine) && this.currentModelId === modelId) {
-      return this.engine || true;
+    if (this.engine && this.currentModelId === modelId) {
+      return this.engine;
     }
 
     if (this.isInitializing) {

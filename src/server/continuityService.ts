@@ -69,6 +69,19 @@ export interface OrchestratorVoiceDockSettings {
   micPermissionGrantedAt?: string;
   cameraPermissionGranted?: boolean;
   cameraPermissionGrantedAt?: string;
+  geoPermissionGranted?: boolean;
+  geoPermissionGrantedAt?: string;
+  notifPermissionGranted?: boolean;
+  notifPermissionGrantedAt?: string;
+  clipboardPermissionGranted?: boolean;
+  clipboardPermissionGrantedAt?: string;
+  hardwareSwitches?: {
+    microphone?: boolean;
+    camera?: boolean;
+    geolocation?: boolean;
+    notifications?: boolean;
+    clipboard?: boolean;
+  };
   peerExploreEnabled?: boolean;
   autoArchiveVault?: boolean;
   expanded?: boolean;

@@ -58,6 +58,7 @@ export type ModuleType =
   | 'transfer-hub'
   | 'batch-processor'
   | 'lora-mesh'
+  | 'neural-voice-distillery'
   | 'admin-command';
 
 export type ChatModel =

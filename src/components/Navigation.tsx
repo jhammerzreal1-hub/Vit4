@@ -45,6 +45,7 @@ import {
   Network,
   Wrench,
   Download,
+  Sparkles,
   Key,
   Phone,
   ListTodo,
@@ -604,6 +605,17 @@ export const ALL_MODULES: ModuleRegistryItem[] = [
     accentColor: 'text-amber-400',
     activeBg: 'bg-amber-500/12 border-amber-500/35 text-amber-200',
     description: 'Install games, Steam, Discord, native software, apt/brew/winget/npm/pip & direct URL binaries'
+  },
+  {
+    id: 'neural-voice-distillery',
+    label: 'Neural Voice Distillery',
+    shortLabel: 'Voice Purity',
+    group: 'creative',
+    category: 'creative',
+    icon: Sparkles,
+    accentColor: 'text-cyan-400',
+    activeBg: 'bg-cyan-500/12 border-cyan-500/35 text-cyan-200',
+    description: 'Autonomous 100% human-purity voice synthesis, formant distillation, and zero-robot artifact testing'
   }
 ];
 

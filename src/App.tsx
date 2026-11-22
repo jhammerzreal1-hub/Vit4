@@ -111,6 +111,7 @@ const ToolShedModule = lazyWithRetry(() => import('./components/ToolShedModule')
 const AutonomySupervisorModule = lazyWithRetry(() => import('./components/AutonomySupervisorModule').then(m => ({ default: m.AutonomySupervisorModule })), 'AutonomySupervisorModule');
 const AgentDevKitModule = lazyWithRetry(() => import('./components/AgentDevKitModule').then(m => ({ default: m.AgentDevKitModule })), 'AgentDevKitModule');
 const AIGenesisDistilleryModule = lazyWithRetry(() => import('./components/AIGenesisDistilleryModule').then(m => ({ default: m.AIGenesisDistilleryModule })), 'AIGenesisDistilleryModule');
+const NeuralVoiceDistilleryModule = lazyWithRetry(() => import('./components/NeuralVoiceDistilleryModule').then(m => ({ default: m.NeuralVoiceDistilleryModule })), 'NeuralVoiceDistilleryModule');
 const WorldLoadStartScreen = lazyWithRetry(() => import('./components/WorldLoadStartScreen').then(m => ({ default: m.WorldLoadStartScreen })), 'WorldLoadStartScreen');
 const UniversalEmulatorModderModule = lazyWithRetry(() => import('./components/UniversalEmulatorModderModule').then(m => ({ default: m.UniversalEmulatorModderModule })), 'UniversalEmulatorModderModule');
 const MacroTelemetryModule = lazyWithRetry(() => import('./components/MacroTelemetryModule').then(m => ({ default: m.MacroTelemetryModule })), 'MacroTelemetryModule');
@@ -2009,6 +2010,196 @@ export default function App() {
         if (isChatDetached) setChatPipMinimized(false);
         showOsToast(`Shell $ ${detail.command || ''}`);
         break;
+      case 'ui_click':
+      case 'human_click': {
+        if (targetMod) {
+          handleSelectOSModule(targetMod);
+        }
+        setTimeout(() => {
+          const sel = detail.selector ? String(detail.selector).trim() : '';
+          const txt = String(detail.targetText || detail.text || detail.label || '').trim().toLowerCase();
+          let el: HTMLElement | null = null;
+          if (sel) {
+            try {
+              el = document.querySelector(sel) as HTMLElement | null;
+            } catch {}
+          }
+          if (!el && txt) {
+            const candidates = Array.from(
+              document.querySelectorAll('button, a, [role="button"], [role="tab"], input[type="submit"], label')
+            ) as HTMLElement[];
+            el =
+              candidates.find((c) => (c.innerText || c.textContent || c.getAttribute('aria-label') || c.getAttribute('title') || '').trim().toLowerCase() === txt) ||
+              candidates.find((c) => (c.innerText || c.textContent || c.getAttribute('aria-label') || c.getAttribute('title') || '').trim().toLowerCase().includes(txt)) ||
+              null;
+          }
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const prevOutline = el.style.outline;
+            const prevShadow = el.style.boxShadow;
+            el.style.outline = '2px solid #f59e0b';
+            el.style.boxShadow = '0 0 18px rgba(245, 158, 11, 0.75)';
+            setTimeout(() => {
+              if (el) {
+                el.style.outline = prevOutline;
+                el.style.boxShadow = prevShadow;
+              }
+            }, 900);
+            el.focus();
+            el.click();
+            showOsToast(`Agent Clicked: ${(el.innerText || el.getAttribute('aria-label') || sel || 'Element').slice(0, 36)}`);
+          } else {
+            showOsToast(`UI Target Ready: ${sel || txt || 'Screen Active'}`);
+          }
+        }, 60);
+        break;
+      }
+      case 'ui_type':
+      case 'human_type': {
+        if (targetMod) {
+          handleSelectOSModule(targetMod);
+        }
+        setTimeout(() => {
+          const sel = detail.selector ? String(detail.selector).trim() : '';
+          const hint = String(detail.placeholder || detail.label || detail.targetText || '').trim().toLowerCase();
+          const val = String(detail.text ?? detail.value ?? detail.inputValue ?? '');
+          let inputEl: HTMLInputElement | HTMLTextAreaElement | HTMLElement | null = null;
+          if (sel) {
+            try {
+              inputEl = document.querySelector(sel) as HTMLElement | null;
+            } catch {}
+          }
+          if (!inputEl && hint) {
+            const inputs = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"]')) as HTMLElement[];
+            inputEl =
+              inputs.find((i) => {
+                const ph = (i.getAttribute('placeholder') || i.getAttribute('aria-label') || i.getAttribute('name') || '').toLowerCase();
+                return ph.includes(hint);
+              }) || null;
+          }
+          if (!inputEl) {
+            inputEl = (document.activeElement as HTMLElement) || (document.querySelector('textarea, input[type="text"]') as HTMLElement | null);
+          }
+          if (inputEl) {
+            inputEl.focus();
+            if (inputEl instanceof HTMLInputElement || inputEl instanceof HTMLTextAreaElement) {
+              const proto = inputEl instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+              const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+              if (nativeSetter) {
+                nativeSetter.call(inputEl, val);
+              } else {
+                inputEl.value = val;
+              }
+              inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+              inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+            } else {
+              inputEl.textContent = val;
+              inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            if (detail.submit) {
+              inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+            }
+            showOsToast(`Agent Typed: "${val.slice(0, 32)}"`);
+          }
+        }, 60);
+        break;
+      }
+      case 'ui_keypress':
+      case 'human_keypress': {
+        const keyStr = String(detail.key || 'Enter');
+        const activeEl = (document.activeElement as HTMLElement) || document.body;
+        activeEl.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: keyStr,
+            code: keyStr,
+            ctrlKey: Boolean(detail.ctrlKey || keyStr.toLowerCase().includes('control+')),
+            shiftKey: Boolean(detail.shiftKey || keyStr.toLowerCase().includes('shift+')),
+            altKey: Boolean(detail.altKey || keyStr.toLowerCase().includes('alt+')),
+            metaKey: Boolean(detail.metaKey || keyStr.toLowerCase().includes('meta+')),
+            bubbles: true
+          })
+        );
+        showOsToast(`Agent Keypress: ${keyStr}`);
+        break;
+      }
+      case 'ui_scroll':
+      case 'human_scroll': {
+        const dir = String(detail.direction || 'down').toLowerCase();
+        const amount = Number(detail.amount || 420);
+        const container =
+          (detail.selector ? (document.querySelector(detail.selector) as HTMLElement | null) : null) ||
+          (document.querySelector('[data-os-scroll-container="true"], main, .overflow-y-auto') as HTMLElement | null) ||
+          document.documentElement;
+        if (container) {
+          if (dir === 'top') container.scrollTo({ top: 0, behavior: 'smooth' });
+          else if (dir === 'bottom') container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+          else container.scrollBy({ top: dir === 'up' ? -amount : amount, behavior: 'smooth' });
+        }
+        showOsToast(`Agent Scrolled: ${dir.toUpperCase()}`);
+        break;
+      }
+      case 'clipboard_copy':
+      case 'clipboard_write': {
+        const clipText = String(detail.text || detail.content || '');
+        if (clipText && navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(clipText).catch(() => {});
+        }
+        const currentCustom = loadOSCustomizationProfile();
+        const newEntry = {
+          id: `clip-${Date.now()}`,
+          text: clipText,
+          label: clipText.slice(0, 40) || 'Agent Clipboard',
+          timestamp: new Date().toLocaleTimeString()
+        };
+        saveOSCustomizationProfile({
+          ...currentCustom,
+          clipboardHistory: [newEntry, ...(currentCustom.clipboardHistory || []).filter((x) => x.text !== clipText)].slice(0, 20)
+        });
+        showOsToast(`Copied to OS Clipboard (${clipText.length} chars)`);
+        break;
+      }
+      case 'switch_workspace': {
+        const wsNum = Math.max(1, Math.min(4, Number(detail.workspace || detail.workspaceId || 1))) as 1 | 2 | 3 | 4;
+        const currentCustom = loadOSCustomizationProfile();
+        saveOSCustomizationProfile({ ...currentCustom, activeWorkspace: wsNum });
+        showOsToast(`Switched to Workspace #${wsNum}`);
+        break;
+      }
+      case 'set_theme': {
+        if (detail.themeId) {
+          const currentCustom = loadOSCustomizationProfile();
+          saveOSCustomizationProfile({ ...currentCustom, themeId: String(detail.themeId) as any });
+          showOsToast(`OS Theme -> ${detail.themeId}`);
+        }
+        break;
+      }
+      case 'export_download': {
+        const filename = String(detail.filename || `sovereign-export-${Date.now()}.txt`);
+        const content = String(detail.content || detail.text || '');
+        const mimeType = String(detail.mimeType || 'text/plain;charset=utf-8');
+        const blob = new Blob([content], { type: mimeType });
+        const dlUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = dlUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(dlUrl), 3000);
+        showOsToast(`Downloaded: ${filename}`);
+        break;
+      }
+      case 'macro_sequence':
+      case 'human_macro': {
+        const steps = Array.isArray(detail.steps) ? detail.steps : [];
+        steps.forEach((step: Record<string, any>, idx: number) => {
+          setTimeout(() => {
+            osCommandRef.current(step);
+          }, idx * 240);
+        });
+        showOsToast(`Executing ${steps.length}-Step Autonomous Human Macro`);
+        break;
+      }
       default:
         break;
     }
@@ -2041,6 +2232,28 @@ export default function App() {
 
     (window as any).__SOVEREIGN_OS__ = {
       executeCommand: (cmd: Record<string, any>) => osCommandRef.current(cmd),
+      humanActuate: (cmd: Record<string, any>) => osCommandRef.current(cmd),
+      inspectScreenDom: () => {
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"], [role="tab"]'))
+          .map((b) => ((b as HTMLElement).innerText || b.getAttribute('aria-label') || b.getAttribute('title') || '').trim())
+          .filter(Boolean)
+          .slice(0, 60);
+        const inputs = Array.from(document.querySelectorAll('input, textarea'))
+          .map((i) => ({
+            tag: i.tagName.toLowerCase(),
+            placeholder: i.getAttribute('placeholder') || i.getAttribute('aria-label') || i.getAttribute('name') || '',
+            type: i.getAttribute('type') || 'text'
+          }))
+          .slice(0, 30);
+        return {
+          activeModule,
+          openModules,
+          shellViewMode,
+          activeWorkspace: loadOSCustomizationProfile().activeWorkspace,
+          visibleButtons: buttons,
+          visibleInputs: inputs
+        };
+      },
       detachChat: (enable = true) => handleToggleDetachChat(enable),
       openWindow: (mod: ModuleType) => handleSelectOSModule(mod),
       closeWindow: (mod: ModuleType) => handleCloseOpenModule(mod),
@@ -2051,7 +2264,7 @@ export default function App() {
       cascadeWindows: handleCascadeWindows,
       showDesktop: handleMinimizeAllWindows,
       setShellMode: (mode: OSShellViewMode) => setShellViewMode(mode),
-      getState: () => ({ activeModule, openModules, isChatDetached, shellViewMode, isSplitMode, secondaryModule })
+      getState: () => ({ activeModule, openModules, isChatDetached, shellViewMode, isSplitMode, secondaryModule, activeWorkspace: loadOSCustomizationProfile().activeWorkspace })
     };
 
     (window as any).__AURELIUS_ORCHESTRATOR__ = {
@@ -2298,6 +2511,8 @@ export default function App() {
             onSaveToVault={handleSaveToVault}
           />
         );
+      case 'neural-voice-distillery':
+        return <NeuralVoiceDistilleryModule />;
       case 'world-start':
         return (
           <WorldLoadStartScreen

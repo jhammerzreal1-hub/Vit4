@@ -2136,6 +2136,21 @@ class LoRaMeshService {
     this.broadcastForChannel(channel, 'message:created', { message });
     void this.relayMessageToFederatedPeers(channel, message).catch(() => {});
 
+    if (authUser && !isAnonymous) {
+      try {
+        userSqlMemoryService.appendChatMessage(authUser, {
+          id: message.id,
+          channel: 'lora-mesh',
+          agentId: 'lyrailius-omega-zenith',
+          agentName: 'LoRa Mesh Network',
+          role: 'user',
+          content: `[LoRa Mesh #${channel.name}]: ${content}`,
+          model: 'SoS LoRa Mesh',
+          createdAt
+        });
+      } catch {}
+    }
+
     // Automatically unfurl any URLs in the message in the background and push message:updated!
     const urls = providedLinks.length === 0 ? this.extractUrlsFromText(content) : [];
     if (urls.length > 0) {

@@ -23,6 +23,7 @@
 import type { ChatMessage } from '../types';
 import { dev_null } from './devNullLogger';
 import { orchestratorRuntime } from './OrchestratorRuntime';
+import { buildAuthHeaders } from './authClient';
 
 const DB_NAME = 'AureliusSovereignVaultDB';
 const DB_VERSION = 1;
@@ -196,9 +197,9 @@ export async function syncTurnToFirestore(userId: string, message: ChatMessage):
   try {
     fetch('/api/user-memory/chat', {
       method: 'POST',
-      headers: {
+      headers: buildAuthHeaders({
         'Content-Type': 'application/json'
-      },
+      }),
       credentials: 'include',
       body: JSON.stringify({
         id: message.id,

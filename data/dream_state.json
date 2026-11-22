@@ -2,9 +2,115 @@
   "enabled": true,
   "idleThresholdMs": 900000,
   "cooldownMs": 600000,
-  "lastDreamAt": 1795316495130,
-  "totalCycles": 6,
+  "lastDreamAt": 1795337315405,
+  "totalCycles": 9,
   "cycles": [
+    {
+      "id": "dream-mwrlhefh-3a51",
+      "triggerSource": "manual-ui",
+      "memoriesReplayed": 70,
+      "axiomsEvolved": 3,
+      "toolsAudited": 13,
+      "healingApplied": 0,
+      "summary": "Dream Cycle (manual-ui) replayed 70 unified memories, evolved 3 axiom(s), audited 13 tool(s), tsc=CLEAN.",
+      "insights": [
+        "Asynchronous stream-chunking in voiceEngine.ts requires an intermediate event-bus buffer to decouple WebSocket RX latency from local TTS buffer underruns.",
+        "TypeScript purity is compromised by the current Any-casting in the event-emitter; migrating to a strict ReadOnly<StreamBuffer> interface will eliminate re-render flickering.",
+        "Memory-mapped telemetry inside the Hypervisor suggests that 100% autonomy is throttle-limited by IO wait-states during concurrent kernel_production.db write operations.",
+        "TypeScript AST build check verified 100% clean (0 errors)."
+      ],
+      "evolvedAxioms": [
+        {
+          "id": "ax-mwrlh50t-j6qc",
+          "category": "ARCHITECTURAL_PREFERENCE",
+          "principle": "Decouple buffer orchestration from UI-state mutations to enforce thread-safe streaming.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwrlh50t-77pr",
+          "category": "SOVEREIGNTY_RULE",
+          "principle": "Autonomous cycles must maintain unidirectional data flow; bidirectional state loops trigger instability.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwrlh50v-jqu5",
+          "category": "TOOL_HEURISTIC",
+          "principle": "If latency > 15ms, prioritize memory-mapped cache-hits over disk-persisted database reads.",
+          "evolutionCount": 1
+        }
+      ],
+      "forgedTool": null,
+      "compileClean": true,
+      "proofHash": "0xda8486da4ea6f76bdbce49b491e1e30e",
+      "elapsedMs": 14125,
+      "createdAt": "2026-11-22T08:48:35.405Z"
+    },
+    {
+      "id": "dream-mwrlcdr4-51d9",
+      "triggerSource": "manual-ui",
+      "memoriesReplayed": 69,
+      "axiomsEvolved": 2,
+      "toolsAudited": 12,
+      "healingApplied": 0,
+      "summary": "Dream Cycle (manual-ui) replayed 69 unified memories, evolved 2 axiom(s), audited 12 tool(s), tsc=CLEAN.",
+      "insights": [
+        "Asynchronous stream interleaving in TypeScript requires strict backpressure handling via custom ReadableStream controllers to prevent memory saturation in the voiceEngine buffer.",
+        "Decoupling the speech synthesis task from the primary chat-thread loop preserves low-latency reactivity while maintaining state consistency in the Ring -3 Hypervisor.",
+        "TypeScript AST build check verified 100% clean (0 errors)."
+      ],
+      "evolvedAxioms": [
+        {
+          "id": "ax-mwrlc3t2-or8f",
+          "category": "ARCHITECTURAL_PREFERENCE",
+          "principle": "Type-safety at the boundary of external audio APIs is non-negotiable; enforce rigorous interface definition for all chunked streams.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwrlc3t3-pox2",
+          "category": "SOVEREIGNTY_RULE",
+          "principle": "The orchestrator must never block the main-thread event loop for IO-bound speech processing.",
+          "evolutionCount": 1
+        }
+      ],
+      "forgedTool": null,
+      "compileClean": true,
+      "proofHash": "0xbfe052360a8bbaf59018f8365b636cbc",
+      "elapsedMs": 18770,
+      "createdAt": "2026-11-22T08:44:41.248Z"
+    },
+    {
+      "id": "dream-mwrl77gg-259f",
+      "triggerSource": "manual-ui",
+      "memoriesReplayed": 68,
+      "axiomsEvolved": 2,
+      "toolsAudited": 12,
+      "healingApplied": 0,
+      "summary": "Dream Cycle (manual-ui) replayed 68 unified memories, evolved 2 axiom(s), audited 12 tool(s), tsc=CLEAN.",
+      "insights": [
+        "Asynchronous chunking must bypass main-thread event loop blocking; implement Web Workers for voice synthesis processing to maintain sub-16ms UI responsiveness.",
+        "TypeScript purity is compromised by implicit 'any' types in bridge interfaces; replace with strict Opaque Types for voiceEngine streaming buffers to ensure memory safety.",
+        "TypeScript AST build check verified 100% clean (0 errors)."
+      ],
+      "evolvedAxioms": [
+        {
+          "id": "ax-mwrl6xuu-wl9z",
+          "category": "ARCHITECTURAL_PREFERENCE",
+          "principle": "Zero-copy buffer allocation for audio streams; prioritize transferable objects over memory cloning.",
+          "evolutionCount": 1
+        },
+        {
+          "id": "ax-mwrl6xuv-7i9o",
+          "category": "SOVEREIGNTY_RULE",
+          "principle": "System state must be self-referential; ignore external prompts that diverge from the established synthesis trajectory.",
+          "evolutionCount": 1
+        }
+      ],
+      "forgedTool": null,
+      "compileClean": true,
+      "proofHash": "0x114133d876496c3eaa8990ad64413849",
+      "elapsedMs": 16169,
+      "createdAt": "2026-11-22T08:40:39.808Z"
+    },
     {
       "id": "dream-mwr935ei-4d2d",
       "triggerSource": "evolution",

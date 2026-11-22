@@ -833,19 +833,75 @@ export const ChatModule: React.FC<ChatModuleProps> = ({
             setSqlMemories(Array.isArray(data?.memories) ? data.memories : []);
 
             const sqlChat: ChatMessage[] = Array.isArray(data?.messages)
-              ? data.messages.map((m: any) => ({
-                  id: String(m.id),
-                  role: m.role === 'user' ? 'user' : 'model',
-                  content: sanitizeChatMessageContent(String(m.content || '')),
-                  model: m.model || (m.role === 'model' ? 'Lyrailius Omega' : undefined),
-                  timestamp: new Date(Number(m.createdAt || Date.now())).toLocaleTimeString()
-                }))
+              ? data.messages.map((m: any) => {
+                  const tsMs = typeof m.createdAt === 'number' ? m.createdAt : Date.parse(String(m.createdAt || ''));
+                  return {
+                    id: String(m.id),
+                    role: m.role === 'user' ? 'user' : 'model',
+                    content: sanitizeChatMessageContent(String(m.content || '')),
+                    model: m.model || (m.role === 'model' ? 'Lyrailius Omega' : undefined),
+                    timestamp: !Number.isNaN(tsMs) && tsMs > 0 ? new Date(tsMs).toLocaleTimeString() : new Date().toLocaleTimeString()
+                  };
+                })
               : [];
 
-            if (sqlChat.length > 0) {
-              setMessages(sqlChat);
-              isHydratedRef.current = true;
-              return;
+            // Merge with local IndexedDB turns so client-side or offline replies are never discarded
+            let localTurns: ChatMessage[] = [];
+            if (isArch) {
+              try {
+                localTurns = await loadAllChatTurns();
+              } catch (_) {}
+            }
+
+            if (sqlChat.length > 0 || localTurns.length > 0) {
+              const seenIds = new Set<string>();
+              const seenRoleContent = new Set<string>();
+              const unified: ChatMessage[] = [];
+
+              for (const m of sqlChat) {
+                if (!m.content || m.id === 'init-1') continue;
+                seenIds.add(m.id);
+                seenRoleContent.add(`${m.role}::${m.content.trim().slice(0, 240)}`);
+                unified.push(m);
+              }
+
+              const unsyncedLocal: ChatMessage[] = [];
+              for (const lm of localTurns) {
+                if (!lm.content || lm.id === 'init-1') continue;
+                const sig = `${lm.role}::${lm.content.trim().slice(0, 240)}`;
+                if (!seenIds.has(lm.id) && !seenRoleContent.has(sig)) {
+                  seenIds.add(lm.id);
+                  seenRoleContent.add(sig);
+                  unified.push(lm);
+                  unsyncedLocal.push(lm);
+                }
+              }
+
+              // Backfill any local-only turns (such as replies generated via client fallback) to SQLite
+              if (unsyncedLocal.length > 0) {
+                for (const missingMsg of unsyncedLocal.slice(-30)) {
+                  fetch('/api/user-memory/chat', {
+                    method: 'POST',
+                    headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+                    credentials: 'include',
+                    body: JSON.stringify({
+                      id: missingMsg.id,
+                      channel: 'main-chat',
+                      agentId: 'lyrailius-omega-zenith',
+                      agentName: missingMsg.model || 'Lyrailius Omega',
+                      role: missingMsg.role,
+                      content: missingMsg.content,
+                      model: missingMsg.model || ''
+                    })
+                  }).catch(() => {});
+                }
+              }
+
+              if (unified.length > 0) {
+                setMessages(unified);
+                isHydratedRef.current = true;
+                return;
+              }
             }
             if (!isArch) {
               setMessages([buildWelcomeMessageForUser(authUser, pref, confirmed)]);

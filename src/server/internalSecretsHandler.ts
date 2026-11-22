@@ -404,7 +404,27 @@ export class InternalSecretsHandler {
   private vaultCache: EncryptedVaultFile | null = null;
   private plaintextSecrets = new Map<string, string>();
   private initialEnvKeys = new Set<string>();
+  private rejectedSecretValues = new Map<string, { reason: string; timestamp: number }>();
   private initialized = false;
+
+  public markSecretValueRejected(rawValue: string | undefined | null, reason = 'AUTH_REJECTED_401_403'): void {
+    if (!rawValue || typeof rawValue !== 'string') return;
+    const trimmed = rawValue.trim();
+    if (!trimmed) return;
+    this.rejectedSecretValues.set(trimmed, {
+      reason,
+      timestamp: Date.now()
+    });
+  }
+
+  public isSecretValueRejected(rawValue: string | undefined | null): boolean {
+    if (!rawValue || typeof rawValue !== 'string') return false;
+    return this.rejectedSecretValues.has(rawValue.trim());
+  }
+
+  public clearRejectedSecretValues(): void {
+    this.rejectedSecretValues.clear();
+  }
 
   public init(): void {
     if (this.initialized) return;
@@ -456,7 +476,7 @@ export class InternalSecretsHandler {
     const addEntry = (source: string, raw: unknown) => {
       if (!isUsableSecretValue(raw)) return;
       for (const part of raw.split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean)) {
-        if (!isUsableSecretValue(part) || seen.has(part)) continue;
+        if (!isUsableSecretValue(part) || seen.has(part) || this.isSecretValueRejected(part)) continue;
         seen.add(part);
         found.push({ source, value: part });
       }
@@ -705,6 +725,7 @@ export class InternalSecretsHandler {
         .filter((s) => (opts?.isPublicEndpoint ? s.length > 0 : isUsableSecretValue(s)));
       for (const item of parts) {
         if (seenValues.has(item)) continue;
+        if (!opts?.isPublicEndpoint && this.isSecretValueRejected(item)) continue;
         seenValues.add(item);
         results.push({
           slot: `slot-${results.length}`,
@@ -773,6 +794,10 @@ export class InternalSecretsHandler {
     this.vaultCache!.entries[envVar] = entry;
     this.persistVaultAtomic();
 
+    this.rejectedSecretValues.delete(cleanVal);
+    for (const part of cleanVal.split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean)) {
+      this.rejectedSecretValues.delete(part);
+    }
     this.plaintextSecrets.set(envVar, cleanVal);
     process.env[envVar] = cleanVal;
     this.bridgeUniversalEnvAliases();

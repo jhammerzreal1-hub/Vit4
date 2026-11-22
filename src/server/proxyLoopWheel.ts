@@ -100,8 +100,12 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const WHEEL_CONFIG_PATH = path.join(DATA_DIR, '.proxy_wheel_config.json');
 
 const CAPABLE_GEMINI_BASELINE: Array<{ model: string; tier: WheelTier; supportsTools: boolean; supportsThinking: boolean }> = [
-  { model: 'gemini-4-hydrogen', tier: 'flagship', supportsTools: true, supportsThinking: true },
   { model: 'gemini-3.1-flash-lite', tier: 'flagship', supportsTools: true, supportsThinking: true },
+  { model: 'gemini-3-flash-preview', tier: 'flagship', supportsTools: true, supportsThinking: true },
+  { model: 'gemini-flash-lite-latest', tier: 'flagship', supportsTools: true, supportsThinking: false },
+  { model: 'gemini-3.1-flash-lite-preview', tier: 'capable', supportsTools: true, supportsThinking: true },
+  { model: 'gemini-4-hydrogen', tier: 'capable', supportsTools: true, supportsThinking: true },
+  { model: 'gemini-flash-latest', tier: 'capable', supportsTools: true, supportsThinking: true },
   { model: 'gemini-4-neon', tier: 'capable', supportsTools: true, supportsThinking: true },
   { model: 'gemini-4-argon', tier: 'capable', supportsTools: true, supportsThinking: true },
   { model: 'gemini-4-carbon', tier: 'capable', supportsTools: true, supportsThinking: true },
@@ -324,6 +328,7 @@ class ProxyLoopWheelManager {
       lower.includes('3.8') ||
       lower.includes('gemini-1.') ||
       lower.includes('gemini-2.0') ||
+      lower.includes('gemini-2.5-flash') ||
       lower === 'gemini-pro'
     ) {
       return false;
@@ -346,7 +351,7 @@ class ProxyLoopWheelManager {
 
     this.discoveryInFlight = (async () => {
       const discovered = new Set<string>();
-      for (const entry of pool.slice(0, 2)) {
+      for (const entry of pool) {
         try {
           const client = this.getOrCreateGeminiClient(entry.value);
           const pager = await Promise.race([
@@ -361,9 +366,16 @@ class ProxyLoopWheelManager {
               discovered.add(shortName);
             }
           }
-          if (discovered.size > 0) break;
-        } catch {
-          // Try next key in pool cleanly
+        } catch (err: any) {
+          const status = Number(err?.status || err?.code || 0);
+          const msg = String(err?.message || err || '');
+          if (
+            status === 401 ||
+            status === 403 ||
+            /PERMISSION_DENIED|Permission denied|API_KEY_INVALID|API key not valid|UNAUTHENTICATED/i.test(msg)
+          ) {
+            internalSecretsHandler.markSecretValueRejected(entry.value, msg.slice(0, 140));
+          }
         }
       }
       const list = Array.from(discovered);
@@ -963,11 +975,14 @@ class ProxyLoopWheelManager {
       }
     }
 
-    // Prioritize matching preferredModel at the front while keeping full wheel behind it
+    // Prioritize matching preferredModel at the front ONLY if those matching spokes are healthy (no unrecovered failures),
+    // while keeping proven-healthy spokes ahead of failing spokes
     if (pref) {
-      const exactMatches = orderedReady.filter(prefMatches);
-      const rest = orderedReady.filter((s) => !prefMatches(s));
-      orderedReady = [...exactMatches, ...rest];
+      const healthyExactMatches = orderedReady.filter((s) => prefMatches(s) && (s.failures === 0 || s.successes > 0));
+      if (healthyExactMatches.length > 0) {
+        const rest = orderedReady.filter((s) => !healthyExactMatches.includes(s));
+        orderedReady = [...healthyExactMatches, ...rest];
+      }
     }
 
     if (opts?.includeCoolingFallback !== false) {
@@ -1060,8 +1075,11 @@ class ProxyLoopWheelManager {
       cooldownMs = 3_600_000;
       reason = 'MODEL_NOT_FOUND_404';
     } else if (err?.isTimeout || status === 504 || lower.includes('timed out') || lower.includes('timeout')) {
-      cooldownMs = 90_000;
+      cooldownMs = 120_000;
       reason = 'timeout';
+    } else if (status === 503 || lower.includes('high demand') || lower.includes('unavailable') || lower.includes('overloaded')) {
+      cooldownMs = 120_000;
+      reason = '503_high_demand';
     }
 
     const cooldownUntilTs = Date.now() + cooldownMs;
@@ -1075,8 +1093,14 @@ class ProxyLoopWheelManager {
       lastError: cleanMsg
     });
 
-    // If an entire API key slot failed authentication (401/403), cool down sibling models on that exact same provider:keySlot
+    const cred = this.spokeCredentials.get(spokeId);
+
+    // If an entire API key slot failed authentication (401/403), quarantine that key in internalSecretsHandler
+    // and cool down sibling models on that exact same provider:keySlot
     if (reason === 'auth_rejected') {
+      if (cred?.apiKey) {
+        internalSecretsHandler.markSecretValueRejected(cred.apiKey, cleanMsg);
+      }
       const parts = spokeId.split(':');
       if (parts.length >= 2) {
         const slotPrefix = `${parts[0]}:${parts[1]}:`;
@@ -1096,8 +1120,6 @@ class ProxyLoopWheelManager {
         }
       }
     }
-
-    const cred = this.spokeCredentials.get(spokeId);
     this.pushHistory({
       timestamp: new Date().toISOString(),
       spokeId,

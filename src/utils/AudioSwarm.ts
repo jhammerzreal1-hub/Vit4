@@ -204,10 +204,19 @@ export class AudioSwarm {
         return;
       }
 
-      const chunks = splitIntoCoherentSpeechChunks(oralNarrative, 195);
+      const chunks = splitIntoCoherentSpeechChunks(oralNarrative, 155);
       if (chunks.length === 0) {
         if (request.onEnd) request.onEnd();
         return;
+      }
+
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        const voices = window.speechSynthesis.getVoices();
+        const personaKey = request.personaId || 'DEFAULT';
+        if (voices.length > 0 && (!this.lockedVoice || this.lockedPersonaId !== personaKey)) {
+          this.lockedVoice = selectBestSystemVoice(voices, request.personaId, undefined, 'en-US');
+          this.lockedPersonaId = personaKey;
+        }
       }
 
       chunks.forEach((chunkText, idx) => {

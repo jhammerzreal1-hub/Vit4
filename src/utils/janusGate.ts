@@ -254,30 +254,44 @@ class JanusGateService {
         try {
           // Dynamic import to break circular dependency
           const { localLlmManager } = await import('./localLlmEngine');
-          
-            if (localLlmManager.isReady()) {
-              this.pushLog(`Local Substrate: Engaging WebGPU (${modelId})`);
-              await localLlmManager.generateWithWebLlm(
-                prompt,
-                systemInstruction,
-                async (token) => {
-                  await handleChunk(token);
-                },
-                { skipServerChat: options.skipServerChat }
-              );
+          if (!localLlmManager.isReady() && localLlmManager.isWebGpuSupported()) {
+            this.pushLog(`Local Substrate: Auto-loading WebGPU Llama weights (${modelId || 'Llama-3.2-1B-Instruct-q4f16_1-MLC'})`);
+            try {
+              await localLlmManager.loadWebLlmModel(modelId || 'Llama-3.2-1B-Instruct-q4f16_1-MLC');
+            } catch (_) {}
+          }
+
+          if (localLlmManager.isReady()) {
+            this.pushLog(`Local Substrate: Engaging WebGPU (${modelId})`);
+            await localLlmManager.generateWithWebLlm(
+              prompt,
+              systemInstruction,
+              async (token) => {
+                await handleChunk(token);
+              },
+              { skipServerChat: options.skipServerChat }
+            );
+          } else {
+            // Check Termux llama-server on 8080 or Ollama on 11434
+            const [hasTermux, hasOllama] = await Promise.all([
+              localLlmManager.probeLlamaCppServer(),
+              localLlmManager.probeOllama()
+            ]);
+            if (hasTermux) {
+              this.pushLog('Local Bridge: Engaging Termux Native llama-server (127.0.0.1:8080)');
+              await localLlmManager.generateWithLocalServer('http://127.0.0.1:8080', 'default', prompt, systemInstruction, async (t) => {
+                await handleChunk(t);
+              });
+            } else if (hasOllama) {
+              this.pushLog('Local Bridge: Engaging Ollama Local Daemon (127.0.0.1:11434)');
+              await localLlmManager.generateWithLocalServer('http://127.0.0.1:11434', 'llama3.2', prompt, systemInstruction, async (t) => {
+                await handleChunk(t);
+              });
             } else {
-              // Check Termux llama-server on 8080
-              const hasTermux = await localLlmManager.probeLlamaCppServer();
-              if (hasTermux) {
-                this.pushLog('Local Bridge: Engaging Termux Native llama-server (127.0.0.1:8080)');
-                await localLlmManager.generateWithLocalServer('http://127.0.0.1:8080', 'default', prompt, systemInstruction, async (t) => {
-                  await handleChunk(t);
-                });
-              } else {
-                this.pushLog('Local Bridge: No active WebGPU weights or local llama-server');
-                throw new Error('No live local inference server or loaded WebGPU weights available.');
-              }
+              this.pushLog('Local Bridge: No active WebGPU weights or local llama-server');
+              throw new Error('No live local inference server or loaded WebGPU weights available.');
             }
+          }
         } catch (localErr) {
           dev_null('[Janus Gate] Local speculative engines unavailable:', localErr);
         }

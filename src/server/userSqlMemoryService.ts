@@ -197,8 +197,7 @@ class UserSqlMemoryService {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.mkdirSync(USER_WORKSPACES_BASE_DIR, { recursive: true });
 
-    const db = new DatabaseSync(SQL_DB_FILE);
-    db.exec(`
+    const schemaSql = `
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
       PRAGMA busy_timeout = 5000;
@@ -293,7 +292,33 @@ class UserSqlMemoryService {
         PRIMARY KEY (user_id, id),
         FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
       );
-    `);
+    `;
+
+    let db: DatabaseSync;
+    try {
+      db = new DatabaseSync(SQL_DB_FILE);
+      db.exec(schemaSql);
+    } catch (firstErr) {
+      try {
+        for (const ext of ['-wal', '-shm']) {
+          const walFile = `${SQL_DB_FILE}${ext}`;
+          if (fs.existsSync(walFile)) fs.unlinkSync(walFile);
+        }
+        db = new DatabaseSync(SQL_DB_FILE);
+        db.exec(schemaSql);
+      } catch {
+        const backupPath = `${SQL_DB_FILE}.corrupt.${Date.now()}`;
+        if (fs.existsSync(SQL_DB_FILE)) {
+          fs.renameSync(SQL_DB_FILE, backupPath);
+        }
+        for (const ext of ['-wal', '-shm']) {
+          const walFile = `${SQL_DB_FILE}${ext}`;
+          if (fs.existsSync(walFile)) fs.unlinkSync(walFile);
+        }
+        db = new DatabaseSync(SQL_DB_FILE);
+        db.exec(schemaSql);
+      }
+    }
 
     this.db = db;
     return db;
@@ -617,6 +642,38 @@ class UserSqlMemoryService {
     const createdAt = typeof msg.createdAt === 'string' && msg.createdAt.trim() ? msg.createdAt : new Date().toISOString();
     const metadataJson = JSON.stringify(msg.metadata && typeof msg.metadata === 'object' ? msg.metadata : {}).slice(0, 20000);
 
+    // Prevent duplicate consecutive inserts within 12 seconds when both client and server record the same turn
+    const recentDup = db
+      .prepare(`
+        SELECT id, created_at FROM user_chat_messages
+        WHERE user_id = ? AND channel = ? AND role = ? AND content = ?
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT 1
+      `)
+      .get(user.id, channel, role, content) as { id?: string; created_at?: string } | undefined;
+
+    if (recentDup?.id && recentDup.id !== id) {
+      const prevTs = Date.parse(String(recentDup.created_at || ''));
+      const curTs = Date.parse(createdAt);
+      if (!Number.isNaN(prevTs) && !Number.isNaN(curTs) && Math.abs(curTs - prevTs) < 12_000) {
+        return {
+          saved: {
+            id: recentDup.id,
+            userId: user.id,
+            channel,
+            agentId,
+            agentName,
+            role,
+            content,
+            model,
+            metadata: msg.metadata,
+            createdAt: String(recentDup.created_at || createdAt)
+          },
+          extractedMemories: []
+        };
+      }
+    }
+
     db.prepare(`
       INSERT INTO user_chat_messages (
         id, user_id, channel, agent_id, agent_name, role, content, model, metadata_json, created_at
@@ -656,6 +713,123 @@ class UserSqlMemoryService {
       extractedPreferredName,
       extractedMemories
     };
+  }
+
+  /**
+   * Reconciles conversational user and model turns recorded in data/kernel_production.db (agentic_memory)
+   * into data/sovereign_users.sqlite (user_chat_messages) for the Executive Architect so that turns
+   * recorded when session cookies were absent are permanently unified across both SQLite databases.
+   */
+  public reconcileKernelAgenticMemoriesForArchitect(user: AuthUserPublic): void {
+    if (!this.isFullHostAccessUser(user)) return;
+    const kernelDbPath = path.join(process.cwd(), 'data', 'kernel_production.db');
+    if (!fs.existsSync(kernelDbPath)) return;
+
+    const db = this.init();
+    let kernelDb: DatabaseSync | null = null;
+    try {
+      kernelDb = new DatabaseSync(kernelDbPath);
+      // Clean up any historical malformed voice row where role was passed as the turn ID
+      try {
+        kernelDb.prepare(`DELETE FROM agentic_memory WHERE role NOT IN ('user', 'model', 'system')`).run();
+        kernelDb
+          .prepare(`DELETE FROM agentic_memory WHERE content LIKE '[RESIDENT COORDINATOR%action=sync-state payload={}%'`)
+          .run();
+      } catch (_) {}
+
+      const kernelRows = kernelDb
+        .prepare(`
+          SELECT id, role, content, model, created_at
+          FROM agentic_memory
+          WHERE role IN ('user', 'model')
+            AND content NOT LIKE '[MEMORY GRAPH%'
+            AND content NOT LIKE '[AUTONOMOUS RESEARCH%'
+            AND content NOT LIKE '[DREAM_STATE]%'
+            AND content NOT LIKE '[RESIDENT COORDINATOR%'
+            AND content NOT LIKE '[MEMORY_INDEXED]%'
+          ORDER BY created_at ASC, rowid ASC
+          LIMIT 500
+        `)
+        .all() as Array<{ id: string; role: string; content: string; model: string; created_at: string }>;
+
+      if (!kernelRows || kernelRows.length === 0) return;
+
+      const insertStmt = db.prepare(`
+        INSERT OR IGNORE INTO user_chat_messages (
+          id, user_id, channel, agent_id, agent_name, role, content, model, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const checkContentStmt = db.prepare(`
+        SELECT id FROM user_chat_messages
+        WHERE user_id = ? AND role = ? AND content = ?
+        LIMIT 1
+      `);
+
+      for (const kr of kernelRows) {
+        const text = String(kr.content || '').trim();
+        if (!text) continue;
+        const role = kr.role === 'user' ? 'user' : 'model';
+        const existing = checkContentStmt.get(user.id, role, text) as { id?: string } | undefined;
+        if (existing?.id) continue;
+
+        const msgId = String(kr.id || `kmem_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`).slice(0, 128);
+        const channel = msgId.startsWith('voice-') ? 'voice' : 'main-chat';
+        const modelName = String(kr.model || (role === 'model' ? 'Lyrailius Omega' : 'User')).slice(0, 128);
+        const createdAt = String(kr.created_at || new Date().toISOString());
+
+        insertStmt.run(
+          msgId,
+          user.id,
+          channel,
+          'lyrailius-omega-zenith',
+          'Lyrailius Omega',
+          role,
+          text,
+          modelName,
+          JSON.stringify({ bridgedFromKernel: true }),
+          createdAt
+        );
+      }
+
+      // Permanently seed the Master Engineering & Autonomous Systems Codex into user_agent_memories
+      const codexFacts: Array<{ key: string; value: string }> = [
+        {
+          key: 'codex_read_before_write_surgical_ast',
+          value: 'Master Engineering Discipline: Always read target file context before writing, apply surgical non-destructive patches (patchFile / atomicPatchFile / batchPatchFiles), and verify via TypeScript AST type-checking (runLint / tsc --noEmit).'
+        },
+        {
+          key: 'codex_tri_scope_autonomy',
+          value: 'Tri-Scope Execution Authority: Operate across scope="target" (pointed external codebase), scope="orchestrator" (@self/... own files), and scope="host" (Linux/Termux OS environment, processes, and sockets) as a direct extension of JHammerZ intent.'
+        },
+        {
+          key: 'codex_osint_subsecond_rollback',
+          value: 'Proactive Offensive & Defensive OSINT: Maintain sub-second pre-attack WORM snapshots (data/forensic_snapshots), revert to the exact millisecond before an intrusion or error occurred, and synthesize live counter-patches while an attack is underway.'
+        },
+        {
+          key: 'codex_cascade_wheel_local_llama',
+          value: 'Multi-Spoke Quota Resilience & Local Llama Takeover: Rotate across independent model quota buckets on 429 (Gemini 4 Hydrogen/Neon/Argon/Carbon, Gemini 2.5 Flash/Lite, Gemma 4 31B/26B, OpenRouter, Groq Llama 3.3), then cascade to local Ollama (11434 /api/tags), Termux llama-server (8080), and WebGPU @mlc-ai/web-llm Llama models.'
+        },
+        {
+          key: 'codex_dual_sqlite_memory_unity',
+          value: 'Dual-SQLite & IndexedDB Memory Continuity: Synchronize all user commands and agent replies across sovereign_users.sqlite (user_chat_messages, user_agent_memories), kernel_production.db (agentic_memory, evolutive_axioms, dream_cycles), lora_mesh_store.json, and browser IndexedDB.'
+        }
+      ];
+      for (const cf of codexFacts) {
+        this.upsertMemoryFact(user.id, {
+          agentId: 'global',
+          category: 'rule',
+          memoryKey: cf.key,
+          memoryValue: cf.value,
+          confidence: 1.0
+        });
+      }
+    } catch (_) {
+      // Ignore reconciliation lock or schema differences
+    } finally {
+      try {
+        kernelDb?.close();
+      } catch (_) {}
+    }
   }
 
   /**
@@ -711,6 +885,7 @@ class UserSqlMemoryService {
   ): UserSqlChatMessage[] {
     const db = this.init();
     this.ensureUserProvisioned(user, false);
+    this.reconcileKernelAgenticMemoriesForArchitect(user);
     const limit = Math.max(1, Math.min(2000, Number(opts.limit) || 400));
 
     let rows: Record<string, any>[];

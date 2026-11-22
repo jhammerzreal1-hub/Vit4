@@ -114,6 +114,8 @@ export interface AutonomousTrainingRun {
   targetAgentId: string;
   targetAgentName: string;
   curriculumDomain:
+    | 'UNIVERSAL_HUMAN_PARITY_AND_SUPER_AUTONOMY'
+    | 'OMNI_DISCIPLINARY_UNIVERSAL_MASTERY'
     | 'UNIVERSAL_AUTONOMOUS_ENGINEERING'
     | 'ATOMIC_PATCH_AND_COMPILER_MASTERY'
     | 'HYPERBOLIC_MATHEMATICAL_PROOFS'
@@ -270,7 +272,7 @@ export const AIGenesisDistilleryModule: React.FC<AIGenesisDistilleryModuleProps>
 
   // 4. Autonomous Training & Evolution Controls
   const [curriculumDomain, setCurriculumDomain] = useState<AutonomousTrainingRun['curriculumDomain']>(
-    'UNIVERSAL_AUTONOMOUS_ENGINEERING'
+    'UNIVERSAL_HUMAN_PARITY_AND_SUPER_AUTONOMY'
   );
   const [trainingAlgorithm, setTrainingAlgorithm] =
     useState<AutonomousTrainingRun['algorithm']>('GRPO_REINFORCEMENT');
@@ -1814,6 +1816,12 @@ export const AIGenesisDistilleryModule: React.FC<AIGenesisDistilleryModuleProps>
                   }
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-cyan-300"
                 >
+                  <option value="UNIVERSAL_HUMAN_PARITY_AND_SUPER_AUTONOMY">
+                    UNIVERSAL_HUMAN_PARITY_AND_SUPER_AUTONOMY (100% Purity)
+                  </option>
+                  <option value="OMNI_DISCIPLINARY_UNIVERSAL_MASTERY">
+                    OMNI_DISCIPLINARY_UNIVERSAL_MASTERY (12 Domains)
+                  </option>
                   <option value="UNIVERSAL_AUTONOMOUS_ENGINEERING">
                     UNIVERSAL_AUTONOMOUS_ENGINEERING
                   </option>

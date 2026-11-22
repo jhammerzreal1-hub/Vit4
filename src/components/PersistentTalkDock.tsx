@@ -30,6 +30,7 @@ import {
 import type { ModuleType } from '../types';
 import { ALL_MODULES } from './Navigation';
 import {
+  PRESET_VOICE_PERSONAS,
   selectBestSystemVoice,
   extractCoherentOralNarrative,
   splitIntoCoherentSpeechChunks
@@ -41,6 +42,7 @@ import {
   updateLocalBeaconSnapshot
 } from '../utils/continuityClient';
 import {
+  claimSharedMicrophoneStream,
   probeMediaPermission,
   requestMicrophoneStream,
   requestMicrophoneStreamOnUserGesture,
@@ -49,11 +51,13 @@ import {
   clearMediaPermissionGrant,
   hasRecentUserActivation,
   markVoiceUserGesture,
-  loadPersistedMediaPermissions
+  loadPersistedMediaPermissions,
+  isHardwareSwitchEnabled
 } from '../utils/mediaPermissions';
 import { apiFetch, getAuthBearerToken } from '../utils/authClient';
+import { sovereignAi } from '../utils/sovereignAiDispatcher';
 
-export type LiveVoicePersona = 'Zephyr' | 'Puck' | 'Charon' | 'Kore' | 'Fenrir';
+export type LiveVoicePersona = string;
 export type NativeEnglishAccent = 'en-US' | 'en-GB';
 export type MicCaptureMode = 'hybrid' | 'vad' | 'browser-stt';
 export type MicHardwareStatus = 'idle' | 'requesting' | 'active' | 'needs-gesture' | 'denied' | 'frame-policy-blocked' | 'unavailable';
@@ -82,13 +86,13 @@ export interface PersistentTalkDockProps {
   }) => void;
 }
 
-const VOICE_OPTIONS: Array<{ id: LiveVoicePersona; label: string; style: string }> = [
-  { id: 'Zephyr', label: 'Zephyr', style: 'Natural Peer' },
-  { id: 'Puck', label: 'Puck', style: 'Quick & Sharp' },
-  { id: 'Charon', label: 'Charon', style: 'Calm Analytical' },
-  { id: 'Kore', label: 'Kore', style: 'Clear Studio' },
-  { id: 'Fenrir', label: 'Fenrir', style: 'Deep Direct' }
-];
+const VOICE_OPTIONS: Array<{ id: LiveVoicePersona; label: string; style: string }> = PRESET_VOICE_PERSONAS
+  .filter(p => !/bark|synthetic|experimental|robotic/i.test(p.id))
+  .map(p => ({
+    id: p.id,
+    label: p.name,
+    style: p.badge
+  }));
 
 function downsampleTo16k(float32: Float32Array, inputSampleRate: number): Float32Array {
   if (!inputSampleRate || inputSampleRate === 16000) return float32;
@@ -319,6 +323,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
   const isMutedRef = useRef(false);
   const speakerMutedRef = useRef(false);
   const isModelSpeakingRef = useRef(false);
+  const wasSpeakingWhenInterruptedRef = useRef<boolean>(false);
   const peerExploreRef = useRef(true);
   const activeModuleRef = useRef<ModuleType>(activeModule);
   const openModulesRef = useRef<ModuleType[]>(openModules);
@@ -709,6 +714,9 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       } catch {}
     }
 
+    if (isModelSpeakingRef.current) {
+      wasSpeakingWhenInterruptedRef.current = true;
+    }
     speakingMessageIdRef.current = null;
     isModelSpeakingRef.current = false;
     setIsModelSpeaking(false);
@@ -883,19 +891,54 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
     [ensureOutputAudioContext]
   );
 
+  const lockedBrowserVoiceCacheRef = useRef<{ key: string; voice: SpeechSynthesisVoice } | null>(null);
+  const manualReadAloudActiveRef = useRef<boolean>(false);
+
+  const resolveLockedBrowserVoice = useCallback(
+    (voiceOverride?: string): SpeechSynthesisVoice | null => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+      const synth = window.speechSynthesis;
+      const voices = synth.getVoices();
+      if (!voices || voices.length === 0) return null;
+      const targetPersona = voiceOverride || voiceNameRef.current;
+      const targetAccent = voiceAccentRef.current;
+      const cacheKey = `${targetPersona}::${targetAccent}`;
+      if (lockedBrowserVoiceCacheRef.current && lockedBrowserVoiceCacheRef.current.key === cacheKey) {
+        const cached = lockedBrowserVoiceCacheRef.current.voice;
+        const stillAvailable = voices.find((v) => v.voiceURI === cached.voiceURI && v.name === cached.name);
+        if (stillAvailable) return stillAvailable;
+      }
+      const preferredGender = /charon|fenrir|atlas|daniel|marcus|male/i.test(targetPersona) ? 'male' : 'female';
+      const selected = selectBestSystemVoice(voices, targetPersona, preferredGender, targetAccent);
+      if (selected) {
+        lockedBrowserVoiceCacheRef.current = { key: cacheKey, voice: selected };
+      }
+      return selected;
+    },
+    []
+  );
+
   const speakBrowserChunksAndWait = useCallback(
-    async (text: string, sessionId: number, voiceOverride?: string): Promise<void> => {
+    async (
+      text: string,
+      sessionId: number,
+      voiceOverride?: string,
+      preLockedVoice?: SpeechSynthesisVoice | null
+    ): Promise<void> => {
       if (speakerMutedRef.current || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
       const clean = cleanTextForSpeech(text);
       if (!clean) return;
-      const chunks = splitIntoCoherentSpeechChunks(clean, 185);
+      // Keep chunks <= 155 characters (~9-11 seconds of speech) so Chromium's 14-second SpeechSynthesis cutoff never triggers!
+      const chunks = splitIntoCoherentSpeechChunks(clean, 155);
       if (chunks.length === 0) return;
 
       const synth = window.speechSynthesis;
-      const voices = synth.getVoices();
-      const targetPersona = voiceOverride || voiceNameRef.current;
-      const preferredGender = /charon|fenrir|atlas|daniel|marcus|male/i.test(targetPersona) ? 'male' : 'female';
-      const preferred = selectBestSystemVoice(voices, targetPersona, preferredGender, voiceAccentRef.current);
+      let preferred = preLockedVoice || resolveLockedBrowserVoice(voiceOverride);
+      if (!preferred) {
+        // Wait briefly if browser voices are still initializing asynchronously on first click
+        await new Promise<void>((r) => setTimeout(r, 120));
+        preferred = resolveLockedBrowserVoice(voiceOverride);
+      }
       if (!preferred) return;
 
       if (speechKeepAliveTimerRef.current !== null) {
@@ -907,7 +950,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
             synth.resume();
           }
         } catch {}
-      }, 4000);
+      }, 2500);
 
       try {
         for (const chunk of chunks) {
@@ -915,9 +958,11 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
           await new Promise<void>((resolve) => {
             let settled = false;
             const utter = new SpeechSynthesisUtterance(chunk);
-            utter.voice = preferred;
-            utter.lang = preferred.lang || voiceAccentRef.current;
+            // Strictly bind the exact same locked SpeechSynthesisVoice instance for every single chunk
+            utter.voice = preferred!;
+            utter.lang = preferred!.lang || voiceAccentRef.current;
             utter.rate = 1.02;
+            utter.pitch = 1.0;
             activeBrowserUtterancesRef.current.push(utter);
 
             const finish = () => {
@@ -932,7 +977,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
               () => {
                 if (!settled && !synth.speaking) finish();
               },
-              Math.max(10000, chunk.length * 130 + 5000)
+              Math.max(12000, chunk.length * 145 + 6000)
             );
 
             utter.onend = finish;
@@ -959,12 +1004,12 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         }
       }
     },
-    []
+    [resolveLockedBrowserVoice]
   );
 
-  // Infinite-length sequential speech streamer with 1-ahead neural prefetch (ZERO character truncation!)
+  // Infinite-length sequential speech streamer with strict single-voice consistency (ZERO mid-message voice switching & ZERO truncation!)
   const speakInfiniteTextSequence = useCallback(
-    async (rawText: string, messageId?: string, voiceOverride?: string) => {
+    async (rawText: string, messageId?: string, voiceOverride?: string, isManualReadAloud?: boolean) => {
       if (speakerMutedRef.current) return;
       const clean = cleanTextForSpeech(rawText);
       if (!clean) return;
@@ -978,6 +1023,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       const targetVoice = voiceOverride || voiceNameRef.current;
       const targetAccent = voiceAccentRef.current;
 
+      manualReadAloudActiveRef.current = Boolean(isManualReadAloud || (messageId && messageId !== 'live'));
       speakingMessageIdRef.current = resolvedMsgId;
       isModelSpeakingRef.current = true;
       setIsModelSpeaking(true);
@@ -989,10 +1035,15 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         );
       }
 
-      // Split into natural sentence-aligned ~520-char neural chunks with NO upper bound on chunk count
-      const neuralChunks = splitIntoCoherentSpeechChunks(clean, 520);
+      // Lock the single browser voice instance immediately before reading starts so if browser engine is used,
+      // every chunk from start to finish uses the exact same voice object without ever switching.
+      const lockedBrowserVoice = resolveLockedBrowserVoice(targetVoice);
+
+      // Split into natural sentence-aligned ~420-char neural chunks with NO upper bound on chunk count
+      const neuralChunks = splitIntoCoherentSpeechChunks(clean, 420);
       if (neuralChunks.length === 0) {
         if (playbackSessionIdRef.current === sessionId) {
+          manualReadAloudActiveRef.current = false;
           speakingMessageIdRef.current = null;
           isModelSpeakingRef.current = false;
           setIsModelSpeaking(false);
@@ -1001,7 +1052,10 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         return;
       }
 
-      const fetchNeuralChunk = async (chunkText: string): Promise<string | null> => {
+      const fetchNeuralChunk = async (
+        chunkText: string,
+        lockedEngine?: 'gemini' | 'neural-mp3'
+      ): Promise<{ audioUrl: string; engine: 'gemini' | 'neural-mp3' } | null> => {
         if (playbackSessionIdRef.current !== sessionId || abortCtrl.signal.aborted) return null;
         try {
           const res = await apiFetch('/api/tts', {
@@ -1010,41 +1064,77 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
             body: JSON.stringify({
               text: chunkText,
               voice: targetVoice,
-              accent: targetAccent
+              accent: targetAccent,
+              ...(lockedEngine ? { lockedEngine } : {})
             }),
             signal: abortCtrl.signal
           });
           const data = await res.json().catch(() => ({}));
           if (res.ok && data?.audioUrl) {
-            return String(data.audioUrl);
+            return {
+              audioUrl: String(data.audioUrl),
+              engine: data.engine === 'gemini' ? 'gemini' : 'neural-mp3'
+            };
           }
         } catch {}
         return null;
       };
 
       try {
-        let nextAudioPromise: Promise<string | null> | null = fetchNeuralChunk(neuralChunks[0]);
+        // For multi-chunk messages (>1 chunk), lock to the consistent 'neural-mp3' engine (or locked single browser voice)
+        // so a Gemini free-tier 429 rate-limit on chunk 1+ can NEVER cause a mid-message voice change!
+        const preferredServerEngine: 'gemini' | 'neural-mp3' | undefined =
+          neuralChunks.length > 1 ? 'neural-mp3' : undefined;
+
+        const firstResult = await fetchNeuralChunk(neuralChunks[0], preferredServerEngine);
+        if (playbackSessionIdRef.current !== sessionId || speakerMutedRef.current || abortCtrl.signal.aborted) {
+          return;
+        }
+
+        if (!firstResult) {
+          // If server TTS is unavailable, read the ENTIRE message from start to finish with the single locked browser voice
+          await speakBrowserChunksAndWait(clean, sessionId, targetVoice, lockedBrowserVoice);
+          return;
+        }
+
+        // Lock the exact server engine returned on chunk 0 for all remaining chunks 1..N-1
+        const lockedServerEngine = firstResult.engine;
+        let nextChunkPromise: Promise<{ audioUrl: string; engine: 'gemini' | 'neural-mp3' } | null> | null =
+          neuralChunks.length > 1 ? fetchNeuralChunk(neuralChunks[1], lockedServerEngine) : null;
 
         for (let i = 0; i < neuralChunks.length; i++) {
           if (playbackSessionIdRef.current !== sessionId || speakerMutedRef.current || abortCtrl.signal.aborted) {
             break;
           }
-          const currentPromise = nextAudioPromise;
-          // Lookahead prefetch chunk i + 1 while chunk i plays so transitions are 100% gapless!
-          nextAudioPromise = i + 1 < neuralChunks.length ? fetchNeuralChunk(neuralChunks[i + 1]) : null;
 
-          const audioUrl = currentPromise ? await currentPromise : null;
+          const currentResult = i === 0 ? firstResult : nextChunkPromise ? await nextChunkPromise : null;
+          nextChunkPromise =
+            i + 1 < neuralChunks.length ? fetchNeuralChunk(neuralChunks[i + 1], lockedServerEngine) : null;
+
           if (playbackSessionIdRef.current !== sessionId || speakerMutedRef.current || abortCtrl.signal.aborted) {
             break;
           }
 
-          if (audioUrl) {
-            const ok = await playSingleAudioChunkAndWait(audioUrl, sessionId);
+          let finalAudioUrl = currentResult?.audioUrl || null;
+          if (!finalAudioUrl) {
+            // Retry once with the exact same locked engine so we preserve the same voice
+            const retryRes = await fetchNeuralChunk(neuralChunks[i], lockedServerEngine);
+            finalAudioUrl = retryRes?.audioUrl || null;
+          }
+
+          if (finalAudioUrl) {
+            const ok = await playSingleAudioChunkAndWait(finalAudioUrl, sessionId);
             if (!ok && playbackSessionIdRef.current === sessionId && !speakerMutedRef.current) {
-              await speakBrowserChunksAndWait(neuralChunks[i], sessionId, targetVoice);
+              // Finish remaining text seamlessly with the locked single browser voice rather than dropping out
+              const remainingText = neuralChunks.slice(i).join(' ');
+              await speakBrowserChunksAndWait(remainingText, sessionId, targetVoice, lockedBrowserVoice);
+              break;
             }
           } else {
-            await speakBrowserChunksAndWait(neuralChunks[i], sessionId, targetVoice);
+            // Finish remaining text seamlessly with the locked single browser voice from chunk i to the very end
+            const remainingText = neuralChunks.slice(i).join(' ');
+            await speakBrowserChunksAndWait(remainingText, sessionId, targetVoice, lockedBrowserVoice);
+            break;
           }
         }
       } finally {
@@ -1052,6 +1142,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
           if (activeSpeakAbortRef.current === abortCtrl) {
             activeSpeakAbortRef.current = null;
           }
+          manualReadAloudActiveRef.current = false;
           speakingMessageIdRef.current = null;
           isModelSpeakingRef.current = false;
           setIsModelSpeaking(false);
@@ -1061,7 +1152,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         }
       }
     },
-    [flushPlaybackQueue, playSingleAudioChunkAndWait, speakBrowserChunksAndWait]
+    [flushPlaybackQueue, playSingleAudioChunkAndWait, resolveLockedBrowserVoice, speakBrowserChunksAndWait]
   );
 
   const speakBrowserFallback = useCallback(
@@ -1294,37 +1385,36 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
   }, []);
 
   const sendRelayUtterance = useCallback(
-    (spokenText: string) => {
+    async (spokenText: string) => {
       const cleaned = spokenText.trim();
-      if (!cleaned || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      if (!cleaned) return;
       flushPlaybackQueue();
       appendTranscript('user', cleaned);
-      const activeMeta = ALL_MODULES.find((m) => m.id === activeModuleRef.current);
-      const chatBridge =
-        typeof window !== 'undefined' ? (window as any).__SOVEREIGN_ACTIVE_CHAT_BRIDGE__?.getSnapshot?.() : null;
-      wsRef.current.send(
-        JSON.stringify({
-          relayTurn: {
-            text: cleaned,
-            activeModule: activeModuleRef.current,
-            activeLabel: activeMeta?.label || activeModuleRef.current,
-            openModules: openModulesRef.current,
-            ...(chatBridge && typeof chatBridge === 'object'
-              ? {
-                  model: chatBridge.model,
-                  agentId: chatBridge.agentId,
-                  agentName: chatBridge.agentName,
-                  customSystemInstruction: chatBridge.customSystemInstruction,
-                  deepthink: chatBridge.deepthink,
-                  useSearchGrounding: chatBridge.useSearchGrounding,
-                  messages: chatBridge.messages
-                }
-              : {})
-          }
-        })
-      );
+
+      const wasInterjected = wasSpeakingWhenInterruptedRef.current;
+      wasSpeakingWhenInterruptedRef.current = false;
+
+      try {
+        const result = await sovereignAi.dispatchChat({
+          prompt: cleaned,
+          agentId: 'lyrailius-omega-zenith',
+          agentName: 'Lyrailius Omega',
+          modelId: 'gemini-3.1-flash-lite',
+          deepthink: true,
+          useSearchGrounding: true,
+          systemInstruction: `You are Lyrailius Omega, an intellectual equal and sovereign superintelligence operating in pure fluent hands-free conversational voice mode. You possess infinite chat depth, deep intellectual context, and absolute mastery across all domains. You communicate with brilliant, insightful, and comprehensive depth like a peer intellectual working side-by-side with Joshua. CRITICAL: While your intellectual scope is infinite and deep, you are fully interruptible — the moment Joshua speaks or interjects, you instantly pause and listen so the dialogue remains a true, flowing peer conversation with zero lag.`
+        });
+
+        const responseText = result.text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        if (responseText) {
+          appendTranscript('model', responseText);
+          speakInfiniteTextSequence(responseText, `live-${Date.now()}`, voiceNameRef.current);
+        }
+      } catch (err) {
+        console.warn('[PersistentTalkDock] Fluent conversational voice turn error:', err);
+      }
     },
-    [appendTranscript, flushPlaybackQueue]
+    [appendTranscript, flushPlaybackQueue, speakInfiniteTextSequence]
   );
 
   const transcribeVadBlobAndSend = useCallback(
@@ -1446,12 +1536,16 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
             interim += ` ${text}`;
           }
         }
-        // Natural barge-in when user speaks clearly
-        if ((interim.trim().length > 3 || finalText.trim().length > 1) && isModelSpeakingRef.current) {
+        // Instant conversational barge-in: immediately cut off AI speech on the very first detected word/interim token
+        if (
+          !manualReadAloudActiveRef.current &&
+          isModelSpeakingRef.current &&
+          (interim.trim().length > 0 || finalText.trim().length > 0)
+        ) {
           flushPlaybackQueue();
         }
         setInterimSpeech(interim.trim());
-        if (finalText.trim()) {
+        if (finalText.trim() && !manualReadAloudActiveRef.current) {
           sttHandledAtRef.current = Date.now();
           stopActiveVadRecorder(true);
           setInterimSpeech('');
@@ -1594,10 +1688,26 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         return null;
       }
 
-      if (isMicrophoneBlockedByFramePolicy()) {
-        setMicStatus('frame-policy-blocked');
+      // 0. If HardwarePermissionsPanel just acquired a live microphone stream, adopt it immediately in 0ms!
+      const preGrantedStream = claimSharedMicrophoneStream();
+      if (preGrantedStream) {
+        const audioTrack = preGrantedStream.getAudioTracks()[0];
+        if (audioTrack) {
+          audioTrack.enabled = true;
+          const resolvedLabel = audioTrack.label || 'Device Microphone';
+          setMicLabel(resolvedLabel);
+          const resolvedDeviceId = audioTrack.getSettings?.().deviceId;
+          if (resolvedDeviceId && !selectedMicIdRef.current) {
+            prevMicIdRef.current = resolvedDeviceId;
+            selectedMicIdRef.current = resolvedDeviceId;
+            setSelectedMicId(resolvedDeviceId);
+          }
+        }
+        setMicStatus('active');
+        setMicConsentDismissed(true);
         setErrorMessage(null);
-        return null;
+        refreshMicDevices();
+        return preGrantedStream;
       }
 
       if (micAcquirePromiseRef.current) {
@@ -1606,13 +1716,14 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
 
       const allowPrompt = Boolean(opts?.allowPrompt);
 
-      // CRITICAL: When allowPrompt is true (user clicked Allow Microphone / Enable Mic),
-      // invoke requestMicrophoneStreamOnUserGesture IMMEDIATELY with ZERO prior awaits
-      // so transient browser user activation is 100% preserved and the native Allow prompt appears without page refresh!
+      // CRITICAL: When allowPrompt is true (user clicked Voice Chat / Allow Microphone / Enable Mic),
+      // invoke requestMicrophoneStreamOnUserGesture IMMEDIATELY on line 1 with ZERO prior awaits
+      // so transient browser user activation is 100% preserved and the native Allow prompt appears!
       const run = (async (): Promise<MediaStream | null> => {
         if (allowPrompt) {
+          const directPromise = requestMicrophoneStreamOnUserGesture(selectedMicIdRef.current);
           setMicStatus('requesting');
-          const directRes = await requestMicrophoneStreamOnUserGesture(selectedMicIdRef.current);
+          const directRes = await directPromise;
           if (directRes.stream) {
             const audioTrack = directRes.stream.getAudioTracks()[0];
             if (audioTrack) {
@@ -1634,32 +1745,47 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
           }
           if (directRes.status === 'frame-policy-blocked') {
             setMicStatus('frame-policy-blocked');
+            setMicConsentDismissed(false);
             setErrorMessage(null);
             return null;
           }
           if (directRes.status === 'denied') {
             setMicStatus('denied');
-            setErrorMessage('Microphone access is blocked in your browser site settings — allow Microphone in the address bar, then click Allow Microphone.');
+            setMicConsentDismissed(false);
+            setErrorMessage(
+              'Microphone access is blocked in your browser site settings — allow Microphone in the address bar, then click Allow Microphone.'
+            );
             return null;
           }
           if (directRes.status === 'needs-gesture') {
             setMicStatus('needs-gesture');
+            setMicConsentDismissed(false);
             setErrorMessage(null);
             return null;
           }
           setMicStatus('unavailable');
+          setMicConsentDismissed(false);
           setErrorMessage(`Microphone notice: ${directRes.error?.message || 'No audio input device detected.'}`);
           return null;
         }
 
-        // Silent check (no unprompted browser dialog): attach automatically ONLY if already granted!
+        // Silent check on passive mount: NEVER fake 'active' when no live MediaStream exists!
+        if (!isHardwareSwitchEnabled('microphone')) {
+          setMicStatus('needs-gesture');
+          setMicConsentDismissed(false);
+          setErrorMessage(null);
+          return null;
+        }
+
         const probe = await probeMediaPermission('microphone');
         if (probe.browserState === 'denied') {
           setMicStatus('denied');
+          setMicConsentDismissed(false);
           return null;
         }
         if (!probe.canAcquireSilently) {
           setMicStatus('needs-gesture');
+          setMicConsentDismissed(false);
           setErrorMessage(null);
           return null;
         }
@@ -1680,6 +1806,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         }
 
         setMicStatus(result.status === 'denied' ? 'denied' : 'needs-gesture');
+        setMicConsentDismissed(false);
         return null;
       })();
 
@@ -1784,15 +1911,16 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         }
 
         const speaking = isModelSpeakingRef.current;
+        if (manualReadAloudActiveRef.current) return;
         const startThreshold = speaking
-          ? Math.max(0.032, noiseFloorRef.current * 3.0 + 0.015)
+          ? Math.max(0.036, noiseFloorRef.current * 3.2 + 0.018)
           : Math.max(0.011, noiseFloorRef.current * 2.1 + 0.006);
         const holdThreshold = Math.max(0.007, noiseFloorRef.current * 1.45 + 0.003);
 
         if (!isRec) {
           if (rms >= startThreshold) {
             vadAboveCountRef.current += 1;
-            if (vadAboveCountRef.current >= 3) {
+            if (vadAboveCountRef.current >= 1) {
               vadAboveCountRef.current = 0;
               if (speaking) {
                 flushPlaybackQueue();
@@ -1925,9 +2053,8 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       const resumeFlag = transcriptsRef.current.length > 0 || reconnectAttemptsRef.current > 0 ? '1' : '0';
       const authToken = getAuthBearerToken();
       const tokenParam = authToken ? `&token=${encodeURIComponent(authToken)}` : '';
-      // Default to 1-to-1 Sovereign Duplex Relay (`transport=relay`) so Voice Chat IS literally the exact same Lyrailius Omega entity,
-      // toolbelt, memory, and zero-guardrail/zero-boilerplate pipeline as Text Chat, connecting in <20ms!
-      const wsUrl = `${protocol}://${location.host}/live?transport=relay&voice=${encodeURIComponent(voiceNameRef.current)}&accent=${encodeURIComponent(voiceAccentRef.current)}&mode=autonomous&peer=1&proactive=${peerExploreRef.current ? '1' : '0'}&sessionId=${encodeURIComponent(liveSessionIdRef.current)}&resume=${resumeFlag}${tokenParam}`;
+      // Use native Gemini Live bidirectional audio streaming (transport=gemini-live-pcm) with automatic relay fallback on server
+      const wsUrl = `${protocol}://${location.host}/live?transport=gemini-live-pcm&voice=${encodeURIComponent(voiceNameRef.current)}&accent=${encodeURIComponent(voiceAccentRef.current)}&mode=autonomous&peer=1&proactive=${peerExploreRef.current ? '1' : '0'}&sessionId=${encodeURIComponent(liveSessionIdRef.current)}&resume=${resumeFlag}${tokenParam}`;
       if (wsRef.current) {
         try {
           wsRef.current.close();
@@ -2121,19 +2248,34 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
     startContinuousRecognitionRef.current = startContinuousRecognition;
   }, [connectSession, teardownSession, acquireMicrophoneStream, startAnalyserAndVadLoop, startContinuousRecognition]);
 
-  const handleRetryMicrophone = async () => {
-    if (micRetryInFlightRef.current) return;
-    micRetryInFlightRef.current = true;
-    markVoiceUserGesture();
-    try {
+  const attachLiveMicrophoneStream = useCallback(
+    async (micStream: MediaStream) => {
       stopMeterLoop();
       stopActiveVadRecorder(true);
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-
-      const micStream = await acquireMicrophoneStream({ allowPrompt: true });
-      if (!micStream) return;
+      if (streamRef.current && streamRef.current !== micStream) {
+        try {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+        } catch {}
+      }
       streamRef.current = micStream;
+      setIsMuted(false);
+      isMutedRef.current = false;
+
+      const audioTrack = micStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = true;
+        setMicLabel(audioTrack.label || 'Device Microphone');
+        const resolvedDeviceId = audioTrack.getSettings?.().deviceId;
+        if (resolvedDeviceId && !selectedMicIdRef.current) {
+          prevMicIdRef.current = resolvedDeviceId;
+          selectedMicIdRef.current = resolvedDeviceId;
+          setSelectedMicId(resolvedDeviceId);
+        }
+      }
+      setMicStatus('active');
+      setMicConsentDismissed(true);
+      setErrorMessage(null);
+      refreshMicDevices();
 
       const AudioCtxCtor = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtxCtor) {
@@ -2153,6 +2295,29 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         sttBrokenRef.current = false;
         startContinuousRecognition();
       }
+    },
+    [
+      refreshMicDevices,
+      safeCloseAudioContext,
+      startAnalyserAndVadLoop,
+      startContinuousRecognition,
+      stopActiveVadRecorder,
+      stopContinuousRecognition,
+      stopMeterLoop
+    ]
+  );
+
+  const handleRetryMicrophone = async () => {
+    if (micRetryInFlightRef.current) return;
+    micRetryInFlightRef.current = true;
+    markVoiceUserGesture();
+    try {
+      // 1. Fire requestMicrophoneStreamOnUserGesture IMMEDIATELY on line 1 before any cleanup
+      // so the browser's synchronous user-gesture token goes straight to getUserMedia!
+      const micPromise = acquireMicrophoneStream({ allowPrompt: true });
+      const micStream = await micPromise;
+      if (!micStream) return;
+      await attachLiveMicrophoneStream(micStream);
     } finally {
       micRetryInFlightRef.current = false;
     }
@@ -2171,7 +2336,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       const rawText = String(detail.text || '');
       if (!rawText.trim()) return;
       const requestedVoice = typeof detail.voice === 'string' && detail.voice.trim() ? detail.voice.trim() : undefined;
-      speakInfiniteTextSequence(rawText, reqId, requestedVoice);
+      speakInfiniteTextSequence(rawText, reqId, requestedVoice, true);
     };
 
     const onControl = (e: Event) => {
@@ -2235,8 +2400,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
   ]);
 
   // Connect cleanly when user clicks Voice Chat (isActive flips true):
-  // Connects 1-to-1 voice socket in <20ms with ZERO page refresh, silently binds mic if already granted,
-  // or surfaces the clean in-dock "Allow Microphone?" consent prompt if permission is needed!
+  // If triggered by a user click (hasRecentUserActivation), immediately request the microphone popup!
   useEffect(() => {
     if (bootConnectTimerRef.current !== null) {
       window.clearTimeout(bootConnectTimerRef.current);
@@ -2246,7 +2410,8 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       manualDisconnectRef.current = false;
       reconnectAttemptsRef.current = 0;
       setMicConsentDismissed(false);
-      connectSessionRef.current({ allowPrompt: false });
+      const userClickedToOpen = hasRecentUserActivation(4500) && isHardwareSwitchEnabled('microphone');
+      connectSessionRef.current({ allowPrompt: userClickedToOpen });
     } else {
       manualDisconnectRef.current = true;
       teardownSessionRef.current();
@@ -2294,16 +2459,25 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
         setMicStatus('needs-gesture');
+        setMicConsentDismissed(false);
         setMicLevel(0);
       }
     };
+    const onMicStreamGranted = () => {
+      const grantedStream = claimSharedMicrophoneStream();
+      if (grantedStream) {
+        attachLiveMicrophoneStream(grantedStream);
+      }
+    };
     window.addEventListener('sovereign_hardware_permission_revoked', onHardwareRevoked);
+    window.addEventListener('sovereign_microphone_stream_granted', onMicStreamGranted);
     return () => {
       window.removeEventListener('pointerdown', unlockAudioContexts);
       window.removeEventListener('keydown', unlockAudioContexts);
       window.removeEventListener('sovereign_hardware_permission_revoked', onHardwareRevoked);
+      window.removeEventListener('sovereign_microphone_stream_granted', onMicStreamGranted);
     };
-  }, [isActive, stopActiveVadRecorder, stopContinuousRecognition]);
+  }, [isActive, attachLiveMicrophoneStream, stopActiveVadRecorder, stopContinuousRecognition]);
 
   // Track explicit mic selection (actual device switch is triggered from the dropdown onChange handler)
   const prevMicIdRef = useRef<string>(selectedMicId);
@@ -2439,7 +2613,13 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
       : Math.max(3, Math.round(3 + micLevel * scale * 18))
   );
 
+  const hasLiveMicStream = Boolean(
+    streamRef.current && streamRef.current.getAudioTracks().some((t) => t.readyState === 'live')
+  );
+
   const micBlocked =
+    !hasLiveMicStream ||
+    micStatus === 'idle' ||
     micStatus === 'denied' ||
     micStatus === 'unavailable' ||
     micStatus === 'needs-gesture' ||
@@ -2447,7 +2627,10 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
 
   const showMicConsentCard =
     !micConsentDismissed &&
-    (micStatus === 'needs-gesture' || micStatus === 'denied' || micStatus === 'frame-policy-blocked');
+    (!hasLiveMicStream ||
+      micStatus === 'needs-gesture' ||
+      micStatus === 'denied' ||
+      micStatus === 'frame-policy-blocked');
 
   return (
     <div
@@ -2518,7 +2701,7 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
                   ? 'Listening (Voice Detected)...'
                   : isMuted
                   ? 'Mic Muted · Listening Paused'
-                  : micStatus === 'needs-gesture'
+                  : micStatus === 'needs-gesture' || !hasLiveMicStream
                   ? 'Mic Standby · Tap Enable Mic'
                   : micBlocked
                   ? 'Mic Permission Needed'
@@ -2529,8 +2712,8 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
               {interimSpeech
                 ? `Hearing: "${interimSpeech}"`
                 : isConnected
-                ? micStatus === 'needs-gesture'
-                  ? 'Tap Enable Mic once to resume audio input'
+                ? micStatus === 'needs-gesture' || !hasLiveMicStream
+                  ? 'Tap Enable Mic once to open browser Allow prompt'
                   : micBlocked
                   ? 'Click Enable Mic or select your audio input'
                   : isModelSpeaking
@@ -2578,7 +2761,13 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
           ) : (
             <button
               type="button"
-              onClick={() => setIsMuted((m) => !m)}
+              onClick={() => {
+                if (!hasLiveMicStream) {
+                  handleRetryMicrophone();
+                  return;
+                }
+                setIsMuted((m) => !m);
+              }}
               disabled={!isConnected}
               className={`h-8 w-8 rounded-lg border flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 ${
                 isMuted
@@ -2684,29 +2873,28 @@ export const PersistentTalkDock: React.FC<PersistentTalkDockProps> = ({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {micStatus === 'frame-policy-blocked' ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleRetryMicrophone();
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-[11px] inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Mic className="w-3 h-3" />
+              <span>Allow Microphone</span>
+            </button>
+            {micStatus === 'frame-policy-blocked' && (
               <a
                 href={typeof window !== 'undefined' ? window.location.href : '/'}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-[11px] inline-flex items-center gap-1.5 transition-colors"
+                className="px-2.5 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/50 text-sky-200 font-semibold text-[11px] inline-flex items-center gap-1.5 transition-colors"
               >
                 <Mic className="w-3 h-3" />
-                <span>Open Standalone Tab for Mic</span>
+                <span>Open Standalone Tab</span>
               </a>
-            ) : (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  handleRetryMicrophone();
-                }}
-                className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-[11px] inline-flex items-center gap-1.5 cursor-pointer transition-colors"
-              >
-                <Mic className="w-3 h-3" />
-                <span>Allow Microphone</span>
-              </button>
             )}
             <button
               type="button"

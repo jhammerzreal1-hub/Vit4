@@ -111,7 +111,7 @@ export class SovereignAiDispatcher {
     const { prompt, messages = [], mediaAttachment, mediaAttachments = [], agentId = 'lyrailius-omega-zenith', agentName, modelId, deepthink = false, useSearchGrounding = false, systemInstruction, zeroTokenMode = false, rawMode = false, abortSignal, onToken } = options;
 
     const activeBinding = agentModelBinder.getBinding(agentId);
-    const chosenModel = modelId || (activeBinding ? activeBinding.equippedModelId : 'gemini-4-hydrogen');
+    const chosenModel = modelId || (activeBinding ? activeBinding.equippedModelId : 'gemini-3.1-flash-lite');
     const resolvedAgentName = agentName || activeBinding?.agentName || 'Lyrailius Omega';
     const orchestratorContext = rawMode ? undefined : orchestratorRuntime.getResidentContextSummary();
     const skillCount = activeBinding?.skills?.length || 58;
@@ -129,11 +129,12 @@ export class SovereignAiDispatcher {
 
     const virtualCloudAliases = new Set([
       'default',
+      'gemini-4-hydrogen',
       'Lyrailius-Omega-Ultimate-Sovereign-MoE',
       'Lysander-Genesis-SuperModel-Intelligence',
       'Aurelius-Omega-Universal-Supermodel'
     ]);
-    const normalizedCloudModel = virtualCloudAliases.has(chosenModel) ? 'gemini-4-hydrogen' : chosenModel;
+    const normalizedCloudModel = virtualCloudAliases.has(chosenModel) ? 'gemini-3.1-flash-lite' : chosenModel;
 
     if (!zeroTokenMode) {
       const payloadBody = JSON.stringify({
@@ -247,6 +248,11 @@ export class SovereignAiDispatcher {
 
       // Automatic Local Llama & Ollama Cascade Fallback when cloud API limits hit
       const tryLocalLlamaOrOllamaCascade = async (): Promise<DispatchChatResult | null> => {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        const isLocalOrigin = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+        if (!isLocalOrigin) {
+          return null;
+        }
         const localMessages: any[] = [
           { role: 'system', content: rawInstruction },
           ...messages.map((m: any) => ({ role: m.role === 'model' ? 'assistant' : 'user', content: String(m.content || '') })),
@@ -259,7 +265,7 @@ export class SovereignAiDispatcher {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model: 'llama3.2', messages: localMessages, stream: false }),
-            signal: AbortSignal.timeout(6000)
+            signal: AbortSignal.timeout(4500)
           });
           if (ollamaRes.ok) {
             const data = await ollamaRes.json();
@@ -284,7 +290,7 @@ export class SovereignAiDispatcher {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model: 'llama3.2:latest', messages: localMessages, temperature: 0.7 }),
-            signal: AbortSignal.timeout(6000)
+            signal: AbortSignal.timeout(4500)
           });
           if (llamaRes.ok) {
             const data = await llamaRes.json();
@@ -309,6 +315,13 @@ export class SovereignAiDispatcher {
       const localCascadeRes = await tryLocalLlamaOrOllamaCascade();
       if (localCascadeRes) {
         return localCascadeRes;
+      }
+
+      // If WebGPU is supported and weights aren't loaded yet, auto-boot the in-browser WebLLM Llama model on demand
+      if (!localLlmManager.hasLoadedWeights() && localLlmManager.isWebGpuSupported()) {
+        try {
+          await localLlmManager.loadWebLlmModel(normalizedCloudModel || 'Llama-3.2-1B-Instruct-q4f16_1-MLC');
+        } catch (_) {}
       }
 
       // Check if a REAL local engine (WebGPU weights loaded, Termux llama-server, or Ollama) is available before falling back

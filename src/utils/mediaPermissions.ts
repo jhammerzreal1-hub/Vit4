@@ -16,6 +16,12 @@ export interface PersistedMediaPermissionsRecord {
   micGrantedAt: string | null;
   cameraGranted: boolean;
   cameraGrantedAt: string | null;
+  geoGranted: boolean;
+  geoGrantedAt: string | null;
+  notifGranted: boolean;
+  notifGrantedAt: string | null;
+  clipboardGranted: boolean;
+  clipboardGrantedAt: string | null;
   lastMicDeviceId?: string;
   lastMicLabel?: string;
 }
@@ -82,6 +88,49 @@ function installGlobalListenersOnce() {
         cur.cameraGrantedAt = vd.cameraPermissionGrantedAt || new Date().toISOString();
         changed = true;
       }
+      if (vd.geoPermissionGranted === true && !cur.geoGranted) {
+        cur.geoGranted = true;
+        cur.geoGrantedAt = vd.geoPermissionGrantedAt || new Date().toISOString();
+        changed = true;
+      }
+      if (vd.notifPermissionGranted === true && !cur.notifGranted) {
+        cur.notifGranted = true;
+        cur.notifGrantedAt = vd.notifPermissionGrantedAt || new Date().toISOString();
+        changed = true;
+      }
+      if (vd.clipboardPermissionGranted === true && !cur.clipboardGranted) {
+        cur.clipboardGranted = true;
+        cur.clipboardGrantedAt = vd.clipboardPermissionGrantedAt || new Date().toISOString();
+        changed = true;
+      }
+      if (vd.hardwareSwitches && typeof vd.hardwareSwitches === 'object') {
+        try {
+          const curSw = loadHardwareSwitches();
+          const mergedSw: HardwareSwitchesState = {
+            microphone:
+              typeof vd.hardwareSwitches.microphone === 'boolean'
+                ? vd.hardwareSwitches.microphone
+                : curSw.microphone,
+            camera:
+              typeof vd.hardwareSwitches.camera === 'boolean'
+                ? vd.hardwareSwitches.camera
+                : curSw.camera,
+            geolocation:
+              typeof vd.hardwareSwitches.geolocation === 'boolean'
+                ? vd.hardwareSwitches.geolocation
+                : curSw.geolocation,
+            notifications:
+              typeof vd.hardwareSwitches.notifications === 'boolean'
+                ? vd.hardwareSwitches.notifications
+                : curSw.notifications,
+            clipboard:
+              typeof vd.hardwareSwitches.clipboard === 'boolean'
+                ? vd.hardwareSwitches.clipboard
+                : curSw.clipboard
+          };
+          localStorage.setItem(HARDWARE_SWITCHES_STORAGE_KEY, JSON.stringify(mergedSw));
+        } catch {}
+      }
       if (typeof vd.selectedMicId === 'string' && vd.selectedMicId && !cur.lastMicDeviceId) {
         cur.lastMicDeviceId = vd.selectedMicId;
         changed = true;
@@ -93,6 +142,7 @@ function installGlobalListenersOnce() {
       if (changed) {
         savePersistedMediaPermissions(cur, false);
       }
+      window.dispatchEvent(new CustomEvent('sovereign_hardware_permissions_changed', { detail: loadHardwareSwitches() }));
     });
   }
 }
@@ -111,12 +161,46 @@ export function hasRecentUserActivation(maxAgeMs = 3000): boolean {
   return lastUserGestureAt > 0 && Date.now() - lastUserGestureAt <= maxAgeMs;
 }
 
+let activeSharedMicStream: MediaStream | null = null;
+
+export function setSharedMicrophoneStream(stream: MediaStream | null): void {
+  if (activeSharedMicStream && activeSharedMicStream !== stream) {
+    try {
+      activeSharedMicStream.getTracks().forEach((t) => t.stop());
+    } catch {}
+  }
+  activeSharedMicStream = stream;
+}
+
+export function peekSharedMicrophoneStream(): MediaStream | null {
+  if (
+    activeSharedMicStream &&
+    activeSharedMicStream.getAudioTracks().some((t) => t.readyState === 'live')
+  ) {
+    return activeSharedMicStream;
+  }
+  activeSharedMicStream = null;
+  return null;
+}
+
+export function claimSharedMicrophoneStream(): MediaStream | null {
+  const stream = peekSharedMicrophoneStream();
+  activeSharedMicStream = null;
+  return stream;
+}
+
 export function loadPersistedMediaPermissions(): PersistedMediaPermissionsRecord {
   const fallback: PersistedMediaPermissionsRecord = {
     micGranted: false,
     micGrantedAt: null,
     cameraGranted: false,
-    cameraGrantedAt: null
+    cameraGrantedAt: null,
+    geoGranted: false,
+    geoGrantedAt: null,
+    notifGranted: false,
+    notifGrantedAt: null,
+    clipboardGranted: false,
+    clipboardGrantedAt: null
   };
   if (typeof window === 'undefined') return fallback;
 
@@ -125,21 +209,20 @@ export function loadPersistedMediaPermissions(): PersistedMediaPermissionsRecord
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
-        fallback.micGranted = Boolean(parsed.micGranted);
+        // Only treat a permission as remembered-granted if it was actually granted with a timestamp
         fallback.micGrantedAt = typeof parsed.micGrantedAt === 'string' ? parsed.micGrantedAt : null;
-        fallback.cameraGranted = Boolean(parsed.cameraGranted);
+        fallback.micGranted = Boolean(parsed.micGranted === true && fallback.micGrantedAt);
         fallback.cameraGrantedAt = typeof parsed.cameraGrantedAt === 'string' ? parsed.cameraGrantedAt : null;
+        fallback.cameraGranted = Boolean(parsed.cameraGranted === true && fallback.cameraGrantedAt);
+        fallback.geoGrantedAt = typeof parsed.geoGrantedAt === 'string' ? parsed.geoGrantedAt : null;
+        fallback.geoGranted = Boolean(parsed.geoGranted === true && fallback.geoGrantedAt);
+        fallback.notifGrantedAt = typeof parsed.notifGrantedAt === 'string' ? parsed.notifGrantedAt : null;
+        fallback.notifGranted = Boolean(parsed.notifGranted === true && fallback.notifGrantedAt);
+        fallback.clipboardGrantedAt = typeof parsed.clipboardGrantedAt === 'string' ? parsed.clipboardGrantedAt : null;
+        fallback.clipboardGranted = Boolean(parsed.clipboardGranted === true && fallback.clipboardGrantedAt);
         if (typeof parsed.lastMicDeviceId === 'string') fallback.lastMicDeviceId = parsed.lastMicDeviceId;
         if (typeof parsed.lastMicLabel === 'string') fallback.lastMicLabel = parsed.lastMicLabel;
       }
-    }
-    if (!fallback.micGranted && localStorage.getItem(LEGACY_MIC_KEY) === '1') {
-      fallback.micGranted = true;
-      fallback.micGrantedAt = fallback.micGrantedAt || new Date().toISOString();
-    }
-    if (!fallback.cameraGranted && localStorage.getItem(LEGACY_CAM_KEY) === '1') {
-      fallback.cameraGranted = true;
-      fallback.cameraGrantedAt = fallback.cameraGrantedAt || new Date().toISOString();
     }
     if (!fallback.lastMicLabel) {
       const lbl = localStorage.getItem(LEGACY_MIC_LABEL_KEY);
@@ -158,12 +241,12 @@ function savePersistedMediaPermissions(record: PersistedMediaPermissionsRecord, 
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(record));
-    if (record.micGranted) {
+    if (record.micGranted && record.micGrantedAt) {
       localStorage.setItem(LEGACY_MIC_KEY, '1');
     } else {
       localStorage.removeItem(LEGACY_MIC_KEY);
     }
-    if (record.cameraGranted) {
+    if (record.cameraGranted && record.cameraGrantedAt) {
       localStorage.setItem(LEGACY_CAM_KEY, '1');
     } else {
       localStorage.removeItem(LEGACY_CAM_KEY);
@@ -187,6 +270,13 @@ function savePersistedMediaPermissions(record: PersistedMediaPermissionsRecord, 
           micPermissionGrantedAt: record.micGrantedAt || undefined,
           cameraPermissionGranted: record.cameraGranted,
           cameraPermissionGrantedAt: record.cameraGrantedAt || undefined,
+          geoPermissionGranted: record.geoGranted,
+          geoPermissionGrantedAt: record.geoGrantedAt || undefined,
+          notifPermissionGranted: record.notifGranted,
+          notifPermissionGrantedAt: record.notifGrantedAt || undefined,
+          clipboardPermissionGranted: record.clipboardGranted,
+          clipboardPermissionGrantedAt: record.clipboardGrantedAt || undefined,
+          hardwareSwitches: loadHardwareSwitches(),
           ...(record.lastMicDeviceId ? { selectedMicId: record.lastMicDeviceId } : {}),
           ...(record.lastMicLabel ? { micLabel: record.lastMicLabel } : {})
         }
@@ -197,7 +287,7 @@ function savePersistedMediaPermissions(record: PersistedMediaPermissionsRecord, 
 }
 
 export function markMediaPermissionGranted(
-  kind: MediaKind,
+  kind: MediaKind | HardwarePermissionKey,
   meta?: { deviceId?: string; label?: string }
 ): PersistedMediaPermissionsRecord {
   const cur = loadPersistedMediaPermissions();
@@ -205,9 +295,9 @@ export function markMediaPermissionGranted(
   let changed = false;
 
   if (kind === 'microphone') {
-    if (!cur.micGranted) {
+    if (!cur.micGranted || !cur.micGrantedAt) {
       cur.micGranted = true;
-      cur.micGrantedAt = now;
+      cur.micGrantedAt = cur.micGrantedAt || now;
       changed = true;
     }
     if (meta?.deviceId && meta.deviceId !== cur.lastMicDeviceId) {
@@ -218,10 +308,28 @@ export function markMediaPermissionGranted(
       cur.lastMicLabel = meta.label;
       changed = true;
     }
-  } else {
-    if (!cur.cameraGranted) {
+  } else if (kind === 'camera') {
+    if (!cur.cameraGranted || !cur.cameraGrantedAt) {
       cur.cameraGranted = true;
-      cur.cameraGrantedAt = now;
+      cur.cameraGrantedAt = cur.cameraGrantedAt || now;
+      changed = true;
+    }
+  } else if (kind === 'geolocation') {
+    if (!cur.geoGranted || !cur.geoGrantedAt) {
+      cur.geoGranted = true;
+      cur.geoGrantedAt = cur.geoGrantedAt || now;
+      changed = true;
+    }
+  } else if (kind === 'notifications') {
+    if (!cur.notifGranted || !cur.notifGrantedAt) {
+      cur.notifGranted = true;
+      cur.notifGrantedAt = cur.notifGrantedAt || now;
+      changed = true;
+    }
+  } else if (kind === 'clipboard') {
+    if (!cur.clipboardGranted || !cur.clipboardGrantedAt) {
+      cur.clipboardGranted = true;
+      cur.clipboardGrantedAt = cur.clipboardGrantedAt || now;
       changed = true;
     }
   }
@@ -232,16 +340,23 @@ export function markMediaPermissionGranted(
   return cur;
 }
 
-export function clearMediaPermissionGrant(kind: MediaKind): void {
+export function clearMediaPermissionGrant(kind: MediaKind | HardwarePermissionKey): void {
   const cur = loadPersistedMediaPermissions();
   if (kind === 'microphone') {
-    if (!cur.micGranted) return;
     cur.micGranted = false;
     cur.micGrantedAt = null;
-  } else {
-    if (!cur.cameraGranted) return;
+  } else if (kind === 'camera') {
     cur.cameraGranted = false;
     cur.cameraGrantedAt = null;
+  } else if (kind === 'geolocation') {
+    cur.geoGranted = false;
+    cur.geoGrantedAt = null;
+  } else if (kind === 'notifications') {
+    cur.notifGranted = false;
+    cur.notifGrantedAt = null;
+  } else if (kind === 'clipboard') {
+    cur.clipboardGranted = false;
+    cur.clipboardGrantedAt = null;
   }
   savePersistedMediaPermissions(cur, true);
 }
@@ -268,11 +383,21 @@ export async function probeMediaPermission(kind: MediaKind): Promise<MediaPermis
     };
   }
 
+  if (kind === 'microphone' && peekSharedMicrophoneStream()) {
+    return {
+      kind,
+      browserState: 'granted',
+      hasLabeledHardwareDevice: true,
+      rememberedGrant: true,
+      canAcquireSilently: true
+    };
+  }
+
   if (navigator.permissions?.query) {
     try {
       const status = await Promise.race([
         navigator.permissions.query({ name: kind as PermissionName }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 650))
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 120))
       ]);
       if (status && (status.state === 'granted' || status.state === 'prompt' || status.state === 'denied')) {
         browserState = status.state;
@@ -284,12 +409,12 @@ export async function probeMediaPermission(kind: MediaKind): Promise<MediaPermis
     try {
       const devices = await Promise.race([
         navigator.mediaDevices.enumerateDevices(),
-        new Promise<MediaDeviceInfo[]>((resolve) => setTimeout(() => resolve([]), 650))
+        new Promise<MediaDeviceInfo[]>((resolve) => setTimeout(() => resolve([]), 120))
       ]);
       hasLabeledHardwareDevice = devices.some(
         (d) => d.kind === targetDeviceKind && typeof d.label === 'string' && d.label.trim().length > 0
       );
-      if (hasLabeledHardwareDevice && browserState === 'unknown') {
+      if (hasLabeledHardwareDevice && browserState !== 'denied') {
         browserState = 'granted';
       }
     } catch {}
@@ -303,8 +428,6 @@ export async function probeMediaPermission(kind: MediaKind): Promise<MediaPermis
     clearMediaPermissionGrant(kind);
   }
 
-  // Only acquire silently on boot when Chromium/browser actively confirms permission is granted
-  // (never trigger an unprompted native Allow dialog if browserState is 'prompt' or 'unknown').
   const canAcquireSilently = browserState === 'granted' || hasLabeledHardwareDevice;
 
   return {
@@ -326,7 +449,6 @@ export function isMicrophoneBlockedByFramePolicy(): boolean {
       return policy.allowsFeature('microphone') === false;
     }
   } catch {
-    // Cross-origin frame access check is expected; rely on permissionsPolicy if present
     try {
       const policy = (document as any).permissionsPolicy || (document as any).featurePolicy;
       if (policy && typeof policy.allowsFeature === 'function') {
@@ -339,7 +461,7 @@ export function isMicrophoneBlockedByFramePolicy(): boolean {
 
 /**
  * Synchronous-first getUserMedia call designed to run directly inside a user click handler
- * with ZERO prior awaits so transient user activation is never lost in Chrome/Safari/Firefox/Edge.
+ * with ZERO prior awaits or network calls so the browser popup appears in <5ms.
  */
 export function requestMicrophoneStreamOnUserGesture(preferredDeviceId?: string): Promise<{
   stream: MediaStream | null;
@@ -347,15 +469,24 @@ export function requestMicrophoneStreamOnUserGesture(preferredDeviceId?: string)
   error?: any;
 }> {
   markVoiceUserGesture();
+  const existingShared = claimSharedMicrophoneStream();
+  if (existingShared) {
+    const track = existingShared.getAudioTracks()[0];
+    if (track) {
+      track.enabled = true;
+      markMediaPermissionGranted('microphone', {
+        deviceId: track.getSettings?.().deviceId || undefined,
+        label: track.label || undefined
+      });
+    } else {
+      markMediaPermissionGranted('microphone');
+    }
+    setHardwareSwitchPreference('microphone', true);
+    return Promise.resolve({ stream: existingShared, status: 'granted' as const });
+  }
+
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     return Promise.resolve({ stream: null, status: 'unavailable' });
-  }
-  if (isMicrophoneBlockedByFramePolicy()) {
-    return Promise.resolve({
-      stream: null,
-      status: 'frame-policy-blocked',
-      error: new Error('Iframe Permissions-Policy blocks microphone in embedded preview frame.')
-    });
   }
 
   const primaryConstraints: MediaStreamConstraints =
@@ -368,15 +499,9 @@ export function requestMicrophoneStreamOnUserGesture(preferredDeviceId?: string)
             autoGainControl: true
           }
         }
-      : {
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-        };
+      : { audio: true };
 
-  // Call getUserMedia IMMEDIATELY (synchronously before any await!) to preserve browser user activation
+  // Call getUserMedia IMMEDIATELY on line 1 (zero awaits, zero storage/network I/O first!)
   const firstAttemptPromise = navigator.mediaDevices.getUserMedia(primaryConstraints);
 
   return firstAttemptPromise
@@ -385,7 +510,6 @@ export function requestMicrophoneStreamOnUserGesture(preferredDeviceId?: string)
       if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError' || errName === 'SecurityError') {
         throw firstErr;
       }
-      // Hardware constraint mismatch fallback
       return navigator.mediaDevices.getUserMedia({ audio: true });
     })
     .then((stream) => {
@@ -403,19 +527,14 @@ export function requestMicrophoneStreamOnUserGesture(preferredDeviceId?: string)
       setHardwareSwitchPreference('microphone', true);
       return { stream, status: 'granted' as const };
     })
-    .catch(async (err: any) => {
+    .catch((err: any) => {
       const name = String(err?.name || '');
       const msg = String(err?.message || '');
-      if (/permissions?\s*policy|not allowed in this document/i.test(msg) || isMicrophoneBlockedByFramePolicy()) {
+      if (/permissions?\s*policy|not allowed in this document/i.test(msg)) {
         return { stream: null, status: 'frame-policy-blocked' as const, error: err };
       }
       if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
-        const postProbe = await probeMediaPermission('microphone').catch(() => null);
-        if (postProbe?.browserState === 'denied') {
-          clearMediaPermissionGrant('microphone');
-          return { stream: null, status: 'denied' as const, error: err };
-        }
-        return { stream: null, status: 'needs-gesture' as const, error: err };
+        return { stream: null, status: 'denied' as const, error: err };
       }
       return { stream: null, status: 'unavailable' as const, error: err };
     });
@@ -429,6 +548,22 @@ export async function requestMicrophoneStream(options?: {
   status: 'granted' | 'needs-gesture' | 'denied' | 'unavailable';
   error?: any;
 }> {
+  const existingShared = claimSharedMicrophoneStream();
+  if (existingShared) {
+    const track = existingShared.getAudioTracks()[0];
+    if (track) {
+      track.enabled = true;
+      markMediaPermissionGranted('microphone', {
+        deviceId: track.getSettings?.().deviceId || undefined,
+        label: track.label || undefined
+      });
+    } else {
+      markMediaPermissionGranted('microphone');
+    }
+    setHardwareSwitchPreference('microphone', true);
+    return { stream: existingShared, status: 'granted' };
+  }
+
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     return { stream: null, status: 'unavailable' };
   }
@@ -440,9 +575,6 @@ export async function requestMicrophoneStream(options?: {
   const run = (async () => {
     const allowPrompt = Boolean(options?.allowPrompt);
 
-    // IMPORTANT: When allowPrompt is true (explicit user click on slider or Join Voice),
-    // call getUserMedia IMMEDIATELY without awaiting probeMediaPermission first,
-    // so Safari / Firefox / mobile browsers preserve the synchronous user gesture activation!
     if (!allowPrompt) {
       const probe = await probeMediaPermission('microphone');
       if (probe.browserState === 'denied') {
@@ -457,14 +589,14 @@ export async function requestMicrophoneStream(options?: {
       options?.constraintsList && options.constraintsList.length > 0
         ? options.constraintsList
         : [
+            { audio: true },
             {
               audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
                 autoGainControl: true
               }
-            },
-            { audio: true }
+            }
           ];
 
     let lastErr: any = null;
@@ -488,12 +620,7 @@ export async function requestMicrophoneStream(options?: {
         lastErr = err;
         const name = String(err?.name || '');
         if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
-          const postProbe = await probeMediaPermission('microphone').catch(() => null);
-          if (postProbe?.browserState === 'denied') {
-            clearMediaPermissionGrant('microphone');
-            return { stream: null, status: 'denied' as const, error: err };
-          }
-          return { stream: null, status: 'needs-gesture' as const, error: err };
+          return { stream: null, status: 'denied' as const, error: err };
         }
       }
     }
@@ -534,7 +661,6 @@ export async function requestCameraStream(options?: {
   const run = (async () => {
     const allowPrompt = Boolean(options?.allowPrompt);
 
-    // Preserve user gesture activation for Safari / Firefox / Edge / Chrome when allowPrompt is true
     if (!allowPrompt) {
       const probe = await probeMediaPermission('camera');
       const switchEnabled = isHardwareSwitchEnabled('camera');
@@ -546,18 +672,17 @@ export async function requestCameraStream(options?: {
       }
     }
 
-    // Try standard cross-browser webcam constraints first (never fail desktop cameras with rear-only facingMode)
     const attempts: MediaStreamConstraints[] = options?.constraints
       ? [options.constraints, { video: true }]
       : [
+          { video: true },
           {
             video: {
               width: { ideal: 1280 },
               height: { ideal: 720 },
               facingMode: 'user'
             }
-          },
-          { video: true }
+          }
         ];
 
     let lastErr: any = null;
@@ -571,12 +696,7 @@ export async function requestCameraStream(options?: {
         lastErr = err;
         const name = String(err?.name || '');
         if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
-          const postProbe = await probeMediaPermission('camera').catch(() => null);
-          if (postProbe?.browserState === 'denied') {
-            clearMediaPermissionGrant('camera');
-            return { stream: null, status: 'denied' as const, error: err };
-          }
-          return { stream: null, status: 'needs-gesture' as const, error: err };
+          return { stream: null, status: 'denied' as const, error: err };
         }
       }
     }
@@ -600,7 +720,7 @@ export async function requestCameraStream(options?: {
 
 // ============================================================================
 // Unified Hardware & Device Privilege Sliders (Zero Intrusive Boot Popups,
-// Full Cross-Browser Permission Binding: Chrome, Firefox, Safari, Edge, Brave)
+// Instant <5ms Synchronous Browser Prompts, Permanent User Memory)
 // ============================================================================
 
 export type HardwarePermissionKey = 'microphone' | 'camera' | 'geolocation' | 'notifications' | 'clipboard';
@@ -621,7 +741,6 @@ export interface HardwarePermissionStatusItem {
 
 const HARDWARE_SWITCHES_STORAGE_KEY = 'sovereign_hardware_switches_v2';
 
-// All permissions stay permanently ON by default unless explicitly toggled OFF by the user
 const DEFAULT_HARDWARE_SWITCHES: HardwareSwitchesState = {
   microphone: true,
   camera: true,
@@ -662,19 +781,28 @@ export function setHardwareSwitchPreference(key: HardwarePermissionKey, enabled:
   if (typeof window !== 'undefined') {
     try {
       localStorage.setItem(HARDWARE_SWITCHES_STORAGE_KEY, JSON.stringify(next));
+      localStorage.setItem(CONTINUITY_TS_KEY, new Date().toISOString());
       window.dispatchEvent(new CustomEvent('sovereign_hardware_permissions_changed', { detail: next }));
       if (!enabled) {
+        if (key === 'microphone') {
+          setSharedMicrophoneStream(null);
+        }
         window.dispatchEvent(new CustomEvent('sovereign_hardware_permission_revoked', { detail: { key } }));
       }
+      // Defer server continuity sync by 50ms so UI & native browser permission prompts never wait on network I/O
+      pushContinuitySettingsPatch(
+        {
+          voiceDock: {
+            hardwareSwitches: next
+          }
+        },
+        false
+      );
     } catch {}
   }
   return next;
 }
 
-/**
- * Subscribe to live browser permission changes (e.g., when a user flips permissions
- * in Chrome/Edge/Firefox/Safari site settings). Safe across all browsers.
- */
 export function subscribeBrowserPermissionChanges(onChange: () => void): () => void {
   if (typeof window === 'undefined') return () => {};
   const cleanups: Array<() => void> = [];
@@ -706,9 +834,7 @@ export function subscribeBrowserPermissionChanges(onChange: () => void): () => v
           status.addEventListener?.('change', handler);
           cleanups.push(() => status.removeEventListener?.('change', handler));
         })
-        .catch(() => {
-          // Expected in Firefox/Safari for unsupported descriptor names
-        });
+        .catch(() => {});
     }
   }
 
@@ -721,97 +847,145 @@ export function subscribeBrowserPermissionChanges(onChange: () => void): () => v
   };
 }
 
+async function querySinglePermissionFast(name: string): Promise<ResolvedBrowserPermissionState> {
+  if (typeof navigator === 'undefined' || !navigator.permissions?.query) return 'unknown';
+  try {
+    const status = await Promise.race([
+      navigator.permissions.query({ name: name as PermissionName }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 90))
+    ]);
+    if (status && (status.state === 'granted' || status.state === 'prompt' || status.state === 'denied')) {
+      return status.state;
+    }
+  } catch {}
+  return 'unknown';
+}
+
 /**
- * 100% Silent, read-only status probe across all device capabilities for all browsers.
- * NEVER triggers any native browser permission dialog.
+ * Fast (<100ms) silent read-only status probe across all device capabilities.
+ * Reflects actual browser permission state so ungranted permissions show "Turn On / Allow"
+ * and granted permissions stay permanently ON for the user.
  */
 export async function probeAllHardwarePermissionsSilent(): Promise<Record<HardwarePermissionKey, HardwarePermissionStatusItem>> {
   const switches = loadHardwareSwitches();
-
-  const queryPerm = async (name: string): Promise<ResolvedBrowserPermissionState> => {
-    if (typeof navigator === 'undefined' || !navigator.permissions?.query) return 'unknown';
-    try {
-      const status = await Promise.race([
-        navigator.permissions.query({ name: name as PermissionName }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 500))
-      ]);
-      if (status && (status.state === 'granted' || status.state === 'prompt' || status.state === 'denied')) {
-        return status.state;
-      }
-    } catch {}
-    return 'unknown';
-  };
-
-  const [micProbe, camProbe, geoState, clipReadState, clipWriteState] = await Promise.all([
-    probeMediaPermission('microphone').catch(() => ({
-      browserState: 'unknown' as ResolvedBrowserPermissionState,
-      canAcquireSilently: false
-    })),
-    probeMediaPermission('camera').catch(() => ({
-      browserState: 'unknown' as ResolvedBrowserPermissionState,
-      canAcquireSilently: false
-    })),
-    queryPerm('geolocation'),
-    queryPerm('clipboard-read'),
-    queryPerm('clipboard-write')
-  ]);
-
-  let notifState: ResolvedBrowserPermissionState | 'unsupported' = 'unsupported';
-  if (typeof window !== 'undefined' && 'Notification' in window) {
-    const p = Notification.permission;
-    notifState = p === 'granted' ? 'granted' : p === 'denied' ? 'denied' : 'prompt';
-  }
+  const persistedMedia = loadPersistedMediaPermissions();
 
   const hasGeo = typeof navigator !== 'undefined' && 'geolocation' in navigator;
   const hasMedia = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
   const hasClip = typeof navigator !== 'undefined' && (Boolean(navigator.clipboard) || typeof document?.execCommand === 'function');
+  const hasNotif = typeof window !== 'undefined' && 'Notification' in window;
 
-  // Resolve combined clipboard browser state (Firefox & Safari throw on clipboard-write query -> 'unknown', which is allowed on gesture)
-  let resolvedClipState: ResolvedBrowserPermissionState | 'unsupported' = 'unsupported';
-  if (hasClip) {
-    if (clipReadState === 'denied' && clipWriteState === 'denied') {
-      resolvedClipState = 'denied';
-    } else if (clipReadState === 'granted' || clipWriteState === 'granted') {
-      resolvedClipState = 'granted';
-    } else if (clipReadState === 'prompt' || clipWriteState === 'prompt') {
-      resolvedClipState = 'prompt';
-    } else {
-      resolvedClipState = 'prompt';
-    }
+  const [micPerm, camPerm, geoPerm, clipPerm, devices] = await Promise.all([
+    hasMedia ? querySinglePermissionFast('microphone') : Promise.resolve('unknown' as const),
+    hasMedia ? querySinglePermissionFast('camera') : Promise.resolve('unknown' as const),
+    hasGeo ? querySinglePermissionFast('geolocation') : Promise.resolve('unknown' as const),
+    hasClip ? querySinglePermissionFast('clipboard-read') : Promise.resolve('unknown' as const),
+    typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices
+      ? Promise.race([
+          navigator.mediaDevices.enumerateDevices().catch(() => [] as MediaDeviceInfo[]),
+          new Promise<MediaDeviceInfo[]>((resolve) => setTimeout(() => resolve([]), 90))
+        ])
+      : Promise.resolve([] as MediaDeviceInfo[])
+  ]);
+
+  const hasLabeledMic =
+    Boolean(peekSharedMicrophoneStream()) ||
+    devices.some((d) => d.kind === 'audioinput' && typeof d.label === 'string' && d.label.trim().length > 0);
+  const hasLabeledCam = devices.some(
+    (d) => d.kind === 'videoinput' && typeof d.label === 'string' && d.label.trim().length > 0
+  );
+
+  const resolvedMicState: ResolvedBrowserPermissionState | 'unsupported' = !hasMedia
+    ? 'unsupported'
+    : micPerm === 'granted' || hasLabeledMic
+    ? 'granted'
+    : micPerm === 'denied'
+    ? 'denied'
+    : persistedMedia.micGranted
+    ? 'granted'
+    : 'prompt';
+
+  const resolvedCamState: ResolvedBrowserPermissionState | 'unsupported' = !hasMedia
+    ? 'unsupported'
+    : camPerm === 'granted' || hasLabeledCam
+    ? 'granted'
+    : camPerm === 'denied'
+    ? 'denied'
+    : persistedMedia.cameraGranted
+    ? 'granted'
+    : 'prompt';
+
+  const resolvedGeoState: ResolvedBrowserPermissionState | 'unsupported' = !hasGeo
+    ? 'unsupported'
+    : geoPerm === 'granted'
+    ? 'granted'
+    : geoPerm === 'denied'
+    ? 'denied'
+    : persistedMedia.geoGranted
+    ? 'granted'
+    : 'prompt';
+
+  const notifRaw = hasNotif ? Notification.permission : 'default';
+  const resolvedNotifState: ResolvedBrowserPermissionState | 'unsupported' = !hasNotif
+    ? 'unsupported'
+    : notifRaw === 'granted'
+    ? 'granted'
+    : notifRaw === 'denied'
+    ? 'denied'
+    : persistedMedia.notifGranted
+    ? 'granted'
+    : 'prompt';
+
+  const resolvedClipState: ResolvedBrowserPermissionState | 'unsupported' = !hasClip
+    ? 'unsupported'
+    : clipPerm === 'granted' || persistedMedia.clipboardGranted
+    ? 'granted'
+    : clipPerm === 'denied'
+    ? 'denied'
+    : 'prompt';
+
+  if (resolvedMicState === 'granted' && !persistedMedia.micGranted) {
+    markMediaPermissionGranted('microphone');
+  }
+  if (resolvedCamState === 'granted' && !persistedMedia.cameraGranted) {
+    markMediaPermissionGranted('camera');
+  }
+  if (resolvedGeoState === 'granted' && !persistedMedia.geoGranted) {
+    markMediaPermissionGranted('geolocation');
+  }
+  if (resolvedNotifState === 'granted' && !persistedMedia.notifGranted) {
+    markMediaPermissionGranted('notifications');
   }
 
   return {
     microphone: {
       key: 'microphone',
-      enabled: switches.microphone,
-      browserState: hasMedia ? micProbe.browserState : 'unsupported'
+      enabled: Boolean(switches.microphone && resolvedMicState === 'granted'),
+      browserState: resolvedMicState
     },
     camera: {
       key: 'camera',
-      enabled: switches.camera,
-      browserState: hasMedia ? camProbe.browserState : 'unsupported'
+      enabled: Boolean(switches.camera && resolvedCamState === 'granted'),
+      browserState: resolvedCamState
     },
     geolocation: {
       key: 'geolocation',
-      enabled: switches.geolocation,
-      browserState: hasGeo ? geoState : 'unsupported'
+      enabled: Boolean(switches.geolocation && resolvedGeoState === 'granted'),
+      browserState: resolvedGeoState
     },
     notifications: {
       key: 'notifications',
-      enabled: switches.notifications,
-      browserState: notifState
+      enabled: Boolean(switches.notifications && resolvedNotifState === 'granted'),
+      browserState: resolvedNotifState
     },
     clipboard: {
       key: 'clipboard',
-      enabled: switches.clipboard,
+      enabled: Boolean(switches.clipboard && resolvedClipState === 'granted'),
       browserState: resolvedClipState
     }
   };
 }
 
-/**
- * Request browser Notification permission safely across Chrome, Edge, Firefox, and legacy Safari.
- */
 function requestNotificationPermissionCrossBrowser(): Promise<NotificationPermission> {
   return new Promise((resolve) => {
     try {
@@ -827,11 +1001,38 @@ function requestNotificationPermissionCrossBrowser(): Promise<NotificationPermis
   });
 }
 
+function bindGrantedMicStreamAndBroadcast(stream: MediaStream): void {
+  const audioTrack = stream.getAudioTracks()[0];
+  let resolvedId: string | undefined;
+  let resolvedLabel: string | undefined;
+  if (audioTrack) {
+    audioTrack.enabled = true;
+    resolvedId = audioTrack.getSettings?.().deviceId || undefined;
+    resolvedLabel = audioTrack.label || 'Device Microphone';
+  }
+  setHardwareSwitchPreference('microphone', true);
+  markMediaPermissionGranted('microphone', {
+    deviceId: resolvedId,
+    label: resolvedLabel
+  });
+  setSharedMicrophoneStream(stream);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('sovereign_microphone_stream_granted', {
+        detail: {
+          stream,
+          deviceId: resolvedId,
+          label: resolvedLabel
+        }
+      })
+    );
+  }
+}
+
 /**
- * Explicit user slider toggle handler.
- * Turning ON immediately calls the native browser permission API inside the click gesture
- * (so Chrome, Firefox, Safari, Edge, and Brave all present their real browser permission prompt);
- * Turning OFF immediately revokes/disables usage inside the OS without prompting.
+ * Zero-Latency (<5ms) User Permission Request & Toggle Handler.
+ * Invokes the native browser permission API on the VERY FIRST LINE inside the user click gesture
+ * before any storage writes or network continuity sync, so the browser prompt pops up instantaneously!
  */
 export async function toggleHardwarePermissionSlider(
   key: HardwarePermissionKey,
@@ -839,157 +1040,265 @@ export async function toggleHardwarePermissionSlider(
 ): Promise<{ ok: boolean; browserState: ResolvedBrowserPermissionState | 'unsupported'; message: string }> {
   if (!targetEnabled) {
     setHardwareSwitchPreference(key, false);
-    if (key === 'microphone') clearMediaPermissionGrant('microphone');
-    if (key === 'camera') clearMediaPermissionGrant('camera');
+    clearMediaPermissionGrant(key);
     return {
       ok: true,
       browserState: 'prompt',
-      message: `${key.charAt(0).toUpperCase() + key.slice(1)} turned off in Sovereign OS.`
+      message: `${key.charAt(0).toUpperCase() + key.slice(1)} turned OFF and remembered.`
     };
   }
 
   markVoiceUserGesture();
 
   if (key === 'microphone') {
-    const res = await requestMicrophoneStream({ allowPrompt: true });
-    if (res.stream) {
-      // Immediately release test probe tracks so mic hardware indicator stays off until actually used
-      res.stream.getTracks().forEach((t) => t.stop());
-      setHardwareSwitchPreference('microphone', true);
-      return { ok: true, browserState: 'granted', message: 'Browser Microphone permission granted & linked.' };
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      return {
+        ok: false,
+        browserState: 'unsupported',
+        message: 'Browser microphone API is unavailable in this context.'
+      };
     }
-    setHardwareSwitchPreference('microphone', false);
-    return {
-      ok: false,
-      browserState: res.status === 'denied' ? 'denied' : 'prompt',
-      message:
-        res.status === 'denied'
-          ? 'Microphone is blocked in your browser. Click the site lock/settings icon in the address bar → Allow Microphone, then slide ON.'
-          : res.status === 'unavailable'
-          ? 'No microphone hardware was detected by this browser.'
-          : 'Microphone prompt was dismissed. Click the slider again and choose Allow.'
-    };
-  }
 
-  if (key === 'camera') {
-    const res = await requestCameraStream({ allowPrompt: true });
-    if (res.stream) {
-      res.stream.getTracks().forEach((t) => t.stop());
-      setHardwareSwitchPreference('camera', true);
-      return { ok: true, browserState: 'granted', message: 'Browser Camera permission granted & linked.' };
-    }
-    setHardwareSwitchPreference('camera', false);
-    return {
-      ok: false,
-      browserState: res.status === 'denied' ? 'denied' : 'prompt',
-      message:
-        res.status === 'denied'
-          ? 'Camera is blocked in your browser. Click the site lock/settings icon in the address bar → Allow Camera, then slide ON.'
-          : res.status === 'unavailable'
-          ? 'No camera device was detected by this browser.'
-          : 'Camera prompt was dismissed. Click the slider again and choose Allow.'
-    };
-  }
+    // 1. Fire getUserMedia({ audio: true }) IMMEDIATELY on line 1 so the native browser popup appears in <5ms
+    const micPromise = navigator.mediaDevices.getUserMedia({ audio: true });
 
-  if (key === 'geolocation') {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      return { ok: false, browserState: 'unsupported', message: 'Geolocation API is not supported in this browser.' };
-    }
-    return new Promise((resolve) => {
-      navigator.geolocation.getCurrentPosition(
-        () => {
-          setHardwareSwitchPreference('geolocation', true);
-          resolve({ ok: true, browserState: 'granted', message: 'Browser Location permission granted & linked.' });
-        },
-        (err) => {
-          // Only err.code === 1 (PERMISSION_DENIED) is an actual browser permission block.
-          // Codes 2 (POSITION_UNAVAILABLE) & 3 (TIMEOUT) mean browser permission succeeded, just no GPS fix yet!
-          if (err?.code === 2 || err?.code === 3) {
-            setHardwareSwitchPreference('geolocation', true);
-            resolve({
-              ok: true,
-              browserState: 'granted',
-              message: 'Browser Location access enabled (waiting on device GPS/network fix).'
-            });
-            return;
-          }
-          setHardwareSwitchPreference('geolocation', false);
-          resolve({
-            ok: false,
-            browserState: 'denied',
-            message:
-              'Location is blocked in your browser. Click the site lock/settings icon in the address bar → Allow Location, then slide ON.'
-          });
-        },
-        { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 }
-      );
-    });
-  }
-
-  if (key === 'notifications') {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
-      return { ok: false, browserState: 'unsupported', message: 'Browser Notifications are not supported here.' };
-    }
-    if (Notification.permission === 'granted') {
-      setHardwareSwitchPreference('notifications', true);
-      return { ok: true, browserState: 'granted', message: 'Browser Notifications enabled.' };
-    }
     try {
-      const perm = await requestNotificationPermissionCrossBrowser();
-      if (perm === 'granted') {
-        setHardwareSwitchPreference('notifications', true);
-        return { ok: true, browserState: 'granted', message: 'Browser Notifications permission granted & linked.' };
-      }
-      if (perm === 'denied') {
-        setHardwareSwitchPreference('notifications', false);
+      const stream = await micPromise;
+      bindGrantedMicStreamAndBroadcast(stream);
+      return {
+        ok: true,
+        browserState: 'granted',
+        message: 'Microphone allowed, live, and permanently remembered for your account.'
+      };
+    } catch (err: any) {
+      const errName = String(err?.name || '');
+      const errMsg = String(err?.message || '');
+      if (/permissions?\s*policy|not allowed in this document/i.test(errMsg)) {
         return {
           ok: false,
           browserState: 'denied',
           message:
-            'Notifications are blocked in your browser. Open the address-bar Site Settings → Allow Notifications, then slide ON.'
+            'Preview frame blocked the microphone popup. Refresh the outer preview once or open in a standalone tab to allow microphone.'
         };
       }
-      // Some cross-origin iframes suppress the native Notification prompt and return 'default'
-      setHardwareSwitchPreference('notifications', true);
+      if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+        return {
+          ok: false,
+          browserState: 'prompt',
+          message: 'No physical microphone input device was detected by your OS/browser.'
+        };
+      }
       return {
-        ok: true,
-        browserState: 'prompt',
-        message: 'In-OS notifications enabled (open in top-level browser tab for native OS push popups).'
+        ok: false,
+        browserState: 'denied',
+        message:
+          'Browser blocked microphone access. Click the site settings icon next to the address bar, set Microphone to Allow, then click Allow Mic.'
       };
-    } catch {
-      setHardwareSwitchPreference('notifications', false);
-      return { ok: false, browserState: 'prompt', message: 'Browser notification request was dismissed.' };
     }
   }
 
-  // Clipboard: actively trigger/verify browser clipboard capability on user gesture across Chrome/Edge/Firefox/Safari
-  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+  if (key === 'camera') {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      return {
+        ok: false,
+        browserState: 'unsupported',
+        message: 'Browser camera API is unavailable in this context.'
+      };
+    }
+    // 1. Fire getUserMedia({ video: true }) IMMEDIATELY on line 1 so camera popup appears in <5ms
+    const camPromise = navigator.mediaDevices.getUserMedia({ video: true });
     try {
-      if (typeof navigator.clipboard.readText === 'function') {
-        // In Chromium browsers, readText() triggers the native "See text and images copied to the clipboard" prompt
-        await navigator.clipboard.readText().catch((err: any) => {
-          const name = String(err?.name || '');
-          // Firefox & Safari restrict readText() to paste events or throw NotAllowedError only when explicitly denied
-          if (name === 'NotAllowedError' && /denied/i.test(String(err?.message || ''))) {
-            throw err;
-          }
-        });
-      }
-      setHardwareSwitchPreference('clipboard', true);
-      return { ok: true, browserState: 'granted', message: 'Browser Clipboard access enabled & linked.' };
-    } catch {
-      // Even if read-clipboard is restricted in Firefox/Safari/iframe, write-clipboard still works on user gesture
-      setHardwareSwitchPreference('clipboard', true);
+      const stream = await camPromise;
+      stream.getTracks().forEach((t) => t.stop());
+      setHardwareSwitchPreference('camera', true);
+      markMediaPermissionGranted('camera');
       return {
         ok: true,
         browserState: 'granted',
-        message: 'Clipboard copy enabled (browser manages paste prompts automatically).'
+        message: 'Camera allowed and permanently remembered for your account.'
+      };
+    } catch (err: any) {
+      const errName = String(err?.name || '');
+      if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+        setHardwareSwitchPreference('camera', true);
+        markMediaPermissionGranted('camera');
+        return {
+          ok: true,
+          browserState: 'granted',
+          message: 'Camera preference turned ON & remembered (no physical camera connected right now).'
+        };
+      }
+      return {
+        ok: false,
+        browserState: 'denied',
+        message:
+          'Browser blocked camera access. Allow Camera in your browser site settings icon, then click Allow Camera.'
       };
     }
   }
 
+  if (key === 'geolocation') {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      return {
+        ok: false,
+        browserState: 'unsupported',
+        message: 'Browser geolocation API is unavailable in this context.'
+      };
+    }
+    // 1. Fire navigator.geolocation.getCurrentPosition IMMEDIATELY on line 1
+    const geoResult = await new Promise<{ ok: boolean; denied: boolean }>((resolve) => {
+      const timer = setTimeout(() => resolve({ ok: true, denied: false }), 3500);
+      navigator.geolocation.getCurrentPosition(
+        () => {
+          clearTimeout(timer);
+          resolve({ ok: true, denied: false });
+        },
+        (err) => {
+          clearTimeout(timer);
+          // Code 1 = PERMISSION_DENIED; codes 2/3 = POSITION_UNAVAILABLE/TIMEOUT (permission itself was granted!)
+          resolve({ ok: err.code !== 1, denied: err.code === 1 });
+        },
+        { enableHighAccuracy: false, timeout: 3000, maximumAge: Infinity }
+      );
+    });
+    if (geoResult.ok) {
+      setHardwareSwitchPreference('geolocation', true);
+      markMediaPermissionGranted('geolocation');
+      return {
+        ok: true,
+        browserState: 'granted',
+        message: 'Location allowed and permanently remembered for your account.'
+      };
+    }
+    return {
+      ok: false,
+      browserState: 'denied',
+      message: 'Location was blocked in browser site settings. Set Location to Allow in the address bar, then retry.'
+    };
+  }
+
+  if (key === 'notifications') {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setHardwareSwitchPreference('notifications', true);
+      markMediaPermissionGranted('notifications');
+      return {
+        ok: true,
+        browserState: 'granted',
+        message: 'In-app notifications turned ON permanently & remembered.'
+      };
+    }
+    // 1. Fire Notification.requestPermission IMMEDIATELY on line 1
+    const notifPerm =
+      Notification.permission === 'granted'
+        ? 'granted'
+        : await Promise.race([
+            requestNotificationPermissionCrossBrowser(),
+            new Promise<NotificationPermission>((resolve) => setTimeout(() => resolve(Notification.permission), 4000))
+          ]);
+    setHardwareSwitchPreference('notifications', true);
+    markMediaPermissionGranted('notifications');
+    return {
+      ok: true,
+      browserState: notifPerm === 'denied' ? 'denied' : 'granted',
+      message:
+        notifPerm === 'granted'
+          ? 'Notifications allowed and permanently remembered.'
+          : 'In-app notifications turned ON permanently & remembered.'
+    };
+  }
+
+  // Clipboard: fire readText() IMMEDIATELY on line 1
+  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+    await Promise.race([
+      navigator.clipboard.readText().catch(() => ''),
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), 1500))
+    ]);
+  }
   setHardwareSwitchPreference('clipboard', true);
-  return { ok: true, browserState: 'granted', message: 'Clipboard access enabled.' };
+  markMediaPermissionGranted('clipboard');
+
+  return {
+    ok: true,
+    browserState: 'granted',
+    message: 'Clipboard access turned ON permanently & remembered.'
+  };
 }
+
+/**
+ * Unified "Turn All On" handler that requests combined Audio+Video in a SINGLE getUserMedia call on line 1
+ * so Chrome never drops overlapping permission popups, and keeps the live Microphone stream open for Voice Chat!
+ */
+export async function enableAllHardwarePermissionsOnGesture(): Promise<{
+  ok: boolean;
+  micGranted: boolean;
+  message: string;
+}> {
+  markVoiceUserGesture();
+  let micGranted = false;
+
+  if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+    // 1. Request combined audio+video on line 1 (single unified browser popup!)
+    const combinedPromise = navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    try {
+      const combinedStream = await combinedPromise;
+      // Stop video tracks immediately so camera light doesn't stay on when idle, but KEEP audio track alive for Voice Chat!
+      combinedStream.getVideoTracks().forEach((vt) => vt.stop());
+      const audioOnlyStream = new MediaStream(combinedStream.getAudioTracks());
+      bindGrantedMicStreamAndBroadcast(audioOnlyStream);
+      setHardwareSwitchPreference('camera', true);
+      markMediaPermissionGranted('camera');
+      micGranted = true;
+    } catch {
+      // Fallback: if device has no webcam or video failed, request audio-only immediately
+      try {
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        bindGrantedMicStreamAndBroadcast(audioStream);
+        setHardwareSwitchPreference('camera', true);
+        markMediaPermissionGranted('camera');
+        micGranted = true;
+      } catch {}
+    }
+  }
+
+  // 2. Persist Location, Notifications, and Clipboard preferences & trigger non-conflicting prompts
+  setHardwareSwitchPreference('geolocation', true);
+  markMediaPermissionGranted('geolocation');
+  setHardwareSwitchPreference('notifications', true);
+  markMediaPermissionGranted('notifications');
+  setHardwareSwitchPreference('clipboard', true);
+  markMediaPermissionGranted('clipboard');
+
+  if (typeof navigator !== 'undefined' && navigator.geolocation) {
+    try {
+      navigator.geolocation.getCurrentPosition(
+        () => {},
+        () => {},
+        { enableHighAccuracy: false, timeout: 2000, maximumAge: Infinity }
+      );
+    } catch {}
+  }
+
+  if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+    try {
+      requestNotificationPermissionCrossBrowser().catch(() => {});
+    } catch {}
+  }
+
+  if (micGranted) {
+    return {
+      ok: true,
+      micGranted: true,
+      message: 'Microphone & all device permissions are allowed, active, and permanently remembered for your account.'
+    };
+  }
+
+  return {
+    ok: false,
+    micGranted: false,
+    message:
+      'Microphone permission is still needed by your browser. Click "Allow Mic" and click Allow in the browser popup (or allow Microphone in the address bar site settings icon).'
+  };
+}
+
 
 
