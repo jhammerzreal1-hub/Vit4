@@ -685,10 +685,13 @@ class UserSqlMemoryService {
     if (!windowRows || windowRows.length === 0) return;
 
     const highlights = windowRows
-      .filter((r) => String(r.role) === 'user')
-      .map((r) => String(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 140))
+      .map((r) => {
+        const prefix = String(r.role) === 'user' ? 'User' : 'Agent';
+        const snippet = String(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 110);
+        return snippet ? `${prefix}: ${snippet}` : '';
+      })
       .filter(Boolean)
-      .slice(0, 5);
+      .slice(0, 6);
     if (highlights.length === 0) return;
 
     const spanStart = String(windowRows[0].created_at || '').slice(0, 19);

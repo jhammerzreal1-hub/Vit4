@@ -527,7 +527,8 @@ export const MASTER_MODULE_MANUAL_SPECS: Array<
     repairPlaybook: {
       automatedActionId: 'repair-batch-queue',
       automatedActionLabel: 'Verify Batch Processor Queue & SQLite Tables',
-      manualSteps: ['Inspect /api/batch/status to confirm runner health and worker concurrency.'],
+      symptoms: ['Batch queue jobs delayed or worker thread unresponsive.'],
+      repairSteps: ['Inspect /api/batch/status to confirm runner health and worker concurrency.'],
       verificationCommand: 'curl -s http://127.0.0.1:3000/api/batch/status | head -c 300'
     },
     expansionBlueprint: {

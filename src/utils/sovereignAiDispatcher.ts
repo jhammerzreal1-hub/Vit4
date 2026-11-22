@@ -245,6 +245,72 @@ export class SovereignAiDispatcher {
         }
       }
 
+      // Automatic Local Llama & Ollama Cascade Fallback when cloud API limits hit
+      const tryLocalLlamaOrOllamaCascade = async (): Promise<DispatchChatResult | null> => {
+        const localMessages: any[] = [
+          { role: 'system', content: rawInstruction },
+          ...messages.map((m: any) => ({ role: m.role === 'model' ? 'assistant' : 'user', content: String(m.content || '') })),
+          { role: 'user', content: prompt }
+        ];
+
+        // 1. Try Ollama (11434)
+        try {
+          const ollamaRes = await fetch('http://127.0.0.1:11434/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'llama3.2', messages: localMessages, stream: false }),
+            signal: AbortSignal.timeout(6000)
+          });
+          if (ollamaRes.ok) {
+            const data = await ollamaRes.json();
+            if (data?.message?.content) {
+              return {
+                text: data.message.content,
+                model: `${resolvedAgentName} (Ollama Local Llama Engine)`,
+                isLocal: true,
+                tokenSpend: 0,
+                engine: 'Ollama Local Llama Daemon (11434)',
+                executedTools: [],
+                janusFace: 'FACE_2_SPECULATIVE_CONTINUUM',
+                quotaNotice: `Cloud spoke limit reached; cascaded seamlessly to Ollama Local Llama engine.`
+              };
+            }
+          }
+        } catch (_) {}
+
+        // 2. Try Termux / local llama-server (8080)
+        try {
+          const llamaRes = await fetch('http://127.0.0.1:8080/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'llama3.2:latest', messages: localMessages, temperature: 0.7 }),
+            signal: AbortSignal.timeout(6000)
+          });
+          if (llamaRes.ok) {
+            const data = await llamaRes.json();
+            if (data?.choices?.[0]?.message?.content) {
+              return {
+                text: data.choices[0].message.content,
+                model: `${resolvedAgentName} (Termux llama-server)`,
+                isLocal: true,
+                tokenSpend: 0,
+                engine: 'Termux Native llama-server (8080)',
+                executedTools: [],
+                janusFace: 'FACE_2_SPECULATIVE_CONTINUUM',
+                quotaNotice: `Cloud spoke limit reached; cascaded seamlessly to Termux llama-server.`
+              };
+            }
+          }
+        } catch (_) {}
+
+        return null;
+      };
+
+      const localCascadeRes = await tryLocalLlamaOrOllamaCascade();
+      if (localCascadeRes) {
+        return localCascadeRes;
+      }
+
       // Check if a REAL local engine (WebGPU weights loaded, Termux llama-server, or Ollama) is available before falling back
       const [hasOllama, hasTermux] = await Promise.all([
         localLlmManager.probeOllama().catch(() => false),

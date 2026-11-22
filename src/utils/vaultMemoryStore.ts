@@ -192,6 +192,28 @@ export async function appendChatTurnToVault(message: ChatMessage): Promise<void>
  */
 export async function syncTurnToFirestore(userId: string, message: ChatMessage): Promise<void> {
   if (!userId || userId === '0' || userId.startsWith('guest-')) return;
+  // 1. Dual-sync to Server SQLite backend
+  try {
+    fetch('/api/user-memory/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'include',
+      body: JSON.stringify({
+        id: message.id,
+        channel: 'main-chat',
+        agentId: 'lyrailius-omega-zenith',
+        agentName: message.model || 'Lyrailius Omega',
+        role: message.role,
+        content: sanitizeChatMessageContent(message.content),
+        model: message.model || '',
+        timestamp: message.timestamp
+      })
+    }).catch(() => {});
+  } catch (_) {}
+
+  // 2. Sync to Cloud Firestore
   try {
     const { db } = await import('../firebase');
     const { doc, setDoc } = await import('firebase/firestore');
